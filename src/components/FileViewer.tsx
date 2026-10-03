@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type RefObject } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type RefObject } from "react";
 import { Check, Copy, Download, ExternalLink, FileText, WrapText, X } from "lucide-react";
 
 import "./FileViewer.css";
@@ -10,7 +10,7 @@ import { ApiError } from "../lib/api.ts";
 import { formatBytes } from "../lib/bridgeProgress.ts";
 import { LOCAL_MACHINE } from "../../shared/machines.ts";
 import { useMachineApi, useMachineId } from "../lib/machineContext.tsx";
-import { copyText } from "../lib/clipboard.ts";
+import { copyText, selectContents } from "../lib/clipboard.ts";
 import { languageForPath } from "../lib/highlight.ts";
 import { useT } from "../lib/i18n.ts";
 import { useSettings } from "../lib/settings.ts";
@@ -28,8 +28,15 @@ export interface FileViewerProps {
   onOpen?: (path: string) => void;
 }
 
-/** Copies the whole file; owns its "copied" flip, so only the button re-renders for it. */
-function CopyFileButton({ text, fallback }: { text: string; fallback: RefObject<HTMLElement> }) {
+/** The code `<pre>` of the open file: the source text alone, with no note and no line numbers (a CSS counter). */
+const sourceOf = (wrapper: RefObject<HTMLElement>): HTMLElement | null => wrapper.current?.querySelector<HTMLElement>("pre.file-viewer-text") ?? null;
+
+/**
+ * Copies the whole file; owns its "copied" flip, so only the button re-renders for it. Without a
+ * clipboard API (plain-HTTP LAN) it selects the source `<pre>` instead; in a Markdown Preview there
+ * is none, so `onShowSource` switches to Code first and the viewer selects it once rendered.
+ */
+function CopyFileButton({ text, sourceRef, onShowSource }: { text: string; sourceRef: RefObject<HTMLElement>; onShowSource: () => void }) {
   const t = useT();
   const [copied, setCopied] = useState(false);
   useEffect(() => {
@@ -38,7 +45,12 @@ function CopyFileButton({ text, fallback }: { text: string; fallback: RefObject<
     return () => window.clearTimeout(timer);
   }, [copied]);
   const label = copied ? t("File copied") : t("Copy file");
-  return <button type="button" className="icon-button" aria-label={label} title={label} onClick={() => void copyText(text, fallback.current).then((done) => { if (done) setCopied(true); })}>
+  const copy = async (): Promise<void> => {
+    const source = sourceOf(sourceRef);
+    if (await copyText(text, source)) setCopied(true);
+    else if (!source) onShowSource();
+  };
+  return <button type="button" className="icon-button" aria-label={label} title={label} onClick={() => void copy()}>
     {copied ? <Check aria-hidden="true" /> : <Copy aria-hidden="true" />}
   </button>;
 }
@@ -65,7 +77,20 @@ export function FileViewer({ path: asked, paneId, onClose, onOpen }: FileViewerP
   // the mode is the user's choice for this path, else Preview: derived, so a new path never paints the old mode
   const [chosen, setChosen] = useState<{ path: string; mode: TextViewMode } | null>(null);
   const mode = chosen?.path === path ? chosen.mode : "preview";
-  const contentRef = useRef<HTMLDivElement>(null);
+  // the wrapper of the file's rendered text, where Copy finds the code <pre> to select
+  const sourceRef = useRef<HTMLDivElement>(null);
+  // Copy failed in a Preview: select the source as soon as the Code view has rendered
+  const selectSourceOnCode = useRef(false);
+  const showSourceToSelect = useCallback(() => {
+    selectSourceOnCode.current = true;
+    setChosen({ path, mode: "code" });
+  }, [path]);
+  useLayoutEffect(() => {
+    if (!selectSourceOnCode.current || mode !== "code") return;
+    selectSourceOnCode.current = false;
+    const source = sourceOf(sourceRef);
+    if (source) selectContents(source);
+  }, [mode, text]);
 
   useEffect(() => setPath(asked), [asked]);
 
@@ -131,7 +156,7 @@ export function FileViewer({ path: asked, paneId, onClose, onOpen }: FileViewerP
         return <iframe className="file-viewer-pdf" src={url} title={info.name} />;
       case "text":
         return text === null ? <p className="file-viewer-note">{t("Opening…")}</p> : <>
-          <TextFileView path={info.path} text={text} language={language} mode={mode} onModeChange={(next) => setChosen({ path, mode: next })} onOpen={onOpen ?? setPath} contentRef={contentRef} />
+          <TextFileView path={info.path} text={text} language={language} mode={mode} onModeChange={(next) => setChosen({ path, mode: next })} onOpen={onOpen ?? setPath} sourceRef={sourceRef} />
           {truncated && <p className="file-viewer-note">{t("Showing the first {shown} of {total}.", { shown: formatBytes(textLoadLimit), total: formatBytes(info.size) })}</p>}
         </>;
       default:
@@ -152,7 +177,7 @@ export function FileViewer({ path: asked, paneId, onClose, onOpen }: FileViewerP
           </div>
           {textFile && !(language === "markdown" && mode === "preview") && <button type="button" className="icon-button" aria-pressed={settings.wrapCode} aria-label={t("Wrap long lines")} title={t("Wrap long lines")} onClick={() => update({ wrapCode: !settings.wrapCode })}><WrapText aria-hidden="true" /></button>}
           <a className="icon-button" href={url} target="_blank" rel="noopener" aria-label={textFile ? t("Raw") : t("Open in a new tab")} title={textFile ? t("Raw") : t("Open in a new tab")}>{textFile ? <FileText aria-hidden="true" /> : <ExternalLink aria-hidden="true" />}</a>
-          {textFile && text !== null && !truncated && <CopyFileButton text={text} fallback={contentRef} />}
+          {textFile && text !== null && !truncated && <CopyFileButton text={text} sourceRef={sourceRef} onShowSource={showSourceToSelect} />}
           <a className="icon-button" href={fileUrl(info?.path ?? path, paneId, true)} download={info?.name ?? true} aria-label={t("Download")} title={t("Download")}><Download aria-hidden="true" /></a>
           <button type="button" className="icon-button" aria-label={t("Close file")} onClick={onClose}><X aria-hidden="true" /></button>
         </header>

@@ -17,7 +17,7 @@ const transcript = join(codexHome, "sessions", `rollout-2026-09-28T00-00-00-${th
 writeFileSync(transcript, [
   { type: "session_meta", payload: { id: thread, cwd: root } },
   { type: "response_item", payload: { type: "message", role: "user", content: [{ type: "input_text", text: "Show me the demo video." }] } },
-  { type: "response_item", payload: { type: "message", role: "assistant", phase: "final_answer", content: [{ type: "output_text", text: `Open [demo video](./preview.webm) or [notes](./notes.txt) or [guide](./guide.md) or [big](./big.txt) or [file URI notes](${new URL(`file://${join(root, "notes.txt")}`).href}) or [folder](${new URL(`file://${root}`).href}).\n\n${new URL(`file://${join(root, "notes.txt")}`).href}\n\n\`\`\`ts\nconst answer = 42;\n\nexport { answer };\n\`\`\`` }] } },
+  { type: "response_item", payload: { type: "message", role: "assistant", phase: "final_answer", content: [{ type: "output_text", text: `Open [demo video](./preview.webm) or [notes](./notes.txt) or [guide](./docs/guide.md) or [big](./big.txt) or [file URI notes](${new URL(`file://${join(root, "notes.txt")}`).href}) or [folder](${new URL(`file://${root}`).href}).\n\n${new URL(`file://${join(root, "notes.txt")}`).href}\n\n\`\`\`ts\nconst answer = 42;\n\nexport { answer };\n\`\`\`` }] } },
 ].map((row) => JSON.stringify(row)).join("\n"));
 const db = new Database(join(codexHome, "state_5.sqlite"));
 db.exec("CREATE TABLE threads (id TEXT, rollout_path TEXT, cwd TEXT, archived INTEGER, agent_role TEXT, created_at INTEGER, updated_at INTEGER, source TEXT, first_user_message TEXT)");
@@ -28,7 +28,9 @@ writeFileSync(standIn, "#!/bin/sh\nsleep 600\n");
 chmodSync(standIn, 0o755);
 copyFileSync(join(import.meta.dir, "fixtures", "file-preview.webm"), join(root, "preview.webm"));
 writeFileSync(join(root, "notes.txt"), "File preview history regression\n");
-writeFileSync(join(root, "guide.md"), "# Guide\n\nSee [notes](./notes.txt).\n\n```ts\nconst x = 1;\n```\n");
+// in a subfolder, so a link is resolved from the file's folder (../notes.txt), not the pane's
+mkdirSync(join(root, "docs"));
+writeFileSync(join(root, "docs", "guide.md"), "# Guide\n\nSee [notes](../notes.txt).\n\n```ts\nconst x = 1;\n```\n");
 // the load limit is seeded below at its smallest choice, so this file, a little past it, stays small
 const TEXT_LOAD_LIMIT = 256 * 1024;
 writeFileSync(join(root, "big.txt"), "a line of plain text, 0123456789\n".repeat(Math.ceil(TEXT_LOAD_LIMIT / 30)).slice(0, TEXT_LOAD_LIMIT + 10));
@@ -185,8 +187,24 @@ try {
   await guide.locator(".file-viewer-text[data-wrap]").waitFor();
   console.log("PASS Wrap is remembered across viewers");
   await guide.getByRole("button", { name: "Preview", exact: true }).click();
+  // Without a clipboard API (plain-HTTP LAN) Copy selects the source: from a Preview it switches to Code first
+  await page.evaluate(() => Object.defineProperty(navigator, "clipboard", { value: { writeText: () => Promise.reject(new Error("no clipboard")) }, configurable: true }));
+  await guide.getByRole("button", { name: "Copy file", exact: true }).click();
+  await guide.getByRole("button", { name: "Code", exact: true }).waitFor();
+  await guide.locator(".file-viewer-text .hl-line").first().waitFor();
+  assert.equal(await guide.getByRole("button", { name: "Code", exact: true }).getAttribute("aria-pressed"), "true");
+  const sourceText = await guide.locator(".file-viewer-text").innerText();
+  assert.match(sourceText, /See \[notes\]\(\.\.\/notes\.txt\)\./);
+  assert.equal(await page.evaluate(() => window.getSelection()?.toString()), sourceText, "the selection is exactly the Markdown source");
+  await page.evaluate(() => window.getSelection()?.removeAllRanges());
+  await guide.getByRole("button", { name: "Copy file", exact: true }).click();
+  assert.equal(await page.evaluate(() => window.getSelection()?.toString()), sourceText, "from Code, Copy selects the source in place");
+  console.log("PASS Without a clipboard API, Copy selects the Markdown source (switching a Preview to Code)");
+  await guide.getByRole("button", { name: "Preview", exact: true }).click();
   await guide.getByRole("button", { name: "notes", exact: true }).click();
-  await page.getByRole("dialog", { name: "notes.txt", exact: true }).waitFor();
+  const linked = page.getByRole("dialog", { name: "notes.txt", exact: true });
+  await linked.waitFor();
+  assert.doesNotMatch(await linked.locator(".file-viewer-path").innerText(), /\/docs\//);
   console.log("PASS A link in a Markdown preview opens the file it names");
   await page.getByRole("button", { name: "Close file", exact: true }).click();
   await page.locator(".file-viewer").waitFor({ state: "hidden" });
@@ -196,6 +214,7 @@ try {
   const big = page.getByRole("dialog", { name: "big.txt", exact: true });
   await big.getByText("Showing the first", { exact: false }).waitFor();
   assert.equal(await big.getByRole("button", { name: "Copy file", exact: true }).count(), 0);
+  assert.equal(await big.locator(".hl-note").count(), 0, "plain text is never too long to highlight");
   console.log("PASS A text file past the load limit shows a note and no Copy");
   assert.deepEqual(errors, []);
 } finally {

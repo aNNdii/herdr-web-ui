@@ -23,9 +23,6 @@ between releases do not reach them. Remote-PC runtime bundles are versioned sepa
 ## [0.3.49] - 2026-10-04
 
 ### Added
-- The file viewer renders Markdown with a Preview | Code switch, highlights text files with line
-  numbers (code blocks in the chat too), and offers Raw, Copy and a Wrap toggle, with size limits
-  in Settings.
 - `HERDR_WEB_PASTE_DIR` saves pasted and attached files to one directory instead of
   `.herdr-web-ui/` in each pane's project. It is read by the server, for the panes of its own
   PC; a remote PC keeps the default.
@@ -43,6 +40,11 @@ between releases do not reach them. Remote-PC runtime bundles are versioned sepa
   the page's own audio, so it is heard when a macOS Focus or Do Not Disturb silences system
   notifications. Off until chosen; the tab needs one tap or key before it may play.
   ([#346](https://github.com/devswha/herdr-web-ui/pull/346) by @WOULDU-pres)
+- The file viewer renders a Markdown file as a **Preview**, with a **Preview** | **Code** switch,
+  and shows every text file as highlighted code with line numbers. **Raw** opens the file in a new
+  tab, **Copy** copies the file and **Wrap** wraps long lines. Code blocks in the chat are
+  highlighted too. **Settings → File viewer** sets the wrapping, how much of a text file is loaded
+  and up to what size it is highlighted.
 
 ### Fixed
 - On an Android phone, dragging down at the top of a chat no longer reloads the app. The drag

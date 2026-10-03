@@ -46,19 +46,23 @@ const FENCE_ALIASES: Record<string, string> = {
   yml: "yaml",
   py: "python",
   rs: "rust",
-  md: "markdown",
+  md: "markdown", mkd: "markdown", mdown: "markdown", mkdn: "markdown",
   toml: "ini",
   html: "xml", svg: "xml",
   docker: "dockerfile",
 };
 
+// `plaintext` and its highlight.js aliases are registered, but they are no language: a request for
+// one must come out as `null`, or a long .txt would be reported "too long to highlight".
+const PLAIN_TEXT = new Set(["plaintext", "text", "txt"]);
+
 /**
  * The registered language for a Markdown fence's info string ("ts", "TSX title=x"): only its first
- * word counts, case-insensitively. `null` for an empty or unknown one.
+ * word counts, case-insensitively. `null` for an empty, plain-text or unknown one.
  */
 export function languageForFence(info: string): string | null {
   const word = info.trim().split(/\s+/)[0]?.toLowerCase() ?? "";
-  if (!word) return null;
+  if (!word || PLAIN_TEXT.has(word)) return null;
   const alias = FENCE_ALIASES[word];
   if (alias) return alias;
   return lowlight.registered(word) ? word : null;
@@ -71,6 +75,8 @@ export function languageForFence(info: string): string | null {
  */
 export function languageForPath(path: string): string | null {
   const name = (path.split(/[\\/]/).pop() ?? "").toLowerCase();
+  // before the name rules: Dockerfile.md is a document about a Dockerfile
+  if (name.endsWith(".md") || name.endsWith(".markdown")) return "markdown";
   if (name.startsWith("dockerfile")) return "dockerfile";
   if (name === "makefile" || name === "gnumakefile" || name.endsWith(".mk")) return "makefile";
   if ([".bashrc", ".zshrc", ".profile"].includes(name) || name.endsWith(".sh") || name.endsWith(".zsh")) return "bash";
@@ -78,7 +84,6 @@ export function languageForPath(path: string): string | null {
   const dot = name.lastIndexOf(".");
   if (dot <= 0) return null;
   const extension = name.slice(dot + 1);
-  if (extension === "md" || extension === "markdown") return "markdown";
   return languageForFence(extension);
 }
 

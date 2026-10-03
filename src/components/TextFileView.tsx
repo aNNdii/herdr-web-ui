@@ -16,12 +16,12 @@ export interface TextFileViewProps {
   mode: TextViewMode;
   onModeChange: (mode: TextViewMode) => void;
   onOpen: (path: string) => void;
-  /** the rendered text, for copyText's select-instead fallback */
-  contentRef: RefObject<HTMLDivElement>;
+  /** the wrapper of the rendered file: FileViewer finds the code `<pre class="file-viewer-text">` in it to select the source */
+  sourceRef: RefObject<HTMLDivElement>;
 }
 
 /** The text of a file: Markdown rendered or as code, everything else as highlighted code with line numbers. */
-export function TextFileView({ path, text, language, mode, onModeChange, onOpen, contentRef }: TextFileViewProps) {
+export function TextFileView({ path, text, language, mode, onModeChange, onOpen, sourceRef }: TextFileViewProps) {
   const t = useT();
   const { settings } = useSettings();
   const markdown = language === "markdown";
@@ -34,7 +34,7 @@ export function TextFileView({ path, text, language, mode, onModeChange, onOpen,
         <button type="button" aria-pressed={mode === "code"} onClick={() => onModeChange("code")}>{t("Code")}</button>
       </div>
     </div>}
-    <div className="file-viewer-content" ref={contentRef}>
+    <div className="file-viewer-content" ref={sourceRef}>
       {markdown && mode === "preview"
         ? <OpenFileContext.Provider value={openLink}><Markdown className="file-viewer-markdown">{text}</Markdown></OpenFileContext.Provider>
         : <HighlightedCode className="file-viewer-text" code={text} language={language} limit={settings.highlightLimit} lineNumbers wrap={settings.wrapCode} />}

@@ -19,6 +19,12 @@ describe("languageForFence", () => {
     expect(languageForFence("")).toBeNull();
     expect(languageForFence("klingon")).toBeNull();
   });
+  it("returns null for plain text, which is registered but no language", () => {
+    for (const word of ["text", "txt", "plaintext", "TXT"]) expect(languageForFence(word)).toBeNull();
+  });
+  it("maps the Markdown spellings to markdown", () => {
+    for (const word of ["md", "mkd", "mdown", "mkdn"]) expect(languageForFence(word)).toBe("markdown");
+  });
 });
 
 describe("languageForPath", () => {
@@ -31,6 +37,15 @@ describe("languageForPath", () => {
   it("decides what is Markdown, by name only and ignoring case", () => {
     expect(languageForPath("/r/notes.MARKDOWN")).toBe("markdown");
     expect(languageForPath("/r/x.mdx")).toBeNull();
+    expect(languageForPath("/r/x.mkd")).toBe("markdown");
+    expect(languageForPath("/r/x.mdown")).toBe("markdown");
+  });
+  it("lets a Markdown extension win over a Dockerfile name", () => {
+    expect(languageForPath("/r/Dockerfile.md")).toBe("markdown");
+    expect(languageForPath("/r/Dockerfile.dev")).toBe("dockerfile");
+  });
+  it("has no language for plain-text files", () => {
+    for (const name of ["a.txt", "a.text", "CMakeLists.txt"]) expect(languageForPath(`/r/${name}`)).toBeNull();
   });
   it("returns null for the unknown", () => {
     expect(languageForPath("/r/notes.xyz")).toBeNull();
@@ -72,6 +87,13 @@ describe("highlightLines", () => {
   it("is plain and says so above the limit", () => {
     const result = highlightLines("const x = 1;", "typescript", 5);
     expect(result).toEqual({ lines: [[{ text: "const x = 1;", role: null }]], tooLong: true });
+  });
+  it("never calls a plain-text file too long, whatever its size", () => {
+    const big = "a line of text\n".repeat(30_000);
+    const result = highlightLines(big, languageForPath("/r/a.txt"), 256 * 1024);
+    expect(big.length).toBeGreaterThan(256 * 1024);
+    expect(result.tooLong).toBe(false);
+    expect(result.lines.every((line) => line.every((token) => token.role === null))).toBe(true);
   });
   it("is plain when the language is not registered", () => {
     expect(highlightLines("x", "klingon", CHAT_HIGHLIGHT_LIMIT)).toEqual({ lines: [[{ text: "x", role: null }]], tooLong: false });
