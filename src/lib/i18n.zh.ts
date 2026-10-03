@@ -391,6 +391,7 @@ export const ZH: Record<string, string> = {
   "Copy code": "复制代码",
   "Show less": "收起",
   "Show all {n} lines": "显示全部 {n} 行",
+  "Too long to highlight": "内容过长，未做语法高亮",
 
   // ---- composer ----
   "Reconnecting… message held here, never queued": "正在重连… 消息保留在此处，不会加入队列",

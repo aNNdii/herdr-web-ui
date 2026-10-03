@@ -5,6 +5,8 @@ import katex from "katex";
 import { foldCode, parseMarkdown, type InlineNode, type ListBlock, type MarkdownBlock } from "../lib/markdown.ts";
 import { codeIsFilePath, OpenFileContext, splitFilePaths } from "../lib/filePaths.ts";
 import { fileUriPath } from "../lib/terminalFileLinks.ts";
+import { CHAT_HIGHLIGHT_LIMIT, languageForFence } from "../lib/highlight.ts";
+import { HighlightedCode } from "./HighlightedCode.tsx";
 import { useT } from "../lib/i18n.ts";
 
 function MathExpression({ value, displayMode = false }: { value: string; displayMode?: boolean }) {
@@ -106,7 +108,7 @@ function CodeBlock({ language, value }: { language: string; value: string }) {
           {copied ? <Check aria-hidden="true" /> : <Copy aria-hidden="true" />}
         </button>
       </div>
-      <pre><code>{fold !== null && !expanded ? fold.head : value}</code></pre>
+      <HighlightedCode code={fold !== null && !expanded ? fold.head : value} language={languageForFence(language)} limit={CHAT_HIGHLIGHT_LIMIT} />
       {fold !== null && (
         <button type="button" className="markdown-code-more" aria-expanded={expanded} onClick={toggle}>
           {expanded ? t("Show less") : t("Show all {n} lines", { n: fold.lines })}

@@ -1,0 +1,67 @@
+/* Highlighted code (chat code blocks, file viewer). The host sets padding and background. */
+.hl-code {
+  /* the line-number gutter: five digits and a gap */
+  --hl-gutter: calc(5ch + var(--space-3));
+  margin: 0;
+  overflow-x: auto;
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  line-height: var(--lh-base);
+  white-space: pre;
+}
+
+.hl-code[data-wrap] {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* an empty line has no text to give it a height */
+.hl-line {
+  display: block;
+  min-height: 1lh;
+}
+
+/* a CSS counter, so the numbers are never part of the text a copy picks up */
+.hl-code[data-line-numbers] {
+  counter-reset: line;
+}
+
+/* the negative indent hangs the number out, so a wrapped line continues past the gutter */
+.hl-code[data-line-numbers] .hl-line {
+  padding-inline-start: var(--hl-gutter);
+  text-indent: calc(-1 * var(--hl-gutter));
+}
+
+.hl-code[data-line-numbers] .hl-line::before {
+  display: inline-block;
+  box-sizing: border-box;
+  width: var(--hl-gutter);
+  padding-inline-end: var(--space-3);
+  counter-increment: line;
+  content: counter(line);
+  color: var(--text-dim);
+  text-align: right;
+  text-indent: 0;
+  user-select: none;
+}
+
+.hl-keyword { color: var(--syntax-keyword); }
+.hl-string { color: var(--syntax-string); }
+.hl-number { color: var(--syntax-number); }
+.hl-comment { color: var(--syntax-comment); }
+.hl-function { color: var(--syntax-function); }
+.hl-type { color: var(--syntax-type); }
+.hl-variable { color: var(--syntax-variable); }
+.hl-meta { color: var(--syntax-meta); }
+.hl-inserted { color: var(--syntax-inserted); }
+.hl-deleted { color: var(--syntax-deleted); }
+
+.hl-em { font-style: italic; }
+.hl-strong { font-weight: var(--fw-semibold); }
+
+.hl-note {
+  margin: var(--space-3);
+  color: var(--text-dim);
+  font-size: var(--fs-sm);
+  text-align: center;
+}

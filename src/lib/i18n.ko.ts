@@ -387,6 +387,7 @@ export const KO: Record<string, string> = {
   "Copy code": "코드 복사",
   "Show less": "접기",
   "Show all {n} lines": "{n}줄 모두 보기",
+  "Too long to highlight": "너무 길어 강조 표시를 생략했습니다",
 
   // ---- composer ----
   "Reconnecting… message held here, never queued": "재연결 중… 메시지는 여기에 보관되고 대기열에 넣지 않습니다",

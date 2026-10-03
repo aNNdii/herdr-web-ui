@@ -102,6 +102,22 @@ CSS tokens verbatim for each resolved theme and palette (`settings.test.ts` chec
 | Cursor | `--term-cursor` | `#f0a830` | `#8c5000` | `cursor` |
 | Selection | `--term-selection` | `#4a3d26` | `#f0d9ae` | `selectionBackground` |
 
+### Syntax highlighting
+
+Code in chat and in the file viewer is colored by `--syntax-*` tokens. Four follow the palette:
+`--syntax-comment` is `--text-dim`, `--syntax-function` is `--accent`, `--syntax-inserted` is
+`--status-done` and `--syntax-deleted` is `--status-blocked`. The other six are literals per block
+(each at least 4.5:1 on `--bg-panel` and `--bg-elevated`); light charcoal uses the light report
+column.
+
+| Block | keyword | string | number | type | variable | meta |
+|-------|---------|--------|--------|------|----------|------|
+| Dark amber | `#e8875f` | `#a8c17c` | `#d6a0c9` | `#6cb8d6` | `#e0c08f` | `#b49dd6` |
+| Light amber | `#a33a17` | `#4b6b18` | `#8a3f7a` | `#155a72` | `#7a5418` | `#5d4791` |
+| Dark report | `#f78c6c` | `#3ddc97` | `#f5b544` | `#7fd4ff` | `#c9d1dc` | `#b392f0` |
+| Light report and charcoal | `#b3261e` | `#22743a` | `#8a5300` | `#0b6e8a` | `#3b3b3b` | `#6f42c1` |
+| Dark charcoal | `#d7a08a` | `#a7b789` | `#c2a2af` | `#9fb4c2` | `#dcd8d0` | `#b8a5c9` |
+
 ### Rules
 - Amber is the one chrome color. Accent (selected, focused, informational) and primary (the user's
   action: Send, primary buttons) are both amber; in light, accent is the darker text-safe ochre and

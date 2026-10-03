@@ -17,7 +17,7 @@ const transcript = join(codexHome, "sessions", `rollout-2026-09-28T00-00-00-${th
 writeFileSync(transcript, [
   { type: "session_meta", payload: { id: thread, cwd: root } },
   { type: "response_item", payload: { type: "message", role: "user", content: [{ type: "input_text", text: "Show me the demo video." }] } },
-  { type: "response_item", payload: { type: "message", role: "assistant", phase: "final_answer", content: [{ type: "output_text", text: `Open [demo video](./preview.webm) or [notes](./notes.txt) or [file URI notes](${new URL(`file://${join(root, "notes.txt")}`).href}) or [folder](${new URL(`file://${root}`).href}).\n\n${new URL(`file://${join(root, "notes.txt")}`).href}` }] } },
+  { type: "response_item", payload: { type: "message", role: "assistant", phase: "final_answer", content: [{ type: "output_text", text: `Open [demo video](./preview.webm) or [notes](./notes.txt) or [file URI notes](${new URL(`file://${join(root, "notes.txt")}`).href}) or [folder](${new URL(`file://${root}`).href}).\n\n${new URL(`file://${join(root, "notes.txt")}`).href}\n\n\`\`\`ts\nconst answer = 42;\n\`\`\`` }] } },
 ].map((row) => JSON.stringify(row)).join("\n"));
 const db = new Database(join(codexHome, "state_5.sqlite"));
 db.exec("CREATE TABLE threads (id TEXT, rollout_path TEXT, cwd TEXT, archived INTEGER, agent_role TEXT, created_at INTEGER, updated_at INTEGER, source TEXT, first_user_message TEXT)");
@@ -59,6 +59,9 @@ try {
   await page.locator(".conn-live").waitFor();
   const videoLink = page.getByRole("button", { name: "demo video", exact: true });
   await videoLink.waitFor();
+  await page.locator(".markdown-code .hl-keyword", { hasText: "const" }).waitFor();
+  await page.locator(".markdown-code .hl-number", { hasText: "42" }).waitFor();
+  console.log("PASS Chat fenced code block is syntax highlighted");
   const composer = page.getByRole("textbox", { name: "Message", exact: true });
   await composer.fill("Keep my mobile draft");
   const chatUrl = page.url();

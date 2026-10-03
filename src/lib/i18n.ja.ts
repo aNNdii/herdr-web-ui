@@ -389,6 +389,7 @@ export const JA: Record<string, string> = {
   "Copy code": "コードをコピー",
   "Show less": "折りたたむ",
   "Show all {n} lines": "{n} 行すべて表示",
+  "Too long to highlight": "長すぎるため構文ハイライトを省略しました",
 
   // ---- composer ----
   "Reconnecting… message held here, never queued": "再接続しています… メッセージはここに保持され、キューには入りません",
