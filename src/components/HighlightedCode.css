@@ -15,33 +15,34 @@
   overflow-wrap: anywhere;
 }
 
-/* an empty line has no text to give it a height */
-.hl-line {
-  display: block;
-  min-height: 1lh;
-}
+/*
+ * The lines are inline: the "\n" between them is real text, so the text of the block is the code and
+ * an empty line is still a line. A block line would add a line break of its own, which drops the
+ * blank lines from a copy or doubles them.
+ */
 
 /* a CSS counter, so the numbers are never part of the text a copy picks up */
 .hl-code[data-line-numbers] {
   counter-reset: line;
 }
 
-/* the negative indent hangs the number out, so a wrapped line continues past the gutter */
-.hl-code[data-line-numbers] .hl-line {
+/* the room for the gutter is on the code, not the pre, so a host's padding cannot take it */
+.hl-code[data-line-numbers] > code {
+  display: block;
   padding-inline-start: var(--hl-gutter);
-  text-indent: calc(-1 * var(--hl-gutter));
 }
 
+/* the negative margin hangs the number out into that room: every line, wrapped ones too, starts past it */
 .hl-code[data-line-numbers] .hl-line::before {
   display: inline-block;
   box-sizing: border-box;
   width: var(--hl-gutter);
+  margin-inline-start: calc(-1 * var(--hl-gutter));
   padding-inline-end: var(--space-3);
   counter-increment: line;
   content: counter(line);
   color: var(--text-dim);
   text-align: right;
-  text-indent: 0;
   user-select: none;
 }
 
