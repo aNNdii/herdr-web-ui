@@ -20,6 +20,7 @@ between releases do not reach them. Remote-PC runtime bundles are versioned sepa
 - **Settings → Appearance → Colors → Catppuccin**: the [Catppuccin](https://catppuccin.com/palette/) palette,
   Mocha in dark and Latte in light, laid out as Catppuccin's Zed theme does. Latte's accent and
   agent-state colors are darkened just enough to stay readable on its light surfaces.
+  ([#414](https://github.com/devswha/herdr-web-ui/pull/414) by @aNNdii)
 
 ### Fixed
 - On an Android phone, dragging down at the top of a chat no longer reloads the app. The drag
