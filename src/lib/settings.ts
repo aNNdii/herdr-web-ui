@@ -84,6 +84,19 @@ export interface Settings {
   voicePolishChat: boolean;
   /** off by default: a terminal line is usually a command, kept as spoken */
   voicePolishTerminal: boolean;
+  /** the file viewer wraps long lines instead of scrolling sideways */
+  wrapCode: boolean;
+  /** the largest text file the file viewer syntax-highlights, in bytes; one of SIZE_LIMIT_CHOICES */
+  highlightLimit: number;
+  /** how much of a text file the file viewer loads, in bytes; one of SIZE_LIMIT_CHOICES */
+  textLoadLimit: number;
+}
+
+/** the byte sizes the file viewer's limits offer: 256 KB and 1 MB */
+export const SIZE_LIMIT_CHOICES = [256 * 1024, 1024 * 1024] as const;
+
+function sizeLimit(value: unknown, fallback: number): number {
+  return SIZE_LIMIT_CHOICES.find((choice) => choice === value) ?? fallback;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -119,6 +132,9 @@ export const DEFAULT_SETTINGS: Settings = {
   voiceInput: false,
   voicePolishChat: true,
   voicePolishTerminal: false,
+  wrapCode: false,
+  highlightLimit: 256 * 1024,
+  textLoadLimit: 1024 * 1024,
 };
 
 export const QUICK_REPLIES_MAX = 12;
@@ -209,6 +225,9 @@ export function sanitizeSettings(raw: unknown): Settings {
     voiceInput: typeof record["voiceInput"] === "boolean" ? record["voiceInput"] : DEFAULT_SETTINGS.voiceInput,
     voicePolishChat: typeof record["voicePolishChat"] === "boolean" ? record["voicePolishChat"] : DEFAULT_SETTINGS.voicePolishChat,
     voicePolishTerminal: typeof record["voicePolishTerminal"] === "boolean" ? record["voicePolishTerminal"] : DEFAULT_SETTINGS.voicePolishTerminal,
+    wrapCode: typeof record["wrapCode"] === "boolean" ? record["wrapCode"] : DEFAULT_SETTINGS.wrapCode,
+    highlightLimit: sizeLimit(record["highlightLimit"], DEFAULT_SETTINGS.highlightLimit),
+    textLoadLimit: sizeLimit(record["textLoadLimit"], DEFAULT_SETTINGS.textLoadLimit),
   };
 }
 

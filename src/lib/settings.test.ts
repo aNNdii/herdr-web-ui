@@ -303,3 +303,17 @@ describe("default lens", () => {
     expect([...data.keys()]).toEqual(["herdr-web-ui:settings"]);
   });
 });
+
+it("keeps the file viewer's wrap and size limits to the offered choices", () => {
+  expect(DEFAULT_SETTINGS.wrapCode).toBe(false);
+  expect(DEFAULT_SETTINGS.highlightLimit).toBe(256 * 1024);
+  expect(DEFAULT_SETTINGS.textLoadLimit).toBe(1024 * 1024);
+  expect(sanitizeSettings({ wrapCode: true }).wrapCode).toBe(true);
+  expect(sanitizeSettings({ wrapCode: "yes" }).wrapCode).toBe(false);
+  expect(sanitizeSettings({ highlightLimit: 1024 * 1024 }).highlightLimit).toBe(1024 * 1024);
+  expect(sanitizeSettings({ textLoadLimit: 256 * 1024 }).textLoadLimit).toBe(256 * 1024);
+  for (const bad of [0, 128 * 1024, 4 * 1024 * 1024, "1048576", null]) {
+    expect(sanitizeSettings({ highlightLimit: bad }).highlightLimit).toBe(256 * 1024);
+    expect(sanitizeSettings({ textLoadLimit: bad }).textLoadLimit).toBe(1024 * 1024);
+  }
+});
