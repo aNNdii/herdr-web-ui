@@ -55,6 +55,11 @@
   flex: none;
 }
 
+.file-viewer-header .icon-button[aria-pressed="true"] {
+  background: var(--bg-hover);
+  color: var(--text-strong);
+}
+
 .file-viewer-header a.icon-button {
   display: inline-flex;
   align-items: center;
@@ -111,8 +116,25 @@
   font-family: var(--font-mono);
   font-size: var(--fs-xs);
   line-height: var(--lh-base);
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
+}
+
+/* wrapping follows the Wrap setting (data-wrap in HighlightedCode.css); the gutter sits in the code's own padding, inside this one */
+.file-viewer-content {
+  align-self: stretch;
+  min-width: 0;
+}
+
+.file-viewer-markdown {
+  padding: var(--space-3);
+  border: var(--hairline) solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-panel);
+}
+
+.file-viewer-toolbar {
+  align-self: stretch;
+  display: flex;
+  margin-bottom: var(--space-3);
 }
 
 .file-viewer-note {

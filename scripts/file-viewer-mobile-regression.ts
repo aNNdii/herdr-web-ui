@@ -18,7 +18,7 @@ async function checkLayout(): Promise<void> {
     import { FileViewer } from ${JSON.stringify(join(repo, "src/components/FileViewer.tsx"))};
     import { SettingsProvider } from ${JSON.stringify(join(repo, "src/lib/settings.ts"))};
     const query = new URLSearchParams(location.search);
-    const name = "image-" + "very-long-unbroken-name-".repeat(30) + ".svg";
+    const name = query.get("kind") === "text" ? "notes-" + "very-long-unbroken-name-".repeat(30) + ".ts" : "image-" + "very-long-unbroken-name-".repeat(30) + ".svg";
     const path = "/workspace/" + "long-directory/".repeat(40) + name;
     const height = query.get("height");
     if (height) document.documentElement.style.setProperty("--app-height", height + "px");
@@ -45,7 +45,7 @@ async function checkLayout(): Promise<void> {
     assert.ok(js, "fixture bundle contains JavaScript");
     server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch(request) {
       const url = new URL(request.url);
-      if (url.pathname === "/entry.js") return new Response(js, { headers: { "content-type": "text/javascript" } });
+      if (url.pathname === "/entry.js") return new Response(js, { headers: { "content-type": "text/javascript; charset=utf-8" } });
       if (url.pathname === "/styles.css") {
         const insets = url.searchParams.get("safe") === "portrait"
           ? { top: 59, right: 0, bottom: 34, left: 0 }
@@ -58,9 +58,11 @@ async function checkLayout(): Promise<void> {
       }
       if (url.pathname === "/api/fs/stat") {
         const path = url.searchParams.get("path")!;
+        if (new URL(request.headers.get("referer")!).searchParams.get("kind") === "text") return Response.json({ path, name: path.split("/").pop(), kind: "text", mime: "text/plain", size: 650 });
         return Response.json({ path, name: path.split("/").pop(), kind: "image", mime: "image/svg+xml", size: 2048 });
       }
       if (url.pathname === "/api/fs/file") {
+        if (new URL(request.headers.get("referer")!).searchParams.get("kind") === "text") return new Response("const x = 1;\n".repeat(50), { headers: { "content-type": "text/plain" } });
         const wide = new URL(request.headers.get("referer")!).searchParams.get("image") === "wide";
         const [width, height] = wide ? [6000, 400] : [400, 6000];
         return new Response(`<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}"><rect width="100%" height="100%" fill="teal"/></svg>`,
@@ -152,6 +154,29 @@ async function checkLayout(): Promise<void> {
         }
       } finally { await context.close(); }
     }
+    // A text file adds Wrap, Raw and Copy to the header: on a phone they all stay on one row inside the dialog.
+    const phone = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, locale: "en-US" });
+    try {
+      const page = await phone.newPage();
+      const errors: string[] = [];
+      page.on("pageerror", (error) => errors.push(error.message));
+      page.setDefaultTimeout(10_000);
+      await page.goto(`http://127.0.0.1:${server.port}/?kind=text`);
+      await page.locator(".file-viewer-text").waitFor();
+      await page.getByRole("button", { name: "Copy file", exact: true }).waitFor();
+      const dialog = await page.locator(".file-viewer").boundingBox();
+      assert.ok(dialog, "text: dialog is laid out");
+      const buttons = page.locator(".file-viewer-header .icon-button");
+      assert.equal(await buttons.count(), 5, "text: Wrap, Raw, Copy, Download and Close");
+      for (let index = 0; index < 5; index++) {
+        const box = await buttons.nth(index).boundingBox();
+        assert.ok(box, `text: button ${index} is laid out`);
+        assert.equal(box.y, (await buttons.nth(0).boundingBox())!.y, `text: button ${index} shares the row`);
+        assert.ok(box.x >= dialog.x && box.x + box.width <= dialog.x + dialog.width, `text: button ${index} inside the dialog`);
+      }
+      assert.deepEqual(errors, []);
+      console.log("PASS text: header buttons share one row inside the dialog at 390px");
+    } finally { await phone.close(); }
   } finally {
     await browser?.close();
     server?.stop();

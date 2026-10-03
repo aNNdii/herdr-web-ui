@@ -43,3 +43,25 @@ export function codeIsFilePath(code: string): boolean {
 
 /** Opens a path in the file viewer; null where nothing can open one (paths stay text). */
 export const OpenFileContext = createContext<((path: string) => void) | null>(null);
+
+/**
+ * A link in a file that opens another file: `./b.md` and `../src/x.ts` are relative to the file's
+ * own folder, so they resolve here; every other path (a bare name, `src/x.ts`, absolute, `~/`) is
+ * left as written for the pane's folder and the server's search. `..` never climbs above the root.
+ */
+export function resolveFromFile(filePath: string, href: string): string {
+  if (!/^\.\.?\//.test(href)) return href;
+  const separator = filePath.includes("\\") && !filePath.includes("/") ? "\\" : "/";
+  const root = /^(?:[A-Za-z]:[\\/]|\/|~\/)/.exec(filePath)?.[0] ?? "";
+  const segments = filePath.slice(root.length).split(/[\\/]/).slice(0, -1);
+  const folder: string[] = [];
+  for (const segment of [...segments, ...href.split("/")]) {
+    if (segment === "" || segment === ".") continue;
+    if (segment !== "..") folder.push(segment);
+    else if (folder.length > 0 && folder[folder.length - 1] !== "..") folder.pop();
+    // above the root there is nothing; a relative path keeps the step up
+    else if (root === "") folder.push(segment);
+  }
+  const start = root === "" ? "" : root.replace(/[\\/]/, separator);
+  return start + folder.join(separator);
+}

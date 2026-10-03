@@ -17,7 +17,7 @@ const transcript = join(codexHome, "sessions", `rollout-2026-09-28T00-00-00-${th
 writeFileSync(transcript, [
   { type: "session_meta", payload: { id: thread, cwd: root } },
   { type: "response_item", payload: { type: "message", role: "user", content: [{ type: "input_text", text: "Show me the demo video." }] } },
-  { type: "response_item", payload: { type: "message", role: "assistant", phase: "final_answer", content: [{ type: "output_text", text: `Open [demo video](./preview.webm) or [notes](./notes.txt) or [file URI notes](${new URL(`file://${join(root, "notes.txt")}`).href}) or [folder](${new URL(`file://${root}`).href}).\n\n${new URL(`file://${join(root, "notes.txt")}`).href}\n\n\`\`\`ts\nconst answer = 42;\n\nexport { answer };\n\`\`\`` }] } },
+  { type: "response_item", payload: { type: "message", role: "assistant", phase: "final_answer", content: [{ type: "output_text", text: `Open [demo video](./preview.webm) or [notes](./notes.txt) or [guide](./guide.md) or [big](./big.txt) or [file URI notes](${new URL(`file://${join(root, "notes.txt")}`).href}) or [folder](${new URL(`file://${root}`).href}).\n\n${new URL(`file://${join(root, "notes.txt")}`).href}\n\n\`\`\`ts\nconst answer = 42;\n\nexport { answer };\n\`\`\`` }] } },
 ].map((row) => JSON.stringify(row)).join("\n"));
 const db = new Database(join(codexHome, "state_5.sqlite"));
 db.exec("CREATE TABLE threads (id TEXT, rollout_path TEXT, cwd TEXT, archived INTEGER, agent_role TEXT, created_at INTEGER, updated_at INTEGER, source TEXT, first_user_message TEXT)");
@@ -28,6 +28,10 @@ writeFileSync(standIn, "#!/bin/sh\nsleep 600\n");
 chmodSync(standIn, 0o755);
 copyFileSync(join(import.meta.dir, "fixtures", "file-preview.webm"), join(root, "preview.webm"));
 writeFileSync(join(root, "notes.txt"), "File preview history regression\n");
+writeFileSync(join(root, "guide.md"), "# Guide\n\nSee [notes](./notes.txt).\n\n```ts\nconst x = 1;\n```\n");
+// the load limit is seeded below at its smallest choice, so this file, a little past it, stays small
+const TEXT_LOAD_LIMIT = 256 * 1024;
+writeFileSync(join(root, "big.txt"), "a line of plain text, 0123456789\n".repeat(Math.ceil(TEXT_LOAD_LIMIT / 30)).slice(0, TEXT_LOAD_LIMIT + 10));
 let workspace: string | undefined;
 let server: ReturnType<typeof createServer> | undefined;
 let browser: Awaited<ReturnType<typeof chromium.launch>> | undefined;
@@ -49,7 +53,7 @@ try {
   browser = await chromium.launch({ executablePath: process.env.CHROME_PATH ?? "/opt/google/chrome/chrome", headless: true, args: ["--no-sandbox"] });
   const context = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
   const page = await context.newPage();
-  await page.addInitScript(() => localStorage.setItem("herdr-web-ui:settings", JSON.stringify({ language: "en" })));
+  await page.addInitScript((textLoadLimit) => localStorage.setItem("herdr-web-ui:settings", JSON.stringify({ language: "en", textLoadLimit })), TEXT_LOAD_LIMIT);
   page.setDefaultTimeout(10_000);
   const errors: string[] = [];
   page.on("pageerror", (error) => errors.push(error.message));
@@ -143,12 +147,57 @@ try {
   await page.locator(".file-viewer-text").waitFor();
   assert.match(await page.locator(".file-viewer-text").innerText(), /File preview history regression/);
   console.log("PASS Chat folder URI opens directory browser through touch");
-  await page.locator(".file-viewer-header button").click();
+  await page.getByRole("button", { name: "Close file", exact: true }).click();
   await page.locator(".file-viewer").waitFor({ state: "hidden" });
   await page.getByRole("button", { name: new URL(`file://${join(root, "notes.txt")}`).href, exact: true }).tap();
   await page.locator(".file-viewer-text").waitFor();
   assert.match(await page.locator(".file-viewer-text").innerText(), /File preview history regression/);
   console.log("PASS Chat plain file URI opens content through touch");
+  await page.getByRole("button", { name: "Close file", exact: true }).click();
+  await page.locator(".file-viewer").waitFor({ state: "hidden" });
+
+  // Markdown: Preview | Code, Raw, Wrap, Copy
+  const guide = page.getByRole("dialog", { name: "guide.md", exact: true });
+  await page.getByRole("button", { name: "guide", exact: true }).click();
+  await guide.getByRole("heading", { name: "Guide", exact: true }).waitFor();
+  await guide.locator(".hl-keyword", { hasText: "const" }).waitFor();
+  assert.equal(await guide.getByRole("button", { name: "Preview", exact: true }).getAttribute("aria-pressed"), "true");
+  assert.equal(await guide.getByRole("button", { name: "Wrap long lines", exact: true }).count(), 0, "Wrap is for code, not the rendered Markdown");
+  console.log("PASS Markdown opens as a Preview with a highlighted code block");
+  await guide.getByRole("button", { name: "Code", exact: true }).click();
+  await guide.locator(".file-viewer-text .hl-line").first().waitFor();
+  assert.equal(await guide.locator(".file-viewer-text .hl-line").count(), 7);
+  assert.match(await guide.locator(".file-viewer-text").innerText(), /# Guide/);
+  console.log("PASS Code shows the Markdown source, one numbered line each");
+  const raw = guide.getByRole("link", { name: "Raw", exact: true });
+  assert.equal(await raw.getAttribute("target"), "_blank");
+  assert.match(await raw.getAttribute("href") ?? "", /\/api\/fs\/file/);
+  await guide.getByRole("button", { name: "Copy file", exact: true }).waitFor();
+  console.log("PASS Raw opens the file in a new tab; Copy is offered");
+  const wrap = guide.getByRole("button", { name: "Wrap long lines", exact: true });
+  await wrap.click();
+  assert.equal(await wrap.getAttribute("aria-pressed"), "true");
+  await guide.getByRole("button", { name: "Close file", exact: true }).click();
+  await guide.waitFor({ state: "hidden" });
+  await page.getByRole("button", { name: "guide", exact: true }).click();
+  await guide.getByRole("button", { name: "Code", exact: true }).click();
+  assert.equal(await guide.getByRole("button", { name: "Wrap long lines", exact: true }).getAttribute("aria-pressed"), "true");
+  await guide.locator(".file-viewer-text[data-wrap]").waitFor();
+  console.log("PASS Wrap is remembered across viewers");
+  await guide.getByRole("button", { name: "Preview", exact: true }).click();
+  await guide.getByRole("button", { name: "notes", exact: true }).click();
+  await page.getByRole("dialog", { name: "notes.txt", exact: true }).waitFor();
+  console.log("PASS A link in a Markdown preview opens the file it names");
+  await page.getByRole("button", { name: "Close file", exact: true }).click();
+  await page.locator(".file-viewer").waitFor({ state: "hidden" });
+
+  // a text file past the load limit: shown in part, so it cannot be copied whole
+  await page.getByRole("button", { name: "big", exact: true }).click();
+  const big = page.getByRole("dialog", { name: "big.txt", exact: true });
+  await big.getByText("Showing the first", { exact: false }).waitFor();
+  assert.equal(await big.getByRole("button", { name: "Copy file", exact: true }).count(), 0);
+  console.log("PASS A text file past the load limit shows a note and no Copy");
+  assert.deepEqual(errors, []);
 } finally {
   await browser?.close();
   server?.stop();

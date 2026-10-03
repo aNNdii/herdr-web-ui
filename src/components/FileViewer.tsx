@@ -1,20 +1,23 @@
-import { useEffect, useState } from "react";
-import { Download, ExternalLink, X } from "lucide-react";
+import { useEffect, useRef, useState, type RefObject } from "react";
+import { Check, Copy, Download, ExternalLink, FileText, WrapText, X } from "lucide-react";
 
 import "./FileViewer.css";
 import { DirectoryBrowser } from "./DirectoryBrowser.tsx";
+import { TextFileView, type TextViewMode } from "./TextFileView.tsx";
 
 import type { FileInfo } from "../../shared/protocol.ts";
 import { ApiError } from "../lib/api.ts";
 import { formatBytes } from "../lib/bridgeProgress.ts";
 import { LOCAL_MACHINE } from "../../shared/machines.ts";
 import { useMachineApi, useMachineId } from "../lib/machineContext.tsx";
+import { copyText } from "../lib/clipboard.ts";
+import { languageForPath } from "../lib/highlight.ts";
 import { useT } from "../lib/i18n.ts";
+import { useSettings } from "../lib/settings.ts";
+import { dropPartialLastLine } from "../lib/textPreview.ts";
 
 /** Bigger images are offered as a download: a phone decodes an image whole. */
 const MAX_INLINE_IMAGE_BYTES = 20 * 1024 * 1024;
-/** Text shows its first part: the rest is a download away. */
-const TEXT_PREVIEW_BYTES = 256 * 1024;
 
 export interface FileViewerProps {
   /** absolute, `~/…`, or relative to the pane's folder */
@@ -25,12 +28,29 @@ export interface FileViewerProps {
   onOpen?: (path: string) => void;
 }
 
+/** Copies the whole file; owns its "copied" flip, so only the button re-renders for it. */
+function CopyFileButton({ text, fallback }: { text: string; fallback: RefObject<HTMLElement> }) {
+  const t = useT();
+  const [copied, setCopied] = useState(false);
+  useEffect(() => {
+    if (!copied) return;
+    const timer = window.setTimeout(() => setCopied(false), 1500);
+    return () => window.clearTimeout(timer);
+  }, [copied]);
+  const label = copied ? t("File copied") : t("Copy file");
+  return <button type="button" className="icon-button" aria-label={label} title={label} onClick={() => void copyText(text, fallback.current).then((done) => { if (done) setCopied(true); })}>
+    {copied ? <Check aria-hidden="true" /> : <Copy aria-hidden="true" />}
+  </button>;
+}
+
 /**
  * A file an agent wrote, opened in the browser: images, video and audio (streamed, so they
  * play and seek at once), PDFs, and the start of a text file. Anything can be downloaded.
  */
 export function FileViewer({ path: asked, paneId, onClose, onOpen }: FileViewerProps) {
   const t = useT();
+  const { settings, update } = useSettings();
+  const { textLoadLimit } = settings;
   const { fetchFileInfo, fileUrl, fetchDirectories } = useMachineApi();
   // a remote PC's bridge reads a relative folder from the pane's folder only from its next bundle
   // on; until then it would list the bridge's own folder, so only an absolute or ~/ one is listed there
@@ -42,6 +62,10 @@ export function FileViewer({ path: asked, paneId, onClose, onOpen }: FileViewerP
   const [candidates, setCandidates] = useState<string[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [text, setText] = useState<string | null>(null);
+  // the mode is the user's choice for this path, else Preview: derived, so a new path never paints the old mode
+  const [chosen, setChosen] = useState<{ path: string; mode: TextViewMode } | null>(null);
+  const mode = chosen?.path === path ? chosen.mode : "preview";
+  const contentRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => setPath(asked), [asked]);
 
@@ -54,9 +78,9 @@ export function FileViewer({ path: asked, paneId, onClose, onOpen }: FileViewerP
       setInfo(next);
       if (next.kind !== "text") return;
       // only the first part of a text file travels: a range, whatever the file's size
-      const response = await fetch(fileUrl(next.path, paneId), { headers: { range: `bytes=0-${TEXT_PREVIEW_BYTES - 1}` } });
+      const response = await fetch(fileUrl(next.path, paneId), { headers: { range: `bytes=0-${textLoadLimit - 1}` } });
       const body = await response.text();
-      if (!cancelled) setText(body);
+      if (!cancelled) setText(dropPartialLastLine(body, next.size > textLoadLimit));
     }).catch(async (reason: unknown) => {
       if (cancelled) return;
       // a folder is listed from the pane's folder, as a file is found from it
@@ -71,7 +95,7 @@ export function FileViewer({ path: asked, paneId, onClose, onOpen }: FileViewerP
       setError(reason instanceof ApiError && reason.status === 404 ? t("No readable file at this path.") : t("The file could not be opened."));
     });
     return () => { cancelled = true; };
-  }, [path, paneId, fetchFileInfo, fileUrl, fetchDirectories, remote]);
+  }, [path, paneId, fetchFileInfo, fileUrl, fetchDirectories, remote, textLoadLimit]);
 
   useEffect(() => {
     // the FilesDialog beneath listens on window too (and stands down while this is open); this
@@ -83,6 +107,9 @@ export function FileViewer({ path: asked, paneId, onClose, onOpen }: FileViewerP
 
   // the file found (a bare name may have been found deeper in the folder), else as asked
   const url = fileUrl(info?.path ?? path, paneId);
+  const textFile = info?.kind === "text";
+  const language = languageForPath(info?.path ?? path);
+  const truncated = info !== null && info.size > textLoadLimit;
   const body = (() => {
     if (directory !== null) return <DirectoryBrowser key={directory} start={directory} onOpenFile={onOpen ?? setPath} />;
     if (error !== null) return <p className="file-viewer-note" role="alert">{error}</p>;
@@ -104,8 +131,8 @@ export function FileViewer({ path: asked, paneId, onClose, onOpen }: FileViewerP
         return <iframe className="file-viewer-pdf" src={url} title={info.name} />;
       case "text":
         return text === null ? <p className="file-viewer-note">{t("Opening…")}</p> : <>
-          <pre className="file-viewer-text">{text}</pre>
-          {info.size > TEXT_PREVIEW_BYTES && <p className="file-viewer-note">{t("Showing the first {shown} of {total}.", { shown: formatBytes(TEXT_PREVIEW_BYTES), total: formatBytes(info.size) })}</p>}
+          <TextFileView path={info.path} text={text} language={language} mode={mode} onModeChange={(next) => setChosen({ path, mode: next })} onOpen={onOpen ?? setPath} contentRef={contentRef} />
+          {truncated && <p className="file-viewer-note">{t("Showing the first {shown} of {total}.", { shown: formatBytes(textLoadLimit), total: formatBytes(info.size) })}</p>}
         </>;
       default:
         return <p className="file-viewer-note">{info.mime}, {formatBytes(info.size)}. This file can't be shown here; download it instead.</p>;
@@ -123,7 +150,9 @@ export function FileViewer({ path: asked, paneId, onClose, onOpen }: FileViewerP
               <span className="file-viewer-path"><span dir="ltr">{info?.path ?? path}</span></span>
             </p>
           </div>
-          <a className="icon-button" href={url} target="_blank" rel="noopener" aria-label={t("Open in a new tab")} title={t("Open in a new tab")}><ExternalLink aria-hidden="true" /></a>
+          {textFile && !(language === "markdown" && mode === "preview") && <button type="button" className="icon-button" aria-pressed={settings.wrapCode} aria-label={t("Wrap long lines")} title={t("Wrap long lines")} onClick={() => update({ wrapCode: !settings.wrapCode })}><WrapText aria-hidden="true" /></button>}
+          <a className="icon-button" href={url} target="_blank" rel="noopener" aria-label={textFile ? t("Raw") : t("Open in a new tab")} title={textFile ? t("Raw") : t("Open in a new tab")}>{textFile ? <FileText aria-hidden="true" /> : <ExternalLink aria-hidden="true" />}</a>
+          {textFile && text !== null && !truncated && <CopyFileButton text={text} fallback={contentRef} />}
           <a className="icon-button" href={fileUrl(info?.path ?? path, paneId, true)} download={info?.name ?? true} aria-label={t("Download")} title={t("Download")}><Download aria-hidden="true" /></a>
           <button type="button" className="icon-button" aria-label={t("Close file")} onClick={onClose}><X aria-hidden="true" /></button>
         </header>

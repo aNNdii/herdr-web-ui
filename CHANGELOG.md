@@ -23,6 +23,9 @@ between releases do not reach them. Remote-PC runtime bundles are versioned sepa
 ## [0.3.49] - 2026-10-04
 
 ### Added
+- The file viewer renders Markdown with a Preview | Code switch, highlights text files with line
+  numbers (code blocks in the chat too), and offers Raw, Copy and a Wrap toggle, with size limits
+  in Settings.
 - `HERDR_WEB_PASTE_DIR` saves pasted and attached files to one directory instead of
   `.herdr-web-ui/` in each pane's project. It is read by the server, for the panes of its own
   PC; a remote PC keeps the default.
