@@ -484,11 +484,34 @@
   color: var(--text-strong);
 }
 
+/* how many comments the next message carries; only where the pills scroll out of sight */
+.composer-comments-count {
+  display: none;
+}
+
 /* a phone keeps them on one row that scrolls, so the box does not grow taller than the reply */
 @media (max-width: 640px) {
   .composer-comments {
     flex-wrap: nowrap;
     overflow-x: auto;
+  }
+
+  /* it stays at the left edge while the pills scroll under it */
+  .composer-comments-count {
+    position: sticky;
+    /* a sticky box keeps clear of the row's padding: this is the row's edge */
+    left: calc(-1 * var(--space-3));
+    z-index: 1;
+    display: flex;
+    flex: none;
+    align-items: center;
+    /* out over the row's own padding, so no pill shows at its left while they scroll under it */
+    margin-left: calc(-1 * var(--space-3));
+    padding: 0 var(--space-2) 0 var(--space-3);
+    background: var(--bg-elevated);
+    color: var(--text-dim);
+    font-size: var(--fs-xs);
+    white-space: nowrap;
   }
 
   .composer-comment {

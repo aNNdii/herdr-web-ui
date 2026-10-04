@@ -797,14 +797,16 @@ export function Composer({
 
         {comments.length > 0 && (
           <div ref={pillsRef} className="composer-comments" aria-label={t("Comments")}>
+            {/* a phone keeps the pills on one row that scrolls: the count tells how many go out */}
+            {comments.length > 1 && <span className="composer-comments-count">{t("Comments: {count}", { count: comments.length })}</span>}
             {comments.map((comment) => {
               const quote = quoteFor(blockContent(comment.block));
               return (
                 // keyed by its block: an edit gets a new id, and the pill that opened the editor keeps the focus
                 <div className="composer-comment" key={comment.anchor} data-anchor={comment.anchor}>
-                  <button type="button" className="composer-comment-open" title={quote} onClick={() => setEditedComment(comment)}>
+                  <button type="button" className="composer-comment-open" title={`${quote}\n\n${comment.comment}`} onClick={() => setEditedComment(comment)}>
                     <MessageSquare aria-hidden="true" />
-                    <span>{quoteFor(quote, 30)}</span>
+                    <span>{quoteFor(comment.comment, 30)}</span>
                   </button>
                   <button type="button" className="composer-comment-remove" aria-label={t("Remove comment")} title={t("Remove comment")} onClick={() => { keepFocusInPills(comment.anchor); blockComments.remove(commentOwner, [comment.id]); }}>
                     <X aria-hidden="true" />

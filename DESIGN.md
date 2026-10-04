@@ -504,9 +504,11 @@ One set for both themes: the card is island black wherever it shows.
   Stop — with the controls bottom-aligned so they stay beside the last line as the box grows;
   the image strip is its own row above that line.
 - Block comments waiting for the next message are pills in a row above the image strip, in reading
-  order: `--bg-panel`, hairline, `--radius-pill`, `--fs-xs`, the quoted part ellipsized beside a
-  `--accent` icon and an `x` that removes it. On touch both halves are `--touch-target` tall; at
-  `<=640px` the row stays one line and scrolls sideways.
+  order: `--bg-panel`, hairline, `--radius-pill`, `--fs-xs`, the comment (what the message will
+  carry; its tooltip adds the quoted part) ellipsized beside a `--accent` icon and an `x` that
+  removes it. Under them an attachment row starts `--space-4` lower, clear of its remove buttons.
+  On touch both halves are `--touch-target` tall; at `<=640px` the row stays one line and scrolls
+  sideways, and from two comments on a `Comments: N` count stays at its left edge.
 - The status line ends, on fine pointers, with `/` commands and `@` files keycaps (plus `Mod+Enter`
   sends when **Enter sends** is off); the placeholder is just `Message <agent>…`.
 - `/` completions come from `GET /api/pane/commands` and group built-in, user and project commands;

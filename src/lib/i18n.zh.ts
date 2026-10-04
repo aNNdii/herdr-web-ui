@@ -762,6 +762,7 @@ export const ZH: Record<string, string> = {
   "Comment on this part": "评论这一部分",
   "Remove comment": "删除评论",
   "Edit comment": "编辑评论",
+  "Comments: {count}": "评论：{count}",
   "Comments stay here: they are not sent with a command.": "评论会留在这里：不会随命令一起发送。",
   "Too long to send. Shorten the message or remove comments.": "内容过长，无法发送。请缩短消息或删除评论。",
   "Comments could not be saved. They are lost on reload.": "评论无法保存，重新加载后会丢失。",

@@ -760,6 +760,7 @@ export const JA: Record<string, string> = {
   "Comment on this part": "この部分にコメント",
   "Remove comment": "コメントを削除",
   "Edit comment": "コメントを編集",
+  "Comments: {count}": "コメント: {count}",
   "Comments stay here: they are not sent with a command.": "コメントはここに残ります。コマンドと一緒には送信されません。",
   "Too long to send. Shorten the message or remove comments.": "長すぎて送信できません。メッセージを短くするか、コメントを削除してください。",
   "Comments could not be saved. They are lost on reload.": "コメントを保存できませんでした。再読み込みすると失われます。",

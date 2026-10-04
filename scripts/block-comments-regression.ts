@@ -196,7 +196,7 @@ try {
     assert.ok(trail <= 1, `a quick sweep leaves ${trail} "+" showing`);
     console.log("PASS desktop: a quick sweep over the reply shows no trail of +");
 
-    await page.locator(".composer-comment-open", { hasText: "Intro paragraph" }).click();
+    await page.locator(".composer-comment-open", { hasText: "Explain why" }).click();
     await editor.waitFor();
     await editor.getByRole("textbox", { name: "Comment" }).fill("Explain why, briefly");
     await editor.getByRole("button", { name: "Save", exact: true }).click();
@@ -245,9 +245,9 @@ try {
 
     // removing a pill hands the focus to its neighbour, not to the page
     await comment(page, long, "Temporary");
-    await page.locator(".composer-comment", { hasText: "A longer paragraph" }).getByRole("button", { name: "Remove comment" }).click();
-    await page.locator(".composer-comment", { hasText: "A longer paragraph" }).waitFor({ state: "detached" });
-    assert.equal(await page.evaluate(() => document.activeElement?.closest(".composer-comment")?.textContent ?? document.activeElement?.tagName), "check the logs", "the focus moves to the pill beside the removed one");
+    await page.locator(".composer-comment", { hasText: "Temporary" }).getByRole("button", { name: "Remove comment" }).click();
+    await page.locator(".composer-comment", { hasText: "Temporary" }).waitFor({ state: "detached" });
+    assert.equal(await page.evaluate(() => document.activeElement?.closest(".composer-comment")?.textContent ?? document.activeElement?.tagName), "Also the exit code", "the focus moves to the pill beside the removed one");
     console.log("PASS desktop: removing a pill keeps the focus in the pill row");
 
     // the agent starts again while a comment is being written: the editor and the draft stay, and
@@ -353,6 +353,26 @@ try {
       assert.ok(box.height >= touchTarget && box.width >= touchTarget, `${part} is ${box.width}x${box.height}, under the ${touchTarget}px touch target`);
     }
     console.log("PASS phone: the + and the comment pills are touch-sized");
+
+    // the pills scroll on one row: with two or more, a count stays at the left edge
+    const count = page.locator(".composer-comments-count");
+    assert.equal(await count.count(), 0, "one comment needs no count");
+    const second = page.locator("li.is-commentable li.is-commentable", { hasText: "check the logs" });
+    await second.tap();
+    await shown(ownAdd(second));
+    await ownAdd(second).tap();
+    await editor.waitFor();
+    await editor.getByRole("textbox", { name: "Comment" }).fill("A second one, long enough that the pills overflow the row");
+    await editor.getByRole("button", { name: "Save", exact: true }).tap();
+    await editor.waitFor({ state: "hidden" });
+    assert.equal(await count.innerText(), "Comments: 2");
+    assert.equal(await count.isVisible(), true, "the count shows on a phone");
+    await page.locator(".composer-comments").evaluate((node) => { node.scrollLeft = node.scrollWidth; });
+    const rowBox = (await page.locator(".composer-comments").boundingBox())!;
+    const countBox = (await count.boundingBox())!;
+    assert.ok(Math.abs(countBox.x - rowBox.x) <= 1, `the count stays at the left edge while the pills scroll (${countBox.x - rowBox.x}px in)`);
+    if (evidence) await page.screenshot({ path: join(evidence, "block-comments-phone-pills.png"), clip: { x: 0, y: (await page.locator(".composer-surface").boundingBox())!.y - 8, width: 390, height: 140 } });
+    console.log("PASS phone: a count stays at the left of the scrolling pills");
     assert.deepEqual(errors, []);
     await page.context().close();
   }
