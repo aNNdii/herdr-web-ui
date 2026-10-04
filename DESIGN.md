@@ -505,12 +505,12 @@ One set for both themes: the card is island black wherever it shows.
   Stop — with the controls bottom-aligned so they stay beside the last line as the box grows;
   the image strip is its own row above that line.
 - Block comments waiting for the next message are shown where they were written, under their part
-  in the chat. The composer only counts them: a chip with a `--accent` speech bubble and the number
-  (`--accent-tint`, `--radius-pill`, `--fs-xs`) at the end of the status line, so they take no row
-  of their own and the box is untouched. A tap walks the chat to the next commented part, round
-  again; a comment whose part is not in the chat opens in its editor instead. The status line
-  clips what leaves its row, so on touch the chip is `--touch-target` less `--space-2` tall and the
-  line grows by the difference while there are comments.
+  in the chat. The composer only counts them: a chip among the status line's chips, drawn like the
+  reasoning chip (hairline, `--radius-sm`, `--fs-xs`, a line high) with an `--accent` speech bubble
+  and edge, so they take no row of their own and the box is untouched. A tap walks the chat to
+  the next commented part, round again; a comment whose part is not in the chat opens in its
+  editor instead. On touch the chip keeps its size and its tap area grows to `--touch-target`
+  (the line clips its sides only).
 - The status line ends, on fine pointers, with `/` commands and `@` files keycaps (plus `Mod+Enter`
   sends when **Enter sends** is off); the placeholder is just `Message <agent>…`.
 - `/` completions come from `GET /api/pane/commands` and group built-in, user and project commands;

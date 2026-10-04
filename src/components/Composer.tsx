@@ -687,12 +687,6 @@ export function Composer({
             <span className="composer-reasoning-short" aria-hidden="true">{metadata.reasoning_effort ?? "—"}</span>
           </span>
         </span>}
-        {metadata?.context && <ContextRing context={metadata.context} />}
-        {(uploading || !connected) && (
-          <span className="composer-status-hint">
-            <span aria-hidden="true">·</span> {t(uploading ? "Uploading file…" : "Reconnecting… message held here, never queued")}
-          </span>
-        )}
         {comments.length > 0 && (
           <button
             type="button"
@@ -704,6 +698,12 @@ export function Composer({
             <MessageSquare aria-hidden="true" />
             {comments.length}
           </button>
+        )}
+        {metadata?.context && <ContextRing context={metadata.context} />}
+        {(uploading || !connected) && (
+          <span className="composer-status-hint">
+            <span aria-hidden="true">·</span> {t(uploading ? "Uploading file…" : "Reconnecting… message held here, never queued")}
+          </span>
         )}
       </div>
 

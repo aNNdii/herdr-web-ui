@@ -362,7 +362,9 @@ try {
     assert.equal(await page.locator(".is-commentable.is-selected").count(), 0, "a tap on a link does not choose its paragraph");
     console.log("PASS phone: a link tap opens the link and leaves the block alone");
 
-    // the chip at the end of the status line is nearly a finger's size, and takes no row of its own
+    // the chip among the status line's chips looks like its neighbours, takes a finger's size around
+    // it, and adds no height: the line stays one row
+    const withoutComments = (await page.locator(".composer").boundingBox())!.height;
     await item.tap();
     await shown(ownAdd(item));
     await ownAdd(item).tap();
@@ -372,8 +374,16 @@ try {
     await editor.waitFor({ state: "hidden" });
     const touchTarget = await page.evaluate(() => parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--touch-target")));
     const chip = page.locator(".composer-comments-chip");
-    const chipBox = (await chip.boundingBox())!;
-    assert.ok(chipBox.height >= touchTarget - 8 && chipBox.width >= touchTarget - 8, `the chip is ${chipBox.width}x${chipBox.height}, under the ${touchTarget - 8}px a status line leaves it`);
+    assert.equal((await page.locator(".composer").boundingBox())!.height, withoutComments, `the first comment does not grow the composer (was ${withoutComments}px; chip ${(await chip.boundingBox())!.height}px, status ${(await page.locator(".composer-status").boundingBox())!.height}px)`);
+    const chipReach = await chip.evaluate((node, half) => {
+      const box = node.getBoundingClientRect();
+      const at = (x: number, y: number): boolean => { const hit = document.elementFromPoint(x, y); return hit === node || node.contains(hit); };
+      const x = box.left + box.width / 2;
+      const y = box.top + box.height / 2;
+      return at(x, y - half + 2) && at(x, y + half - 2);
+    }, touchTarget / 2);
+    assert.ok(chipReach, `a tap ${touchTarget / 2 - 2}px above or below the chip's middle still reaches it`);
+    assert.ok((await chip.boundingBox())!.height <= 24, "the chip is as high as its neighbours");
     const boxBefore = (await page.locator(".composer").boundingBox())!.height;
     const second = page.locator("li.is-commentable li.is-commentable", { hasText: "check the logs" });
     await second.tap();
