@@ -243,7 +243,7 @@ try {
     assert.equal(await ownAdd(intro).evaluate((node) => node === document.activeElement), true, "closing the editor hands the focus back to the +");
     console.log("PASS desktop: Tab reaches a block's +, and the focus comes back to it");
 
-    // the chip beside the paperclip counts the comments and walks to them, one per tap, round again
+    // the chip in the status line counts the comments and walks to them, one per tap, round again
     await comment(page, long, "Temporary");
     const chip = page.locator(".composer-comments-chip");
     assert.equal(await chip.innerText(), "3");
@@ -275,6 +275,7 @@ try {
     await editor.getByRole("button", { name: "Delete", exact: true }).click();
     await editor.waitFor({ state: "hidden" });
     assert.equal(await chip.innerText(), "2");
+    assert.equal(await page.evaluate(() => document.activeElement?.classList.contains("composer-text")), true, "deleting a comment from its row in the chat leaves the focus on the message, not on the page");
     console.log("PASS desktop: the chip counts the comments and walks to them");
 
     // the agent starts again while a comment is being written: the editor and the draft stay, and

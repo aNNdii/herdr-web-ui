@@ -508,8 +508,8 @@ One set for both themes: the card is island black wherever it shows.
   in the chat. The composer only counts them: a chip among the status line's chips, drawn like the
   reasoning chip (hairline, `--radius-sm`, `--fs-xs`, a line high) with an `--accent` speech bubble
   and edge, so they take no row of their own and the box is untouched. A tap walks the chat to
-  the next commented part, round again; a comment whose part is not in the chat opens in its
-  editor instead. On touch the chip keeps its size and its tap area grows to `--touch-target`
+  the next commented part, round again; a comment whose part is not in the chat is a stop of
+  its own that opens its editor, so the chip reaches every comment it counts. On touch the chip keeps its size and its tap area grows to `--touch-target`
   (the line clips its sides only). The chip counts every stored comment; the Send and Queue
   buttons carry a small count badge (`--bg-elevated`, `--accent` edge, `--fs-2xs`, top right) of
   the comments this send takes, with the number in their name and tooltip: it is where the eyes

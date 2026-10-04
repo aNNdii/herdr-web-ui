@@ -47,7 +47,11 @@ export function CommentEditor({ block, initialComment, onSave, onClose }: Commen
 
   useLayoutEffect(() => {
     opener.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    return () => { if (opener.current?.isConnected) opener.current.focus({ preventScroll: true }); };
+    return () => {
+      // a deleted comment takes its own row, the opener, with it: the focus goes on to the message
+      const back = opener.current?.isConnected ? opener.current : document.querySelector<HTMLElement>(".composer-text");
+      back?.focus({ preventScroll: true });
+    };
   }, []);
   useEffect(() => {
     window.requestAnimationFrame(() => {
@@ -92,7 +96,7 @@ export function CommentEditor({ block, initialComment, onSave, onClose }: Commen
         <header className="modal-header"><h2 className="modal-title" id={`${id}-title`}>{t("Comment")}</h2></header>
         <div className="modal-body">
           {/* a stored block comes from localStorage, maybe from another version: one it cannot draw
-              shows as text, and the comment stays editable (the pill's editor has no boundary above it) */}
+              shows as text, and the comment stays editable (this editor has no boundary above it) */}
           <div className="comment-editor-block">
             <RenderBoundary resetKey={block} fallback={() => <p className="comment-editor-plain">{blockContent(block)}</p>}>
               <MarkdownBlocks blocks={[block]} />

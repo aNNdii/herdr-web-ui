@@ -22,7 +22,7 @@
   --comment-add-x: calc(var(--comment-bar-x) - var(--space-2) - var(--comment-add-size));
   /* how far the "+" stands out past the block's top right corner, as a badge (no gutter) */
   --comment-badge-out: 10px;
-  transition: background-color 120ms ease, box-shadow 120ms ease;
+  transition: background-color var(--dur-fast) var(--ease-out), box-shadow var(--dur-fast) var(--ease-out);
 }
 
 /* a block in a list starts past the list's indent (ChatView.css): its gutter starts where the
@@ -96,9 +96,11 @@
   height: 16px;
 }
 
-.block-comment-add:hover {
-  color: var(--text-strong);
-  border-color: var(--accent);
+@media (hover: hover) {
+  .block-comment-add:hover {
+    color: var(--text-strong);
+    border-color: var(--accent);
+  }
 }
 
 /* a code block's top right is its copy button */
@@ -113,7 +115,7 @@
   .is-commentable:hover:not(:has(.is-commentable:hover)) > .block-comment-add {
     opacity: 1;
     pointer-events: auto;
-    transition: opacity 120ms ease 150ms;
+    transition: opacity var(--dur-fast) var(--ease-out) 150ms;
   }
 
   /* the block the "+" belongs to, tinted as a tap tints it on a phone */
@@ -138,7 +140,7 @@
 .chat-view .is-selected > .block-comment-add {
   opacity: 1;
   pointer-events: auto;
-  transition: opacity 120ms ease;
+  transition: opacity var(--dur-fast) var(--ease-out);
 }
 
 .is-commentable.is-selected {

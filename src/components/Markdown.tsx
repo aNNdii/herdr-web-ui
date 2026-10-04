@@ -259,7 +259,7 @@ function useCommentable(path: number[], block: MarkdownBlock, enabled: boolean, 
       selectBlock(target.anchor);
     },
     add: <button type="button" className="block-comment-add" aria-label={t("Comment on this part")} title={t("Comment on this part")} onClick={open}><MessageSquarePlus aria-hidden="true" /></button>,
-    after: after(commented && <button type="button" className="block-comment-row" title={t("Edit comment")} onClick={open}><MessageSquare aria-hidden="true" /><span>{commented.comment}</span></button>),
+    after: after(commented && <button type="button" className="block-comment-row" data-comment-id={commented.id} title={t("Edit comment")} onClick={open}><MessageSquare aria-hidden="true" /><span>{commented.comment}</span></button>),
   };
 }
 

@@ -220,15 +220,20 @@ export function Composer({
   const outgoing = outgoingMessage(comments, text, { answering: answerHint !== null, agent: agent !== null });
   // the comment as it was opened: a send acknowledged meanwhile must not close the editor on what is being typed
   const [editedComment, setEditedComment] = useState<BlockComment | null>(null);
-  // the chip beside the paperclip walks the commented parts of the chat, one per tap
+  // the chip in the status line walks the commented parts of the chat, one per tap
   const nextComment = useRef(0);
   const goToComment = (): void => {
     const marked = [...document.querySelectorAll<HTMLElement>(".chat-view .is-commented")];
     // a comment whose part is not in the chat (older history not loaded, a reply that changed)
-    // opens in its editor instead, so the chip never does nothing
-    if (marked.length === 0) { setEditedComment(comments[0] ?? null); return; }
-    const target = marked[nextComment.current % marked.length]!;
-    nextComment.current = (nextComment.current + 1) % marked.length;
+    // is a stop of its own that opens its editor, so the chip reaches every comment it counts
+    const shown = new Set([...document.querySelectorAll<HTMLElement>(".chat-view .block-comment-row")].map((row) => row.dataset.commentId));
+    const missing = comments.filter((comment) => !shown.has(comment.id));
+    const stops = marked.length + missing.length;
+    if (stops === 0) return;
+    const stop = nextComment.current % stops;
+    nextComment.current = (stop + 1) % stops;
+    if (stop >= marked.length) { setEditedComment(missing[stop - marked.length]!); return; }
+    const target = marked[stop]!;
     target.scrollIntoView({ block: "center", behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" });
   };
   const mounted = useRef(true);
@@ -694,6 +699,8 @@ export function Composer({
           <button
             type="button"
             className="composer-comments-chip"
+            // the status line is a live region; a count that changes with every comment is not news
+            aria-live="off"
             aria-label={t("Comments to send: {count}", { count: comments.length })}
             title={`${t("Comments to send: {count}", { count: comments.length })}\n${t("Go to the next comment")}`}
             onClick={goToComment}
