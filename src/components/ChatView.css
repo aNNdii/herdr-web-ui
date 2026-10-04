@@ -218,7 +218,7 @@
   height: 1em;
   margin: 0 var(--space-2) 0 calc(-1em - var(--space-2));
   vertical-align: -0.125em;
-  border: 1.5px solid var(--text-dim);
+  border: var(--hairline) solid var(--text-dim);
   /* half the small radius: a 1em box with the full one reads as a round radio button */
   border-radius: calc(var(--radius-sm) / 2);
 }

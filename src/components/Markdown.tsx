@@ -1,4 +1,4 @@
-import { useContext, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { memo, useContext, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Check, Copy } from "lucide-react";
 import katex from "katex";
 
@@ -62,14 +62,15 @@ function Inline({ nodes, interactive = true }: { nodes: InlineNode[]; interactiv
 
 function List({ block }: { block: ListBlock }) {
   const Tag = block.ordered ? "ol" : "ul";
+  const id = useId();
   return (
     <Tag className="markdown-list" start={block.ordered ? block.start : undefined}>
       {block.items.map((item, index) => (
         <li key={index} className={item.checked === undefined ? undefined : "markdown-task"}>
           {/* a task's box shows its state; the agent's text owns it, so it cannot be ticked here. Drawn,
               not an <input>: a disabled checkbox is greyed by the browser and ignores the accent */}
-          {item.checked !== undefined && <span className="markdown-task-box" role="checkbox" aria-checked={item.checked} aria-disabled="true">{item.checked && <Check aria-hidden="true" />}</span>}
-          <Inline nodes={item.content} />
+          {item.checked !== undefined && <span className="markdown-task-box" role="checkbox" aria-checked={item.checked} aria-disabled="true" aria-labelledby={`${id}-${index}`}>{item.checked && <Check aria-hidden="true" />}</span>}
+          {item.checked === undefined ? <Inline nodes={item.content} /> : <span id={`${id}-${index}`}><Inline nodes={item.content} /></span>}
           {item.blocks !== undefined && <Blocks blocks={item.blocks} />}
         </li>
       ))}
@@ -147,7 +148,11 @@ function Blocks({ blocks }: { blocks: MarkdownBlock[] }) {
   })}</>;
 }
 
-export function Markdown({ children, className }: { children: string; className?: string }) {
+/**
+ * Markdown rendered. Both props are strings, so `memo` skips a parent's re-render: a long plan in
+ * the file viewer is not rendered again every time the app polls.
+ */
+export const Markdown = memo(function Markdown({ children, className }: { children: string; className?: string }) {
   const blocks = useMemo(() => parseMarkdown(children), [children]);
   return <div className={className === undefined ? "markdown" : `markdown ${className}`}><Blocks blocks={blocks} /></div>;
-}
+});

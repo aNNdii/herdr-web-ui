@@ -240,8 +240,14 @@ describe("numbered lists as agents write them", () => {
       [undefined, [{ type: "text", value: "plain" }]],
     ]);
     const html = render("1. step\n   - [x] done\n   - [ ] open");
-    expect(html).toMatch(/<li class="markdown-task"><span class="markdown-task-box" role="checkbox" aria-checked="true" aria-disabled="true"><svg[^]*?<\/svg><\/span><span>done<\/span><\/li>/);
-    expect(html).toContain('<li class="markdown-task"><span class="markdown-task-box" role="checkbox" aria-checked="false" aria-disabled="true"></span><span>open</span></li>');
+    // the box is named by the item's text, so a screen reader says "done, checkbox, checked"
+    const done = /<li class="markdown-task"><span class="markdown-task-box" role="checkbox" aria-checked="true" aria-disabled="true" aria-labelledby="([^"]+)"><svg[^]*?<\/svg><\/span><span id="([^"]+)"><span>done<\/span><\/span><\/li>/.exec(html);
+    expect(done?.[1]).toBe(done?.[2]!);
+    const open = /<li class="markdown-task"><span class="markdown-task-box" role="checkbox" aria-checked="false" aria-disabled="true" aria-labelledby="([^"]+)"><\/span><span id="([^"]+)"><span>open<\/span><\/span><\/li>/.exec(html);
+    expect(open?.[1]).toBe(open?.[2]!);
+    expect(done).not.toBeNull();
+    expect(open).not.toBeNull();
+    expect(open?.[1]).not.toBe(done?.[1]);
   });
 
   it("keeps one list across blank lines between its items", () => {
