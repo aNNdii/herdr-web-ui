@@ -291,6 +291,7 @@ export const KO: Record<string, string> = {
   "Close files": "파일 닫기",
   "Showing the first {shown}": "처음 {shown}만 표시",
   "Open in a new tab": "새 탭에서 열기",
+  "This image is {size}; open it in a new tab to view it.": "이 이미지는 {size}입니다. 보려면 새 탭에서 여세요.",
   "Raw": "원본",
   "Copy file": "파일 복사",
   "File copied": "파일 복사됨",

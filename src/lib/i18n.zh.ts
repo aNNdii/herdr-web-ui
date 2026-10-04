@@ -295,6 +295,7 @@ export const ZH: Record<string, string> = {
   "Close files": "关闭文件",
   "Showing the first {shown}": "显示前 {shown}",
   "Open in a new tab": "在新标签页中打开",
+  "This image is {size}; open it in a new tab to view it.": "此图片大小为 {size}，请在新标签页中打开查看。",
   "Raw": "原始文件",
   "Copy file": "复制文件",
   "File copied": "文件已复制",

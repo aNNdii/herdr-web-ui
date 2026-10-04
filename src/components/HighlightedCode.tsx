@@ -1,4 +1,4 @@
-import { Fragment, memo, useMemo, type CSSProperties } from "react";
+import { forwardRef, Fragment, memo, useMemo, type CSSProperties } from "react";
 
 import { highlightLines } from "../lib/highlight.ts";
 import { useT } from "../lib/i18n.ts";
@@ -25,8 +25,9 @@ interface HighlightedCodeProps {
  * The lines are inline spans joined by literal "\n" text nodes (none after the last line), so the
  * text of the `<pre>` is the code itself: `innerText` and a copied selection keep every blank line.
  * Block lines would add a line break of their own between lines and drop or double the blank ones.
+ * The ref is that `<pre>`: the file viewer selects it when the clipboard is out of reach.
  */
-export const HighlightedCode = memo(function HighlightedCode({ code, language, limit, tooLongNote = true, lineNumbers = false, wrap = false, className }: HighlightedCodeProps) {
+export const HighlightedCode = memo(forwardRef<HTMLPreElement, HighlightedCodeProps>(function HighlightedCode({ code, language, limit, tooLongNote = true, lineNumbers = false, wrap = false, className }, ref) {
   const t = useT();
   const result = useMemo(() => highlightLines(code, language, limit), [code, language, limit]);
   // index keys: the lines are a static list that is rebuilt as a whole
@@ -45,8 +46,8 @@ export const HighlightedCode = memo(function HighlightedCode({ code, language, l
   const gutter = lineNumbers ? { "--hl-digits": String(Math.max(2, String(result.lines.length).length)) } as CSSProperties : undefined;
   return (
     <>
-      <pre className={className ? `hl-code ${className}` : "hl-code"} style={gutter} data-line-numbers={lineNumbers ? "" : undefined} data-wrap={wrap ? "" : undefined}><code>{lines}</code></pre>
+      <pre ref={ref} className={className ? `hl-code ${className}` : "hl-code"} style={gutter} data-line-numbers={lineNumbers ? "" : undefined} data-wrap={wrap ? "" : undefined}><code>{lines}</code></pre>
       {result.tooLong && tooLongNote && <p className="hl-note">{t("Too long to highlight")}</p>}
     </>
   );
-});
+}));

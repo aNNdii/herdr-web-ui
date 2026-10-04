@@ -88,18 +88,15 @@
   .file-viewer-path > span { visibility: hidden; }
 }
 
-.file-viewer-header .icon-button {
+/* the header's actions stay quiet beside the name: dim until pointed at, pressed or on. One class
+   over the .icon-button primitive, which comes first, so its :active still shows a press */
+.file-viewer-action {
   flex: none;
-}
-
-/* the actions stay quiet beside the name: dim until pointed at or on */
-.file-viewer-header .icon-button,
-.file-viewer-header a.icon-button {
   color: var(--text-dim);
 }
 
 @media (hover: hover) {
-  .file-viewer-header .icon-button:hover {
+  .file-viewer-action:hover {
     color: var(--text-strong);
   }
 }
@@ -118,16 +115,9 @@
 .file-viewer-group { gap: var(--space-1); }
 
 /* an "on" toggle (Show source) carries the accent on its glyph */
-.file-viewer-header .icon-button[aria-pressed="true"] {
+.file-viewer-action[aria-pressed="true"] {
   background: var(--bg-hover);
   color: var(--accent);
-}
-
-.file-viewer-header a.icon-button {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  color: var(--text-dim);
 }
 
 .file-viewer-body {
@@ -247,7 +237,7 @@
       env(safe-area-inset-bottom, 0px) env(safe-area-inset-left, 0px);
   }
 
-  .file-viewer-header .icon-button {
+  .file-viewer-action {
     width: max(44px, var(--touch-target));
     height: max(44px, var(--touch-target));
   }

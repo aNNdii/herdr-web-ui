@@ -293,6 +293,7 @@ export const JA: Record<string, string> = {
   "Close files": "ファイルを閉じる",
   "Showing the first {shown}": "最初の {shown} を表示",
   "Open in a new tab": "新しいタブで開く",
+  "This image is {size}; open it in a new tab to view it.": "この画像は {size} です。新しいタブで開いて表示してください。",
   "Raw": "元のファイル",
   "Copy file": "ファイルをコピー",
   "File copied": "ファイルをコピーしました",
