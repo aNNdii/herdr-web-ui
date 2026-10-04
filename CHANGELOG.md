@@ -14,13 +14,16 @@ between releases do not reach them. Remote-PC runtime bundles are versioned sepa
   warning sign there marks it, or one too long to color, with the reason as its tooltip. Code
   blocks in the chat are highlighted too. **Settings → File viewer** sets line wrapping, the width
   of a Markdown preview, how much of a text file is loaded and up to what size it is highlighted.
+  ([#429](https://github.com/devswha/herdr-web-ui/pull/429) by @aNNdii)
 - A task list (`- [x] done`, `- [ ] open`) in the chat and in a Markdown preview shows a checked or
   empty box instead of the brackets.
+  ([#429](https://github.com/devswha/herdr-web-ui/pull/429) by @aNNdii)
 
 ### Changed
 - The file viewer offers a download only for a file it cannot show; every other file opens whole in
   a new tab, where it can be saved. A text file loads up to 1 MB by default (was 256 KB), and a size
   under 10 MB shows one decimal (`1.3 MB`), in the viewer and in a bridge update's progress.
+  ([#429](https://github.com/devswha/herdr-web-ui/pull/429) by @aNNdii)
 
 ### Fixed
 - Switching to another pane no longer shows the previous pane's chat for a moment before the
