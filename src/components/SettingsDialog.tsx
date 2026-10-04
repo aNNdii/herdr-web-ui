@@ -6,7 +6,7 @@ import "./SettingsDialog.css";
 import type { AppActions } from "../lib/actions.ts";
 import { useInstallPrompt } from "../lib/install.ts";
 import { SHORTCUTS, formatKeys, shortcutKeys, shortcutConflict } from "../lib/shortcuts.ts";
-import { CHAT_FONT_MAX, CHAT_FONT_MIN, chatFontSize, DEFAULT_SETTINGS, QUICK_REPLIES_MAX, QUICK_REPLY_MAX_CHARS, SIZE_LIMIT_CHOICES, TERMINAL_FONT_MAX, TERMINAL_FONT_MIN, TERMINAL_WHEEL_SPEED_MAX, TERMINAL_WHEEL_SPEED_MIN, useSettings, forgetPaneViews } from "../lib/settings.ts";
+import { CHAT_FONT_MAX, CHAT_FONT_MIN, chatFontSize, DEFAULT_SETTINGS, MARKDOWN_WIDTHS, QUICK_REPLIES_MAX, QUICK_REPLY_MAX_CHARS, SIZE_LIMIT_CHOICES, TERMINAL_FONT_MAX, TERMINAL_FONT_MIN, TERMINAL_WHEEL_SPEED_MAX, TERMINAL_WHEEL_SPEED_MIN, useSettings, forgetPaneViews } from "../lib/settings.ts";
 import { formatBytes } from "../lib/bridgeProgress.ts";
 import { LANGUAGE_NAMES, LANGUAGE_SETTINGS, useT } from "../lib/i18n.ts";
 import { FONT_FAMILY_MAX_CHARS, sanitizeFontFamily } from "../lib/fontFamily.ts";
@@ -140,6 +140,8 @@ export function SettingsDialog({ open, onClose, actions, updates, auth, onEnable
   // the accounts to order and hide: the same report the meters show, from the server's cache
   const usage = useUsage(open && settings.showUsage);
   const t = useT();
+  // literal keys, so the i18n check finds them
+  const markdownWidthLabel = { narrow: t("Narrow"), medium: t("Medium"), full: t("Full width") };
   const installPrompt = useInstallPrompt();
   const firstControlRef = useRef<HTMLButtonElement>(null);
   // the Sound switch as last set: the preview waits for the audio, and must not play once it is off
@@ -433,6 +435,16 @@ export function SettingsDialog({ open, onClose, actions, updates, auth, onEnable
                 {SIZE_LIMIT_CHOICES.map((highlightLimit) => (
                   <button key={highlightLimit} type="button" aria-pressed={settings.highlightLimit === highlightLimit} onClick={() => update({ highlightLimit })}>
                     {formatBytes(highlightLimit)}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div className="settings-row">
+              <span className="settings-label">{t("Markdown width")}</span>
+              <div className="segmented" aria-label={t("Markdown width")}>
+                {MARKDOWN_WIDTHS.map((markdownWidth) => (
+                  <button key={markdownWidth} type="button" aria-pressed={settings.markdownWidth === markdownWidth} onClick={() => update({ markdownWidth })}>
+                    {markdownWidthLabel[markdownWidth]}
                   </button>
                 ))}
               </div>

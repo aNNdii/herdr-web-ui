@@ -118,7 +118,8 @@ async function checkLayout(): Promise<void> {
               title: { ...rect(title), scrollWidth: title.scrollWidth, clientWidth: title.clientWidth, overflow: getComputedStyle(title).textOverflow },
               documentWidth: document.documentElement.scrollWidth, documentHeight: document.documentElement.scrollHeight };
           });
-          assert.equal(geometry.controls.length, 3, label);
+          // an image opens in a new tab (which saves it too) and closes: no separate Download
+          assert.equal(geometry.controls.length, 2, label);
           assert.ok(geometry.dialog.x >= -1 && geometry.dialog.right <= scenario.width + 1, `${label}: dialog fits width`);
           assert.ok(geometry.dialog.y >= -1 && geometry.dialog.bottom <= limit + 1, `${label}: dialog fits usable height`);
           for (const control of geometry.controls) {
@@ -157,7 +158,7 @@ async function checkLayout(): Promise<void> {
       } finally { await context.close(); }
     }
     // A text file adds Wrap and Copy to the header: on a phone the name keeps the first row with Close in
-    // its corner, and the four actions share the second row inside the dialog.
+    // its corner, and the three actions share the second row inside the dialog.
     const phone = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, locale: "en-US" });
     try {
       const page = await phone.newPage();
@@ -170,12 +171,12 @@ async function checkLayout(): Promise<void> {
       const dialog = await page.locator(".file-viewer").boundingBox();
       assert.ok(dialog, "text: dialog is laid out");
       const buttons = page.locator(".file-viewer-actions .icon-button");
-      assert.equal(await buttons.count(), 4, "text: Wrap, Raw, Copy and Download");
+      assert.equal(await buttons.count(), 3, "text: Wrap, Raw and Copy");
       const title = (await page.locator(".file-viewer-title").boundingBox())!;
       const close = (await page.getByRole("button", { name: "Close file", exact: true }).boundingBox())!;
       assert.ok(close.y < title.y + title.height && close.y + close.height > title.y, "text: Close shares the name's row");
       assert.ok(close.x + close.width >= dialog.x + dialog.width - 32, "text: Close sits in the right corner");
-      for (let index = 0; index < 4; index++) {
+      for (let index = 0; index < 3; index++) {
         const box = await buttons.nth(index).boundingBox();
         assert.ok(box, `text: button ${index} is laid out`);
         assert.equal(box.y, (await buttons.nth(0).boundingBox())!.y, `text: button ${index} shares the row`);

@@ -27,7 +27,7 @@ export function TextFileView({ path, text, language, mode, onOpen, sourceRef }: 
   const openLink = useCallback((href: string) => onOpen(resolveFromFile(path, href)), [path, onOpen]);
   return <div className="file-viewer-content" ref={sourceRef}>
     {markdown && mode === "preview"
-      ? <OpenFileContext.Provider value={openLink}><Markdown className="file-viewer-markdown">{text}</Markdown></OpenFileContext.Provider>
+      ? <OpenFileContext.Provider value={openLink}><Markdown className={`file-viewer-markdown file-viewer-markdown-${settings.markdownWidth}`}>{text}</Markdown></OpenFileContext.Provider>
       : <HighlightedCode className="file-viewer-text" code={text} language={language} limit={settings.highlightLimit} tooLongNote={false} lineNumbers wrap={settings.wrapCode} />}
   </div>;
 }

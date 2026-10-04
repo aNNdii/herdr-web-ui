@@ -51,15 +51,26 @@
 .file-viewer-size,
 .file-viewer-dot { flex: none; }
 
-/* what holds for the whole file (cut short, left plain): a line of its own, brighter than the facts above */
+/* what holds for the whole file (cut short, left plain): a line of its own in the warning color, with
+   an icon so the color is not the only sign, in the UI font, a step larger than the facts above */
 .file-viewer-status {
-  margin: 0;
-  color: var(--text);
-  font-family: var(--font-mono);
-  font-size: var(--fs-2xs);
+  margin: var(--space-1) 0 0;
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-1);
+  color: var(--notice);
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-medium);
 }
 
-.file-viewer-status > span { white-space: nowrap; }
+.file-viewer-status svg {
+  flex: none;
+  width: 14px;
+  height: 14px;
+  margin-top: 1px;
+}
+
+.file-viewer-status span span { white-space: nowrap; }
 
 /* the folder (the name is the title already) gets only the room left, so it gives way first, from its start */
 .file-viewer-path {
@@ -73,6 +84,18 @@
 
 .file-viewer-header .icon-button {
   flex: none;
+}
+
+/* the actions stay quiet beside the name: dim until pointed at or on */
+.file-viewer-header .icon-button,
+.file-viewer-header a.icon-button {
+  color: var(--text-dim);
+}
+
+@media (hover: hover) {
+  .file-viewer-header .icon-button:hover {
+    color: var(--text-strong);
+  }
 }
 
 .file-viewer-actions,
@@ -156,17 +179,17 @@
 }
 
 /*
- * A rendered document reads on the viewer's own background, like a page: no panel around it. Its
- * text starts on the title's edge (the body's padding plus this one is the header's) and keeps a
- * readable line length; the room to its right stays empty rather than stretching the lines.
+ * A rendered document reads on the viewer's own background, like a page: no panel around it. The
+ * Markdown width setting keeps it to about 80 or 120 characters a line, centered as an image or a
+ * PDF is, or lets it fill the viewer (then its text starts on the title's edge).
  */
 .file-viewer-markdown {
-  /* about 80 characters of prose: the upper end of a readable line */
-  max-width: 65ch;
+  margin-inline: auto;
   padding: var(--space-2);
 }
 
-.file-viewer-mode { flex: none; }
+.file-viewer-markdown-narrow { max-width: 60ch; }
+.file-viewer-markdown-medium { max-width: 90ch; }
 
 /*
  * On a narrow screen a text file's switch and actions leave the name no room. The name and Close
@@ -191,9 +214,6 @@
     grid-area: actions;
     justify-content: space-between;
   }
-
-  .file-viewer-mode-label { display: none; }
-  .file-viewer-mode > button { padding: 0 var(--space-2); }
 }
 
 .file-viewer-note {
@@ -225,12 +245,6 @@
   .file-viewer-header .icon-button {
     width: max(44px, var(--touch-target));
     height: max(44px, var(--touch-target));
-  }
-
-  /* with its 2px inset and hairline the switch is as tall as the icon buttons beside it */
-  .file-viewer-mode > button {
-    min-width: 38px;
-    height: 38px;
   }
 
   .file-viewer-media { max-height: max(0px, calc(var(--app-height, 100dvh) - 120px)); }

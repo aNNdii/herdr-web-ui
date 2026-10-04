@@ -163,15 +163,16 @@ try {
   await page.getByRole("button", { name: "Close file", exact: true }).click();
   await page.locator(".file-viewer").waitFor({ state: "hidden" });
 
-  // Markdown: Preview | Code, Raw, Wrap, Copy
+  // Markdown: Show source (a toggle: off is the Preview), Raw, Wrap, Copy; no separate Download
   const guide = page.getByRole("dialog", { name: "guide.md", exact: true });
   await page.getByRole("button", { name: "guide", exact: true }).click();
   await guide.getByRole("heading", { name: "Guide", exact: true }).waitFor();
   await guide.locator(".hl-keyword", { hasText: "const" }).waitFor();
-  assert.equal(await guide.getByRole("button", { name: "Preview", exact: true }).getAttribute("aria-pressed"), "true");
+  assert.equal(await guide.getByRole("button", { name: "Show source", exact: true }).getAttribute("aria-pressed"), "false");
+  assert.equal(await guide.getByRole("link", { name: "Download", exact: true }).count(), 0, "a new tab (Raw) saves the file too");
   assert.equal(await guide.getByRole("button", { name: "Wrap long lines", exact: true }).count(), 0, "Wrap is for code, not the rendered Markdown");
   console.log("PASS Markdown opens as a Preview with a highlighted code block");
-  await guide.getByRole("button", { name: "Code", exact: true }).click();
+  await guide.getByRole("button", { name: "Show source", exact: true }).click();
   await guide.locator(".file-viewer-text .hl-line").first().waitFor();
   assert.equal(await guide.locator(".file-viewer-text .hl-line").count(), 7);
   assert.match(await guide.locator(".file-viewer-text").innerText(), /# Guide/);
@@ -187,17 +188,16 @@ try {
   await guide.getByRole("button", { name: "Close file", exact: true }).click();
   await guide.waitFor({ state: "hidden" });
   await page.getByRole("button", { name: "guide", exact: true }).click();
-  await guide.getByRole("button", { name: "Code", exact: true }).click();
+  await guide.getByRole("button", { name: "Show source", exact: true }).click();
   assert.equal(await guide.getByRole("button", { name: "Wrap long lines", exact: true }).getAttribute("aria-pressed"), "true");
   await guide.locator(".file-viewer-text[data-wrap]").waitFor();
   console.log("PASS Wrap is remembered across viewers");
-  await guide.getByRole("button", { name: "Preview", exact: true }).click();
+  await guide.getByRole("button", { name: "Show source", exact: true }).click();
   // Without a clipboard API (plain-HTTP LAN) Copy selects the source: from a Preview it switches to Code first
   await page.evaluate(() => Object.defineProperty(navigator, "clipboard", { value: { writeText: () => Promise.reject(new Error("no clipboard")) }, configurable: true }));
   await guide.getByRole("button", { name: "Copy file", exact: true }).click();
-  await guide.getByRole("button", { name: "Code", exact: true }).waitFor();
   await guide.locator(".file-viewer-text .hl-line").first().waitFor();
-  assert.equal(await guide.getByRole("button", { name: "Code", exact: true }).getAttribute("aria-pressed"), "true");
+  assert.equal(await guide.getByRole("button", { name: "Show source", exact: true }).getAttribute("aria-pressed"), "true");
   const sourceText = await guide.locator(".file-viewer-text").innerText();
   assert.match(sourceText, /See \[notes\]\(\.\.\/notes\.txt\)\./);
   assert.equal(await page.evaluate(() => window.getSelection()?.toString()), sourceText, "the selection is exactly the Markdown source");
@@ -205,7 +205,7 @@ try {
   await guide.getByRole("button", { name: "Copy file", exact: true }).click();
   assert.equal(await page.evaluate(() => window.getSelection()?.toString()), sourceText, "from Code, Copy selects the source in place");
   console.log("PASS Without a clipboard API, Copy selects the Markdown source (switching a Preview to Code)");
-  await guide.getByRole("button", { name: "Preview", exact: true }).click();
+  await guide.getByRole("button", { name: "Show source", exact: true }).click();
   await guide.getByRole("button", { name: "notes", exact: true }).click();
   const linked = page.getByRole("dialog", { name: "notes.txt", exact: true });
   await linked.waitFor();

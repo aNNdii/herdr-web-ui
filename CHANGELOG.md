@@ -40,10 +40,11 @@ between releases do not reach them. Remote-PC runtime bundles are versioned sepa
   the page's own audio, so it is heard when a macOS Focus or Do Not Disturb silences system
   notifications. Off until chosen; the tab needs one tap or key before it may play.
   ([#346](https://github.com/devswha/herdr-web-ui/pull/346) by @WOULDU-pres)
-- The file viewer renders a Markdown file as a **Preview**, with a **Preview** | **Code** switch,
+- The file viewer renders a Markdown file as a **Preview**, with **Show source** for its text,
   and shows every text file as highlighted code with line numbers. **Raw** opens the file in a new
-  tab, **Copy** copies the file and **Wrap** wraps long lines. Code blocks in the chat are
-  highlighted too. **Settings → File viewer** sets the wrapping, how much of a text file is loaded
+  tab, **Copy** copies the file and **Wrap** wraps long lines; a file cut short or too long to color
+  says so in the viewer's header. Code blocks in the chat are highlighted too. **Settings → File
+  viewer** sets the wrapping, the width of a Markdown preview, how much of a text file is loaded
   and up to what size it is highlighted.
 
 ### Fixed

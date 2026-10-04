@@ -1,5 +1,5 @@
 import { Fragment, useCallback, useEffect, useLayoutEffect, useRef, useState, type RefObject } from "react";
-import { Check, Code, Copy, Download, Eye, ExternalLink, WrapText, X } from "lucide-react";
+import { Check, Code, Copy, Download, ExternalLink, TriangleAlert, WrapText, X } from "lucide-react";
 
 import "./FileViewer.css";
 import { DirectoryBrowser } from "./DirectoryBrowser.tsx";
@@ -156,7 +156,7 @@ export function FileViewer({ path: asked, paneId, onClose, onOpen }: FileViewerP
     switch (info.kind) {
       case "image":
         return info.size > MAX_INLINE_IMAGE_BYTES
-          ? <p className="file-viewer-note">This image is {formatBytes(info.size)}; download it to view.</p>
+          ? <p className="file-viewer-note">This image is {formatBytes(info.size)}; open it in a new tab to view it.</p>
           : <img className="file-viewer-media" src={url} alt={info.name} />;
       case "video":
         return <video className="file-viewer-media" src={url} controls playsInline preload="metadata" />;
@@ -186,22 +186,23 @@ export function FileViewer({ path: asked, paneId, onClose, onOpen }: FileViewerP
               {info && folder !== "" && <span className="file-viewer-dot" aria-hidden="true">·</span>}
               {folder !== "" && <span className="file-viewer-path"><span dir="ltr">{folder}</span></span>}
             </p>
-            {/* a narrow screen breaks the line between notes, never inside one */}
-            {status.length > 0 && <p className="file-viewer-status">{status.map((note, index) => <Fragment key={note}>{index > 0 && " · "}<span>{note}</span></Fragment>)}</p>}
+            {/* in the warning color with its icon, so it is not missed (and not told by color alone); a
+                narrow screen breaks the line between notes, never inside one */}
+            {status.length > 0 && <p className="file-viewer-status"><TriangleAlert aria-hidden="true" /><span>{status.map((note, index) => <Fragment key={note}>{index > 0 && " · "}<span>{note}</span></Fragment>)}</span></p>}
           </div>
           <div className="file-viewer-actions">
+            {/* how the text shows: Preview or source is one choice of two, so one toggle */}
             {textFile && <div className="file-viewer-group">
-              {language === "markdown" && <div className="segmented file-viewer-mode" role="group" aria-label={t("View")}>
-                <button type="button" aria-pressed={mode === "preview"} aria-label={t("Preview")} title={t("Preview")} onClick={() => setChosen({ path, mode: "preview" })}><Eye aria-hidden="true" /><span className="file-viewer-mode-label" aria-hidden="true">{t("Preview")}</span></button>
-                <button type="button" aria-pressed={mode === "code"} aria-label={t("Code")} title={t("Code")} onClick={() => setChosen({ path, mode: "code" })}><Code aria-hidden="true" /><span className="file-viewer-mode-label" aria-hidden="true">{t("Code")}</span></button>
-              </div>}
+              {language === "markdown" && <button type="button" className="icon-button" aria-pressed={mode === "code"} aria-label={t("Show source")} title={t("Show source")} onClick={() => setChosen({ path, mode: mode === "code" ? "preview" : "code" })}><Code aria-hidden="true" /></button>}
               {!(language === "markdown" && mode === "preview") && <button type="button" className="icon-button" aria-pressed={settings.wrapCode} aria-label={t("Wrap long lines")} title={t("Wrap long lines")} onClick={() => update({ wrapCode: !settings.wrapCode })}><WrapText aria-hidden="true" /></button>}
             </div>}
+            {/* the file itself: a new tab shows it whole (Raw for text) and saves it from there, so a
+                download of its own is offered only for a file no tab can show */}
             <div className="file-viewer-group">
-              {/* Raw and an image's "open" do the same: the file alone, in a new tab */}
-              <a className="icon-button" href={url} target="_blank" rel="noopener" aria-label={textFile ? t("Raw") : t("Open in a new tab")} title={textFile ? t("Raw") : t("Open in a new tab")}><ExternalLink aria-hidden="true" /></a>
+              {info?.kind === "binary"
+                ? <a className="icon-button" href={fileUrl(shownPath, paneId, true)} download={info.name} aria-label={t("Download")} title={t("Download")}><Download aria-hidden="true" /></a>
+                : <a className="icon-button" href={url} target="_blank" rel="noopener" aria-label={textFile ? t("Raw") : t("Open in a new tab")} title={textFile ? t("Raw") : t("Open in a new tab")}><ExternalLink aria-hidden="true" /></a>}
               {textFile && text !== null && !truncated && <CopyFileButton text={text} sourceRef={sourceRef} onShowSource={showSourceToSelect} />}
-              <a className="icon-button" href={fileUrl(shownPath, paneId, true)} download={info?.name ?? true} aria-label={t("Download")} title={t("Download")}><Download aria-hidden="true" /></a>
             </div>
           </div>
           <button type="button" className="icon-button file-viewer-close" aria-label={t("Close file")} title={t("Close file")} onClick={onClose}><X aria-hidden="true" /></button>

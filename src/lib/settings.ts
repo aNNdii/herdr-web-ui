@@ -90,7 +90,12 @@ export interface Settings {
   highlightLimit: number;
   /** how much of a text file the file viewer loads, in bytes; one of SIZE_LIMIT_CHOICES */
   textLoadLimit: number;
+  /** the line length of a Markdown preview: about 80 or 120 characters (centered), or the viewer's width */
+  markdownWidth: MarkdownWidth;
 }
+
+export const MARKDOWN_WIDTHS = ["narrow", "medium", "full"] as const;
+export type MarkdownWidth = (typeof MARKDOWN_WIDTHS)[number];
 
 /** the byte sizes the file viewer's limits offer: 256 KB and 1 MB */
 export const SIZE_LIMIT_CHOICES = [256 * 1024, 1024 * 1024] as const;
@@ -135,6 +140,7 @@ export const DEFAULT_SETTINGS: Settings = {
   wrapCode: false,
   highlightLimit: 256 * 1024,
   textLoadLimit: 1024 * 1024,
+  markdownWidth: "medium",
 };
 
 export const QUICK_REPLIES_MAX = 12;
@@ -228,6 +234,7 @@ export function sanitizeSettings(raw: unknown): Settings {
     wrapCode: typeof record["wrapCode"] === "boolean" ? record["wrapCode"] : DEFAULT_SETTINGS.wrapCode,
     highlightLimit: sizeLimit(record["highlightLimit"], DEFAULT_SETTINGS.highlightLimit),
     textLoadLimit: sizeLimit(record["textLoadLimit"], DEFAULT_SETTINGS.textLoadLimit),
+    markdownWidth: MARKDOWN_WIDTHS.find((width) => width === record["markdownWidth"]) ?? DEFAULT_SETTINGS.markdownWidth,
   };
 }
 

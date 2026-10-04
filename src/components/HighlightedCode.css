@@ -41,7 +41,7 @@
   padding-inline-end: var(--space-3);
   counter-increment: line;
   content: counter(line);
-  color: var(--text-dim);
+  color: var(--line-number);
   text-align: right;
   user-select: none;
 }
