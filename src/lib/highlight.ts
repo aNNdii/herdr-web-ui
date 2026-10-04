@@ -1,6 +1,9 @@
 import { common, createLowlight } from "lowlight";
 import dockerfile from "highlight.js/lib/languages/dockerfile";
 
+import { pathParts } from "./filePaths.ts";
+import { memoizeLast } from "./memoizeLast.ts";
+
 /** What a token means, independent of any theme; CSS maps each role to a token color. */
 export type SyntaxRole =
   | "keyword"
@@ -29,17 +32,18 @@ export interface HighlightResult {
    * role on every line it spans.
    */
   lines: Token[][];
-  /** The code was longer than `limit`, so `lines` is plain text. */
+  /** The code is in a registered language but longer than `limit`, so `lines` is plain text. */
   tooLong: boolean;
 }
 
-/** Code blocks in chat are highlighted up to this many characters (not bytes). */
+/** Code blocks in chat are highlighted up to this many characters (`limit` counts characters). */
 export const CHAT_HIGHLIGHT_LIMIT = 100 * 1024;
 
 const lowlight = createLowlight(common);
 lowlight.register({ dockerfile });
 
-const FENCE_ALIASES: Record<string, string> = {
+// a fence word or a file extension to its registered language
+const LANGUAGE_ALIASES: Record<string, string> = {
   ts: "typescript", mts: "typescript", cts: "typescript", tsx: "typescript",
   js: "javascript", jsx: "javascript", mjs: "javascript", cjs: "javascript",
   sh: "bash", zsh: "bash",
@@ -56,16 +60,20 @@ const FENCE_ALIASES: Record<string, string> = {
 // one must come out as `null`, or a long .txt would be reported "too long to highlight".
 const PLAIN_TEXT = new Set(["plaintext", "text", "txt"]);
 
+/** The registered language a lowercase word names (a fence word, an extension), or `null`. */
+function languageForWord(word: string): string | null {
+  if (!word || PLAIN_TEXT.has(word)) return null;
+  const alias = LANGUAGE_ALIASES[word];
+  if (alias) return alias;
+  return lowlight.registered(word) ? word : null;
+}
+
 /**
  * The registered language for a Markdown fence's info string ("ts", "TSX title=x"): only its first
  * word counts, case-insensitively. `null` for an empty, plain-text or unknown one.
  */
 export function languageForFence(info: string): string | null {
-  const word = info.trim().split(/\s+/)[0]?.toLowerCase() ?? "";
-  if (!word || PLAIN_TEXT.has(word)) return null;
-  const alias = FENCE_ALIASES[word];
-  if (alias) return alias;
-  return lowlight.registered(word) ? word : null;
+  return languageForWord(info.trim().split(/\s+/)[0]?.toLowerCase() ?? "");
 }
 
 /**
@@ -74,17 +82,15 @@ export function languageForFence(info: string): string | null {
  * is `languageForPath(path) === "markdown"`.
  */
 export function languageForPath(path: string): string | null {
-  const name = (path.split(/[\\/]/).pop() ?? "").toLowerCase();
+  const { stem, extension } = pathParts(path.toLowerCase());
+  const name = stem + extension;
   // before the name rules: Dockerfile.md is a document about a Dockerfile
   if (name.endsWith(".md") || name.endsWith(".markdown")) return "markdown";
   if (name.startsWith("dockerfile")) return "dockerfile";
   if (name === "makefile" || name === "gnumakefile" || name.endsWith(".mk")) return "makefile";
   if ([".bashrc", ".zshrc", ".profile"].includes(name) || name.endsWith(".sh") || name.endsWith(".zsh")) return "bash";
   if (name.startsWith(".env") || name === ".gitignore" || name === ".editorconfig" || name.endsWith(".toml")) return "ini";
-  const dot = name.lastIndexOf(".");
-  if (dot <= 0) return null;
-  const extension = name.slice(dot + 1);
-  return languageForFence(extension);
+  return languageForWord(extension.slice(1));
 }
 
 // highlight.js class (without "hljs-") to role. "char" stands for the char.escape scope, which
@@ -158,17 +164,23 @@ function tokenize(code: string, language: string): Token[][] {
   return lines;
 }
 
-/** Code in `language` that `highlightLines` leaves plain for its length: a registered language above `limit` characters. */
+/**
+ * Code in `language` that `highlightLines` leaves plain for its length: a registered language above
+ * `limit` characters. A host that says "too long" itself (the file viewer, in its header) asks this.
+ */
 export function tooLongToHighlight(code: string, language: string | null, limit: number): boolean {
   return language !== null && lowlight.registered(language) && code.length > limit;
 }
 
 /**
- * Tokenize `code` per line. `limit` counts characters (`code.length`), not bytes. Never throws:
- * a null, unknown or unregistered language, code above `limit` (`tooLong`) and any highlighter
- * error all give plain lines. "\r\n" is treated as "\n".
+ * Tokenize `code` per line. `limit` counts characters (`code.length`, the raw text with any "\r"),
+ * not bytes. Never throws: a null, unknown or unregistered language, code above `limit` (`tooLong`)
+ * and any highlighter error all give plain lines. "\r\n" is treated as "\n".
+ *
+ * The last call is remembered (`memoizeLast`): a file toggled from its Preview to the source and
+ * back mounts its code view anew, and tokenizing a megabyte again would cost a quarter second.
  */
-export function highlightLines(code: string, language: string | null, limit: number): HighlightResult {
+export const highlightLines = memoizeLast(function highlightLines(code: string, language: string | null, limit: number): HighlightResult {
   const source = code.replace(/\r\n/g, "\n").replace(/\n$/, "");
   if (language === null || !lowlight.registered(language)) return { lines: plainLines(source), tooLong: false };
   if (tooLongToHighlight(code, language, limit)) return { lines: plainLines(source), tooLong: true };
@@ -177,4 +189,4 @@ export function highlightLines(code: string, language: string | null, limit: num
   } catch {
     return { lines: plainLines(source), tooLong: false };
   }
-}
+});

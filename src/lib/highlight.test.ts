@@ -33,7 +33,7 @@ describe("languageForPath", () => {
     ["/r/Dockerfile", "dockerfile"], ["/r/Dockerfile.dev", "dockerfile"], ["/r/Makefile", "makefile"],
     ["/r/.gitignore", "ini"], ["/r/.env.local", "ini"], ["/r/x.tsx", "typescript"], ["/r/x.mjs", "javascript"],
     ["/r/README.md", "markdown"], ["/r/a.toml", "ini"], ["/r/a.svg", "xml"], ["/r/a.py", "python"],
-    ["C:\\r\\a.rs", "rust"],
+    ["C:\\r\\a.rs", "rust"], ["/r/a.", null], ["/r/.bashrc", "bash"], ["/r.d/LICENSE", null],
   ])("%s → %s", (path, language) => expect(languageForPath(path)).toBe(language));
   it("decides what is Markdown, by name only and ignoring case", () => {
     expect(languageForPath("/r/notes.MARKDOWN")).toBe("markdown");
@@ -96,6 +96,23 @@ describe("highlightLines", () => {
     expect(result.tooLong).toBe(false);
     expect(result.lines.every((line) => line.every((token) => token.role === null))).toBe(true);
   });
+  it("keeps a blank line before the final newline", () => {
+    expect(text(highlightLines("a\n\n", "typescript", CHAT_HIGHLIGHT_LIMIT))).toEqual(["a", ""]);
+  });
+  it("reads a refined title as its refinement: a class name is a type, a function's a function", () => {
+    const result = highlightLines("class Box {}\nfunction run() {}", "typescript", CHAT_HIGHLIGHT_LIMIT);
+    expect(result.lines[0]!.find((t) => t.text === "Box")?.role).toBe("type");
+    expect(result.lines[1]!.find((t) => t.text === "run")?.role).toBe("function");
+  });
+  it("keeps emphasis apart from the role", () => {
+    const result = highlightLines("some **bold** and *em*", "markdown", CHAT_HIGHLIGHT_LIMIT);
+    expect(result.lines[0]!.find((t) => t.text.includes("bold"))?.emphasis).toBe("strong");
+    expect(result.lines[0]!.find((t) => t.text.includes("em"))?.emphasis).toBe("em");
+  });
+  it("returns the same result for the same call, so a remounted view does not tokenize again", () => {
+    const code = "const x = 1;";
+    expect(highlightLines(code, "typescript", CHAT_HIGHLIGHT_LIMIT)).toBe(highlightLines(code, "typescript", CHAT_HIGHLIGHT_LIMIT));
+  });
   it("is plain when the language is not registered", () => {
     expect(highlightLines("x", "klingon", CHAT_HIGHLIGHT_LIMIT)).toEqual({ lines: [[{ text: "x", role: null }]], tooLong: false });
   });
@@ -109,8 +126,9 @@ describe("tooLongToHighlight", () => {
     expect(tooLongToHighlight("x".repeat(11), "no-such-language", 10)).toBe(false);
   });
 
-  it("agrees with highlightLines", () => {
-    const code = "const a = 1;\n".repeat(5);
-    expect(highlightLines(code, "ts", 10).tooLong).toBe(tooLongToHighlight(code, "ts", 10));
+  it("measures the raw text, carriage returns included", () => {
+    // "a\r\nb" is 4 characters, though it shows as 2
+    expect(tooLongToHighlight("a\r\nb", "ts", 3)).toBe(true);
+    expect(highlightLines("a\r\nb", "ts", 3).tooLong).toBe(true);
   });
 });

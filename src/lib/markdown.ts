@@ -1,3 +1,4 @@
+import { memoizeLast } from "./memoizeLast.ts";
 import { fileUriPath } from "./terminalFileLinks.ts";
 
 export type InlineNode =
@@ -253,7 +254,7 @@ export function foldCode(value: string): { head: string; lines: number } | null 
   return { head: lines.slice(0, FOLDED_CODE_LINES).join("\n"), lines: lines.length };
 }
 
-export function parseMarkdown(source: string): MarkdownBlock[] {
+function parseBlocks(source: string): MarkdownBlock[] {
   const lines = source.replace(/\r\n?/g, "\n").split("\n");
   const blocks: MarkdownBlock[] = [];
   let index = 0;
@@ -316,7 +317,7 @@ export function parseMarkdown(source: string): MarkdownBlock[] {
     if (/^\s*>/.test(line)) {
       const quoted: string[] = [];
       while (index < lines.length && /^\s*>/.test(lineAt(lines, index))) quoted.push(lineAt(lines, index++).replace(/^\s*>\s?/, ""));
-      blocks.push({ type: "blockquote", blocks: parseMarkdown(quoted.join("\n")) });
+      blocks.push({ type: "blockquote", blocks: parseBlocks(quoted.join("\n")) });
       continue;
     }
 
@@ -343,3 +344,9 @@ export function parseMarkdown(source: string): MarkdownBlock[] {
   }
   return blocks;
 }
+
+/**
+ * Markdown source as blocks. The last call is remembered (`memoizeLast`): a file viewer's Preview,
+ * toggled to the source and back, mounts anew and would parse a long document again.
+ */
+export const parseMarkdown = memoizeLast(parseBlocks);
