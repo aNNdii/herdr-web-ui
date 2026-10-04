@@ -230,7 +230,11 @@ try {
   await page.locator(".conn-live").waitFor();
   await page.getByRole("button", { name: "big code", exact: true }).click();
   const bigCode = page.getByRole("dialog", { name: "big.ts", exact: true });
-  await bigCode.locator(".file-viewer-meta .file-viewer-notice").getByText("Too long to highlight", { exact: false }).waitFor();
+  const plainNote = bigCode.locator(".file-viewer-meta .file-viewer-notice");
+  await plainNote.waitFor();
+  assert.equal(await plainNote.getAttribute("title"), "Too long to highlight", "the note is the tooltip of the size");
+  assert.equal(await plainNote.locator("span:not(.visually-hidden)").innerText(), "257 KB", "and not spelled out in the meta line");
+  assert.equal(await plainNote.locator(".visually-hidden").innerText(), "Too long to highlight", "a screen reader still hears it");
   assert.equal(await bigCode.locator(".hl-note").count(), 0, "the note is not repeated under the code");
   assert.equal(await bigCode.locator(".file-viewer-text .hl-keyword").count(), 0, "the code is plain");
   await bigCode.getByRole("button", { name: "Copy file", exact: true }).waitFor();

@@ -53,15 +53,14 @@
 .file-viewer-dot { margin-inline-end: var(--space-2); }
 
 /* a partial view (cut short, left plain) in place of the bare size: the warning color with an icon,
-   so it is not missed and not told by color alone. It never yields to the folder; on a phone too
-   narrow for both notes it breaks between them, never inside one. */
+   so it is not missed and not told by color alone; the notes themselves are its tooltip. It never
+   yields to the folder. */
 .file-viewer-notice {
-  flex: 0 1 auto;
-  min-width: 0;
+  flex: none;
   display: inline-flex;
-  flex-wrap: wrap;
   align-items: center;
-  gap: 0 var(--space-1);
+  gap: var(--space-1);
+  cursor: help;
   color: var(--notice);
   font-weight: var(--fw-medium);
 }

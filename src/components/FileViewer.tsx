@@ -143,6 +143,10 @@ export function FileViewer({ path: asked, paneId, onClose, onOpen }: FileViewerP
   // what holds for the whole file is said with its size, where it is seen first, not after a megabyte of text
   const cutShort = textFile && truncated;
   const leftPlain = codeShown && tooLongToHighlight(text, language, settings.highlightLimit);
+  const notes = [
+    cutShort && t("Showing the first {shown}", { shown: formatBytes(textLoadLimit) }),
+    leftPlain && t("Too long to highlight"),
+  ].filter((note): note is string => typeof note === "string");
   const copyable = textFile && text !== null && !truncated;
   // a phone stacks the actions under the name once there are two or more; one fits beside it
   const stacked = textFile && (language === "markdown" ? 1 : 0) + 1 + (copyable ? 1 : 0) > 1;
@@ -184,12 +188,12 @@ export function FileViewer({ path: asked, paneId, onClose, onOpen }: FileViewerP
             <h2 className="modal-title"><span className="file-viewer-stem">{stem}</span>{extension}</h2>
             <p className="file-viewer-meta" title={shownPath}>
               {/* a partial view is told by the size ("256 KB of 1.3 MB") in the warning color, beside an
-                  icon so the color is not the only sign */}
+                  icon so the color is not the only sign; what it means is the tooltip (and read out) */}
               {info && (cutShort || leftPlain
-                ? <span className="file-viewer-notice" title={cutShort ? t("Showing the first {shown}", { shown: formatBytes(textLoadLimit) }) : undefined}>
+                ? <span className="file-viewer-notice" title={notes.join("\n")}>
                   <TriangleAlert aria-hidden="true" />
                   <span>{cutShort ? t("{done} of {total}", { done: formatBytes(textLoadLimit), total: formatBytes(info.size) }) : formatBytes(info.size)}</span>
-                  {leftPlain && <span>· {t("Too long to highlight")}</span>}
+                  <span className="visually-hidden">{notes.join(". ")}</span>
                 </span>
                 : <span className="file-viewer-size">{formatBytes(info.size)}</span>)}
               {/* the dot is the folder's, so where the folder has no room left no dot dangles */}

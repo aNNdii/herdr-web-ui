@@ -42,10 +42,10 @@ between releases do not reach them. Remote-PC runtime bundles are versioned sepa
   ([#346](https://github.com/devswha/herdr-web-ui/pull/346) by @WOULDU-pres)
 - The file viewer renders a Markdown file as a **Preview**, with **Show source** for its text,
   and shows every text file as highlighted code with line numbers. **Raw** opens the file in a new
-  tab and **Copy** copies the file; a file cut short says so in its size (`256 KB of 1.3 MB`), as
-  does one too long to color. Code blocks in the chat are highlighted too. **Settings → File
-  viewer** sets line wrapping, the width of a Markdown preview, how much of a text file is loaded
-  and up to what size it is highlighted.
+  tab and **Copy** copies the file; a file cut short says so in its size (`256 KB of 1.3 MB`), and a
+  warning sign there marks it, or one too long to color, with the reason as its tooltip. Code
+  blocks in the chat are highlighted too. **Settings → File viewer** sets line wrapping, the width
+  of a Markdown preview, how much of a text file is loaded and up to what size it is highlighted.
 
 ### Fixed
 - On an Android phone, dragging down at the top of a chat no longer reloads the app. The drag
