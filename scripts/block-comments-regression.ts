@@ -362,7 +362,7 @@ try {
     assert.equal(await page.locator(".is-commentable.is-selected").count(), 0, "a tap on a link does not choose its paragraph");
     console.log("PASS phone: a link tap opens the link and leaves the block alone");
 
-    // the chip beside the paperclip is a finger's size, and takes no row of its own
+    // the chip at the end of the status line is nearly a finger's size, and takes no row of its own
     await item.tap();
     await shown(ownAdd(item));
     await ownAdd(item).tap();
@@ -373,8 +373,8 @@ try {
     const touchTarget = await page.evaluate(() => parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--touch-target")));
     const chip = page.locator(".composer-comments-chip");
     const chipBox = (await chip.boundingBox())!;
-    assert.ok(chipBox.height >= touchTarget && chipBox.width >= touchTarget, `the chip is ${chipBox.width}x${chipBox.height}, under the ${touchTarget}px touch target`);
-    const surfaceBefore = (await page.locator(".composer-surface").boundingBox())!.height;
+    assert.ok(chipBox.height >= touchTarget - 8 && chipBox.width >= touchTarget - 8, `the chip is ${chipBox.width}x${chipBox.height}, under the ${touchTarget - 8}px a status line leaves it`);
+    const boxBefore = (await page.locator(".composer").boundingBox())!.height;
     const second = page.locator("li.is-commentable li.is-commentable", { hasText: "check the logs" });
     await second.tap();
     await shown(ownAdd(second));
@@ -384,8 +384,8 @@ try {
     await editor.getByRole("button", { name: "Save", exact: true }).tap();
     await editor.waitFor({ state: "hidden" });
     assert.equal(await chip.innerText(), "2");
-    assert.equal((await page.locator(".composer-surface").boundingBox())!.height, surfaceBefore, "a second comment does not grow the box");
-    if (evidence) await page.screenshot({ path: join(evidence, "block-comments-phone-chip.png"), clip: { x: 0, y: (await page.locator(".composer-surface").boundingBox())!.y - 8, width: 390, height: 120 } });
+    assert.equal((await page.locator(".composer").boundingBox())!.height, boxBefore, "a second comment does not grow the composer");
+    if (evidence) await page.screenshot({ path: join(evidence, "block-comments-phone-chip.png"), clip: { x: 0, y: (await page.locator(".composer-status").boundingBox())!.y - 8, width: 390, height: 130 } });
     console.log("PASS phone: the chip is touch-sized and takes no row of its own");
     assert.deepEqual(errors, []);
     await page.context().close();

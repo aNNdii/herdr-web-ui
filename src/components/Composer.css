@@ -416,21 +416,22 @@
   white-space: nowrap;
 }
 
-/* comments on blocks of the agent's replies, waiting for the next message: how many, beside the
-   paperclip. They are shown where they were written (BlockComments.css); this walks to them */
+/* comments on blocks of the agent's replies, waiting for the next message: how many, at the end of
+   the status line. They are shown where they were written (BlockComments.css); this walks to them.
+   It adds no row and no height: the line has one row, always. */
 .composer-comments-chip {
   display: inline-flex;
   flex: none;
   align-items: center;
   gap: var(--space-1);
-  height: calc(var(--chip-h) + var(--space-2));
+  height: calc(var(--chip-h) + var(--space-1));
+  margin: -2px 0 -2px auto;
   padding: 0 var(--space-2);
   border: var(--hairline) solid transparent;
   border-radius: var(--radius-pill);
   background: var(--accent-tint);
   color: var(--text-strong);
   font: inherit;
-  font-size: var(--fs-xs);
   font-variant-numeric: tabular-nums;
   cursor: pointer;
 }
@@ -570,8 +571,12 @@
     min-height: calc(var(--touch-target) + var(--space-1));
   }
 
+  /* the status line clips what leaves its row: a finger gets 8px short of --touch-target here,
+     and the line grows by the difference only while there are comments */
   .composer-comments-chip {
-    min-height: var(--touch-target);
+    height: auto;
+    min-height: calc(var(--touch-target) - var(--space-2));
+    margin-block: 0;
     padding: 0 var(--space-3);
   }
 

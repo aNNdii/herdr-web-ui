@@ -693,6 +693,18 @@ export function Composer({
             <span aria-hidden="true">·</span> {t(uploading ? "Uploading file…" : "Reconnecting… message held here, never queued")}
           </span>
         )}
+        {comments.length > 0 && (
+          <button
+            type="button"
+            className="composer-comments-chip"
+            aria-label={t("Comments to send: {count}", { count: comments.length })}
+            title={`${t("Comments to send: {count}", { count: comments.length })}\n${t("Go to the next comment")}`}
+            onClick={goToComment}
+          >
+            <MessageSquare aria-hidden="true" />
+            {comments.length}
+          </button>
+        )}
       </div>
 
       {/* no Tab key on a phone: the suggestion can be a chip there that fills the box, once chosen in Settings */}
@@ -873,18 +885,6 @@ export function Composer({
             <Paperclip aria-hidden="true" />
           </button>
           {dictation.shown && <MicButton dictation={dictation} />}
-          {comments.length > 0 && (
-            <button
-              type="button"
-              className="composer-comments-chip"
-              aria-label={t("Comments to send: {count}", { count: comments.length })}
-              title={`${t("Comments to send: {count}", { count: comments.length })}\n${t("Go to the next comment")}`}
-              onClick={goToComment}
-            >
-              <MessageSquare aria-hidden="true" />
-              {comments.length}
-            </button>
-          )}
         </div>
         <div className="composer-controls composer-controls-right">
           {queueMode && (
