@@ -60,6 +60,7 @@ function Inline({ nodes, interactive = true }: { nodes: InlineNode[]; interactiv
   })}</>;
 }
 
+/** A list, nested lists and tables in its items; a task item's box stands in for its bullet. */
 function List({ block }: { block: ListBlock }) {
   const Tag = block.ordered ? "ol" : "ul";
   const id = useId();
@@ -85,12 +86,14 @@ function CodeBlock({ language, value }: { language: string; value: string }) {
   const block = useRef<HTMLDivElement>(null);
   // no inner scroll: a long block folds, with a visible "Show all" row
   const fold = useMemo(() => foldCode(value), [value]);
+  /** Copies the whole block, folded lines included, and flips the button to "copied" for a moment. */
   const copy = async (): Promise<void> => {
     await navigator.clipboard.writeText(value);
     setCopied(true);
     window.setTimeout(() => setCopied(false), 1500);
   };
   const folding = useRef(false);
+  /** Shows all lines or folds them again; after folding, the block's top is brought back into view. */
   const toggle = (): void => {
     folding.current = expanded;
     setExpanded(!expanded);
@@ -122,6 +125,7 @@ function CodeBlock({ language, value }: { language: string; value: string }) {
   );
 }
 
+/** Parsed blocks in order: the one renderer for a reply, a quote's contents and a list item's. */
 function Blocks({ blocks }: { blocks: MarkdownBlock[] }) {
   return <>{blocks.map((block, index): ReactNode => {
     const key = `${block.type}-${index}`;

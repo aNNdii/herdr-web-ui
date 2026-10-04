@@ -43,6 +43,7 @@ function CopyFileButton({ text, sourceRef, onShowSource }: { text: string; sourc
     return () => window.clearTimeout(timer);
   }, [copied]);
   const label = copied ? t("File copied") : t("Copy file");
+  /** Copies the file, or selects its source for a long press; from a Preview, shows the source first. */
   const copy = async (): Promise<void> => {
     // the code <pre> is the source text alone: line numbers are a CSS counter, not text
     const source = sourceRef.current;
@@ -82,6 +83,7 @@ export function FileViewer({ path: asked, paneId, onClose, onOpen }: FileViewerP
   const sourceRef = useRef<HTMLPreElement>(null);
   // Copy failed in a Preview: select the source as soon as the Code view has rendered
   const selectSourceOnCode = useRef(false);
+  /** Switches a Preview to its source and has it selected once rendered, for Copy without a clipboard. */
   const showSourceToSelect = (): void => {
     selectSourceOnCode.current = true;
     setChosen({ path, mode: "code" });
@@ -127,6 +129,7 @@ export function FileViewer({ path: asked, paneId, onClose, onOpen }: FileViewerP
   useEffect(() => {
     // the FilesDialog beneath listens on window too (and stands down while this is open); this
     // one is the topmost overlay, so it takes the key
+    /** Escape closes the viewer from anywhere in it. */
     const onKey = (event: KeyboardEvent): void => { if (event.key === "Escape") onClose(); };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -152,6 +155,7 @@ export function FileViewer({ path: asked, paneId, onClose, onOpen }: FileViewerP
   // a phone stacks the actions under the name once there are two or more, and one fits beside it:
   // a text file always has Raw, so a second is Show source or Copy
   const stacked = textFile && (hasPreview(language) || copyable);
+  /** What the viewer shows below its header: a folder, an error, a choice of files, or the file. */
   const body = (() => {
     if (directory !== null) return <DirectoryBrowser key={directory} start={directory} onOpenFile={onOpen ?? setPath} />;
     if (error !== null) return <p className="file-viewer-note" role="alert">{error === "missing" ? t("No readable file at this path.") : t("The file could not be opened.")}</p>;

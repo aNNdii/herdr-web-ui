@@ -135,6 +135,7 @@ function UsageAccounts({ providers }: { providers: readonly ProviderUsage[] }) {
   );
 }
 
+/** The per-device preferences, saved as they change: appearance, chat, file viewer, alerts, devices and more. */
 export function SettingsDialog({ open, onClose, actions, updates, auth, onEnableNotifications }: SettingsDialogProps) {
   const { settings, update } = useSettings();
   // the accounts to order and hide: the same report the meters show, from the server's cache
@@ -202,6 +203,7 @@ export function SettingsDialog({ open, onClose, actions, updates, auth, onEnable
   useEffect(() => {
     if (!open) return;
     firstControlRef.current?.focus();
+    /** Escape closes Settings, without the browser's own default for the key. */
     const closeOnEscape = (event: KeyboardEvent): void => {
       if (event.key !== "Escape") return;
       event.preventDefault();

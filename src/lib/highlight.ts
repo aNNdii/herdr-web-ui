@@ -117,6 +117,7 @@ interface Style {
   emphasis?: "em" | "strong";
 }
 
+/** The role and emphasis of a highlight.js element: its first known class, refined by a modifier, else its parent's. */
 function elementStyle(classes: string[], inherited: Style): Style {
   let role: SyntaxRole | null = null;
   let emphasis = inherited.emphasis;
@@ -136,12 +137,15 @@ function elementStyle(classes: string[], inherited: Style): Style {
 
 type HastNode = ReturnType<typeof lowlight.highlight>["children"][number];
 
+/** Uncolored lines, in the same shape as tokenized ones, so a view never tells the two apart. */
 function plainLines(code: string): Token[][] {
   return code.split("\n").map((line) => (line === "" ? [] : [{ text: line, role: null }]));
 }
 
+/** Code as lowlight colors it, split into lines; a token that spans lines keeps its role on each. */
 function tokenize(code: string, language: string): Token[][] {
   const lines: Token[][] = [[]];
+  /** Adds text to the current line, starting a new one at each "\n" and merging same-styled runs. */
   const append = (text: string, style: Style) => {
     text.split("\n").forEach((part, index) => {
       if (index > 0) lines.push([]);
@@ -152,6 +156,7 @@ function tokenize(code: string, language: string): Token[][] {
       else line.push(style.emphasis ? { text: part, role: style.role, emphasis: style.emphasis } : { text: part, role: style.role });
     });
   };
+  /** Visits the tree depth-first, so text reaches `append` in source order with its nearest style. */
   const walk = (node: HastNode, inherited: Style) => {
     if (node.type === "text") append(node.value, inherited);
     else if (node.type === "element") {

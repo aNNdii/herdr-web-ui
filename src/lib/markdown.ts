@@ -167,7 +167,7 @@ function parseTable(lines: string[], start: number, within = 0): { block: Markdo
   return { block: { type: "table", header, rows }, next: index };
 }
 
-
+/** Whether a line opens a block of its own (math, fence, heading, quote, rule, list, table), so it ends a paragraph. */
 function startsBlock(lines: string[], index: number): boolean {
   const line = lines[index] ?? "";
   return /^\s*\\\[/.test(line) || /^\s{0,3}```/.test(line) || /^#{1,6}\s+/.test(line) || /^\s*>/.test(line) || /^(?:\s*[-*_]){3,}\s*$/.test(line) || listLine.test(line)
@@ -254,6 +254,7 @@ export function foldCode(value: string): { head: string; lines: number } | null 
   return { head: lines.slice(0, FOLDED_CODE_LINES).join("\n"), lines: lines.length };
 }
 
+/** Markdown source as blocks, uncached; `parseMarkdown` is the entry, and a quote's contents recurse here. */
 function parseBlocks(source: string): MarkdownBlock[] {
   const lines = source.replace(/\r\n?/g, "\n").split("\n");
   const blocks: MarkdownBlock[] = [];

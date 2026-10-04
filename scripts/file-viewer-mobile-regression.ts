@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { chromium } from "playwright-core";
 
+/** The viewer alone with its source CSS, at phone sizes: the dialog fits, a long name is cut in its stem, no control is covered. */
 async function checkLayout(): Promise<void> {
   const fixture = mkdtempSync(join(tmpdir(), "herdr-web-ui-viewer-layout-"));
   const repo = join(import.meta.dir, "..");
@@ -22,6 +23,7 @@ async function checkLayout(): Promise<void> {
     const path = "/workspace/" + "long-directory/".repeat(40) + name;
     const height = query.get("height");
     if (height) document.documentElement.style.setProperty("--app-height", height + "px");
+    /** The viewer as the app mounts it, so Close unmounts it as it would there. */
     function Demo() {
       const [open, setOpen] = React.useState(true);
       return React.createElement(SettingsProvider, null, open

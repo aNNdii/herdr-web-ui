@@ -104,6 +104,7 @@ export type MarkdownWidth = (typeof MARKDOWN_WIDTHS)[number];
 /** the sizes the file viewer's limits offer, 256 KB and 1 MB: bytes loaded, characters highlighted */
 export const SIZE_LIMIT_CHOICES = [256 * 1024, 1024 * 1024] as const;
 
+/** A stored limit if it is one of the choices; anything else (an old or hand-edited value) falls back. */
 function sizeLimit(value: unknown, fallback: number): number {
   return SIZE_LIMIT_CHOICES.find((choice) => choice === value) ?? fallback;
 }
