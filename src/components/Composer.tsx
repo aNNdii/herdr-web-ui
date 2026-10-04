@@ -36,7 +36,7 @@ import { AgentMark } from "./AgentMark.tsx";
 import { BackgroundTasks } from "./BackgroundTasks.tsx";
 import { MicButton, VoiceRecordingPill, useDictation } from "./VoiceInput.tsx";
 import { useT } from "../lib/i18n.ts";
-import { blockComments, blockContent, commentTarget, outgoingMessage, quoteFor, useBlockComments, type BlockComment } from "../lib/blockComments.ts";
+import { blockComments, commentTarget, outgoingMessage, useBlockComments, type BlockComment } from "../lib/blockComments.ts";
 import { CommentEditor } from "./CommentEditor.tsx";
 
 export interface ComposerProps {
@@ -220,12 +220,16 @@ export function Composer({
   const outgoing = outgoingMessage(comments, text, { answering: answerHint !== null, agent: agent !== null });
   // the comment as it was opened: a send acknowledged meanwhile must not close the editor on what is being typed
   const [editedComment, setEditedComment] = useState<BlockComment | null>(null);
-  const pillsRef = useRef<HTMLDivElement>(null);
-  /** Before the pill for `anchor` goes: the focus moves to a pill beside it, or to the message box. */
-  const keepFocusInPills = (anchor: string): void => {
-    const pill = [...pillsRef.current?.children ?? []].find((node) => (node as HTMLElement).dataset.anchor === anchor);
-    const beside = pill?.nextElementSibling ?? pill?.previousElementSibling;
-    (beside?.querySelector<HTMLElement>(".composer-comment-open") ?? textareaRef.current)?.focus({ preventScroll: true });
+  // the chip beside the paperclip walks the commented parts of the chat, one per tap
+  const nextComment = useRef(0);
+  const goToComment = (): void => {
+    const marked = [...document.querySelectorAll<HTMLElement>(".chat-view .is-commented")];
+    // a comment whose part is not in the chat (older history not loaded, a reply that changed)
+    // opens in its editor instead, so the chip never does nothing
+    if (marked.length === 0) { setEditedComment(comments[0] ?? null); return; }
+    const target = marked[nextComment.current % marked.length]!;
+    nextComment.current = (nextComment.current + 1) % marked.length;
+    target.scrollIntoView({ block: "center", behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" });
   };
   const mounted = useRef(true);
   const [caret, setCaret] = useState(text.length);
@@ -795,28 +799,6 @@ export function Composer({
           </div>
         )}
 
-        {comments.length > 0 && (
-          <div ref={pillsRef} className="composer-comments" aria-label={t("Comments")}>
-            {/* a phone keeps the pills on one row that scrolls: the count tells how many go out */}
-            {comments.length > 1 && <span className="composer-comments-count">{t("Comments: {count}", { count: comments.length })}</span>}
-            {comments.map((comment) => {
-              const quote = quoteFor(blockContent(comment.block));
-              return (
-                // keyed by its block: an edit gets a new id, and the pill that opened the editor keeps the focus
-                <div className="composer-comment" key={comment.anchor} data-anchor={comment.anchor}>
-                  <button type="button" className="composer-comment-open" title={`${quote}\n\n${comment.comment}`} onClick={() => setEditedComment(comment)}>
-                    <MessageSquare aria-hidden="true" />
-                    <span>{quoteFor(comment.comment, 30)}</span>
-                  </button>
-                  <button type="button" className="composer-comment-remove" aria-label={t("Remove comment")} title={t("Remove comment")} onClick={() => { keepFocusInPills(comment.anchor); blockComments.remove(commentOwner, [comment.id]); }}>
-                    <X aria-hidden="true" />
-                  </button>
-                </div>
-              );
-            })}
-          </div>
-        )}
-
         {attachments.length > 0 && (
           <div className="composer-attachments" aria-label={t("Attached files")}>
             {attachments.map((attachment) => (
@@ -891,6 +873,18 @@ export function Composer({
             <Paperclip aria-hidden="true" />
           </button>
           {dictation.shown && <MicButton dictation={dictation} />}
+          {comments.length > 0 && (
+            <button
+              type="button"
+              className="composer-comments-chip"
+              aria-label={t("Comments to send: {count}", { count: comments.length })}
+              title={`${t("Comments to send: {count}", { count: comments.length })}\n${t("Go to the next comment")}`}
+              onClick={goToComment}
+            >
+              <MessageSquare aria-hidden="true" />
+              {comments.length}
+            </button>
+          )}
         </div>
         <div className="composer-controls composer-controls-right">
           {queueMode && (
@@ -938,7 +932,7 @@ export function Composer({
         block={editedComment.block}
         initialComment={editedComment.comment}
         onSave={(value) => {
-          if (value.trim() === "") keepFocusInPills(editedComment.anchor);
+          if (value.trim() === "") textareaRef.current?.focus({ preventScroll: true });
           blockComments.save(commentOwner, commentTarget(editedComment), value);
           setEditedComment(null);
         }}

@@ -158,8 +158,8 @@ try {
     await editor.waitFor({ state: "hidden" });
     await page.locator("p.is-commented", { hasText: "Intro paragraph" }).waitFor();
     assert.equal(await page.locator(".block-comment-row").first().innerText(), "Explain why");
-    assert.equal(await page.locator(".composer-comment-open").count(), 1);
-    console.log("PASS desktop: hover shows +, the modal saves a comment, the block is marked and a pill appears");
+    assert.equal(await page.locator(".composer-comments-chip").innerText(), "1");
+    console.log("PASS desktop: hover shows +, the modal saves a comment, the block is marked and the chip counts it");
 
     // the parent item's + stays hidden while the nested one is under the pointer
     await nested.hover();
@@ -196,7 +196,7 @@ try {
     assert.ok(trail <= 1, `a quick sweep leaves ${trail} "+" showing`);
     console.log("PASS desktop: a quick sweep over the reply shows no trail of +");
 
-    await page.locator(".composer-comment-open", { hasText: "Explain why" }).click();
+    await page.locator("p.is-commented + .block-comment-row").click();
     await editor.waitFor();
     await editor.getByRole("textbox", { name: "Comment" }).fill("Explain why, briefly");
     await editor.getByRole("button", { name: "Save", exact: true }).click();
@@ -226,8 +226,8 @@ try {
     await probe.evaluate((node) => node.remove());
     await del.click();
     await editor.waitFor({ state: "hidden" });
-    assert.equal(await page.locator(".composer-comment-open").count(), 2);
-    console.log("PASS desktop: edit from a pill, delete from the chat row");
+    assert.equal(await page.locator(".composer-comments-chip").innerText(), "2");
+    console.log("PASS desktop: edit and delete from the comment under its block");
 
     // the keyboard reaches a block's "+" by Tab, though nothing in the block itself takes focus:
     // from the last control of the user's message, the next stop is the reply's first "+"
@@ -243,12 +243,35 @@ try {
     assert.equal(await ownAdd(intro).evaluate((node) => node === document.activeElement), true, "closing the editor hands the focus back to the +");
     console.log("PASS desktop: Tab reaches a block's +, and the focus comes back to it");
 
-    // removing a pill hands the focus to its neighbour, not to the page
+    // the chip beside the paperclip counts the comments and walks to them, one per tap, round again
     await comment(page, long, "Temporary");
-    await page.locator(".composer-comment", { hasText: "Temporary" }).getByRole("button", { name: "Remove comment" }).click();
-    await page.locator(".composer-comment", { hasText: "Temporary" }).waitFor({ state: "detached" });
-    assert.equal(await page.evaluate(() => document.activeElement?.closest(".composer-comment")?.textContent ?? document.activeElement?.tagName), "Also the exit code", "the focus moves to the pill beside the removed one");
-    console.log("PASS desktop: removing a pill keeps the focus in the pill row");
+    const chip = page.locator(".composer-comments-chip");
+    assert.equal(await chip.innerText(), "3");
+    assert.equal(await chip.getAttribute("aria-label"), "Comments to send: 3");
+    await page.emulateMedia({ reducedMotion: "reduce" });
+    await page.setViewportSize({ width: 1280, height: 380 });
+    const view = page.locator(".chat-view");
+    await view.evaluate((node) => { node.scrollTop = 0; });
+    const nearest = (): Promise<number> => page.evaluate(() => {
+      const box = document.querySelector(".chat-view")!.getBoundingClientRect();
+      const middle = box.top + box.height / 2;
+      const marked = [...document.querySelectorAll(".chat-view .is-commented")].map((node) => { const r = node.getBoundingClientRect(); return Math.abs(r.top + r.height / 2 - middle); });
+      return marked.indexOf(Math.min(...marked));
+    });
+    const walked: number[] = [];
+    for (let tap = 0; tap < 4; tap++) {
+      await chip.click();
+      await page.waitForTimeout(150);
+      walked.push(await nearest());
+    }
+    assert.deepEqual(walked, [0, 1, 2, 0], "each tap centres the next commented part, then round again");
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await page.emulateMedia({ reducedMotion: null });
+    await page.locator(".block-comment-row", { hasText: "Temporary" }).click();
+    await editor.getByRole("button", { name: "Delete", exact: true }).click();
+    await editor.waitFor({ state: "hidden" });
+    assert.equal(await chip.innerText(), "2");
+    console.log("PASS desktop: the chip counts the comments and walks to them");
 
     // the agent starts again while a comment is being written: the editor and the draft stay, and
     // the code block is not rebuilt as the reply turns live and final again
@@ -281,13 +304,13 @@ try {
     await page.reload();
     await page.locator(".conn-live").waitFor();
     await page.locator("p.is-commented").waitFor();
-    assert.equal(await page.locator(".composer-comment-open").count(), 2);
+    assert.equal(await page.locator(".composer-comments-chip").innerText(), "2");
     assert.equal(await page.locator(".is-commented").count(), 2);
     console.log("PASS desktop: comments survive a reload");
 
     await page.getByRole("textbox", { name: "Message", exact: true }).fill("Thanks");
     await page.getByRole("button", { name: "Send message", exact: true }).click();
-    await page.locator(".composer-comments").waitFor({ state: "detached" });
+    await page.locator(".composer-comments-chip").waitFor({ state: "detached" });
     assert.equal(await page.locator(".is-commented").count(), 0);
     assert.ok(sent.some((text) => text.startsWith("> Intro paragraph about the state.\nExplain why, briefly\n\n> check the logs\nAlso the exit code\n\nThanks")), `sent: ${JSON.stringify(sent)}`);
     console.log("PASS desktop: send carries the comments quoted, in reading order, then clears them");
@@ -339,7 +362,7 @@ try {
     assert.equal(await page.locator(".is-commentable.is-selected").count(), 0, "a tap on a link does not choose its paragraph");
     console.log("PASS phone: a link tap opens the link and leaves the block alone");
 
-    // a comment pill: both its halves are a finger's size
+    // the chip beside the paperclip is a finger's size, and takes no row of its own
     await item.tap();
     await shown(ownAdd(item));
     await ownAdd(item).tap();
@@ -348,31 +371,22 @@ try {
     await editor.getByRole("button", { name: "Save", exact: true }).tap();
     await editor.waitFor({ state: "hidden" });
     const touchTarget = await page.evaluate(() => parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--touch-target")));
-    for (const part of [".composer-comment-open", ".composer-comment-remove"]) {
-      const box = (await page.locator(part).first().boundingBox())!;
-      assert.ok(box.height >= touchTarget && box.width >= touchTarget, `${part} is ${box.width}x${box.height}, under the ${touchTarget}px touch target`);
-    }
-    console.log("PASS phone: the + and the comment pills are touch-sized");
-
-    // the pills scroll on one row: with two or more, a count stays at the left edge
-    const count = page.locator(".composer-comments-count");
-    assert.equal(await count.count(), 0, "one comment needs no count");
+    const chip = page.locator(".composer-comments-chip");
+    const chipBox = (await chip.boundingBox())!;
+    assert.ok(chipBox.height >= touchTarget && chipBox.width >= touchTarget, `the chip is ${chipBox.width}x${chipBox.height}, under the ${touchTarget}px touch target`);
+    const surfaceBefore = (await page.locator(".composer-surface").boundingBox())!.height;
     const second = page.locator("li.is-commentable li.is-commentable", { hasText: "check the logs" });
     await second.tap();
     await shown(ownAdd(second));
     await ownAdd(second).tap();
     await editor.waitFor();
-    await editor.getByRole("textbox", { name: "Comment" }).fill("A second one, long enough that the pills overflow the row");
+    await editor.getByRole("textbox", { name: "Comment" }).fill("A second one");
     await editor.getByRole("button", { name: "Save", exact: true }).tap();
     await editor.waitFor({ state: "hidden" });
-    assert.equal(await count.innerText(), "Comments: 2");
-    assert.equal(await count.isVisible(), true, "the count shows on a phone");
-    await page.locator(".composer-comments").evaluate((node) => { node.scrollLeft = node.scrollWidth; });
-    const rowBox = (await page.locator(".composer-comments").boundingBox())!;
-    const countBox = (await count.boundingBox())!;
-    assert.ok(Math.abs(countBox.x - rowBox.x) <= 1, `the count stays at the left edge while the pills scroll (${countBox.x - rowBox.x}px in)`);
-    if (evidence) await page.screenshot({ path: join(evidence, "block-comments-phone-pills.png"), clip: { x: 0, y: (await page.locator(".composer-surface").boundingBox())!.y - 8, width: 390, height: 140 } });
-    console.log("PASS phone: a count stays at the left of the scrolling pills");
+    assert.equal(await chip.innerText(), "2");
+    assert.equal((await page.locator(".composer-surface").boundingBox())!.height, surfaceBefore, "a second comment does not grow the box");
+    if (evidence) await page.screenshot({ path: join(evidence, "block-comments-phone-chip.png"), clip: { x: 0, y: (await page.locator(".composer-surface").boundingBox())!.y - 8, width: 390, height: 120 } });
+    console.log("PASS phone: the chip is touch-sized and takes no row of its own");
     assert.deepEqual(errors, []);
     await page.context().close();
   }
@@ -381,7 +395,7 @@ try {
   {
     const broken = { id: "broken", anchor: "x:0:0", order: [0, 0, 0], comment: "kept", block: { type: "blockquote", blocks: [{ type: "video" }] } };
     const { page } = await open({ viewport: { width: 1280, height: 800 } }, { version: 1, comments: [broken] });
-    await page.locator(".composer-comment-open").click();
+    await page.locator(".composer-comments-chip").click();
     const editor = page.locator(".comment-editor");
     await editor.waitFor();
     assert.equal(await editor.getByRole("textbox", { name: "Comment" }).inputValue(), "kept");

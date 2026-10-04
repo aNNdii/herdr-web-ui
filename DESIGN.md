@@ -466,8 +466,9 @@ One set for both themes: the card is island black wherever it shows.
   left gutter, `--space-2` from the tint, as a bare icon that takes `--bg-hover` under the pointer,
   so no text moves; narrower, it is a hairline `--bg-panel` badge on the part's top right corner,
   with a tap area of `--touch-target`. A commented part gets an `--accent` bar of `--rail-w` on the
-  tint's left edge and its comment in `--fs-sm` `--text-dim` right under it, clamped to two lines;
-  a click there edits it.
+  tint's left edge. Its comment is the reader's own note, so it is a box right under the part
+  (`--accent-tint`, `--radius-sm`, `--text` in `--fs-sm`, clamped to two lines, starting where the
+  tint does), not a dim caption; a click there edits it, and Delete is in the editor.
 - The comment editor is a 560px `.modal` (a bottom sheet on a phone): the part quoted on `--bg`
   with a `--border-strong` rail, a field that grows from one line to four, then Delete (ghost, on
   the left), Cancel and Save.
@@ -503,12 +504,11 @@ One set for both themes: the card is island black wherever it shows.
   completion popover; inside, ONE row — attach control | auto-growing textarea | Send / Queue /
   Stop — with the controls bottom-aligned so they stay beside the last line as the box grows;
   the image strip is its own row above that line.
-- Block comments waiting for the next message are pills in a row above the image strip, in reading
-  order: `--bg-panel`, hairline, `--radius-pill`, `--fs-xs`, the comment (what the message will
-  carry; its tooltip adds the quoted part) ellipsized beside a `--accent` icon and an `x` that
-  removes it. Under them an attachment row starts `--space-4` lower, clear of its remove buttons.
-  On touch both halves are `--touch-target` tall; at `<=640px` the row stays one line and scrolls
-  sideways, and from two comments on a `Comments: N` count stays at its left edge.
+- Block comments waiting for the next message are shown where they were written, under their part
+  in the chat. The composer only counts them: a chip with a `--accent` speech bubble and the number
+  (`--accent-tint`, `--radius-pill`, `--fs-xs`) beside the attach control, so they take no row of
+  their own. A tap walks the chat to the next commented part, round again; a comment whose part is
+  not in the chat opens in its editor instead. On touch the chip is `--touch-target` tall.
 - The status line ends, on fine pointers, with `/` commands and `@` files keycaps (plus `Mod+Enter`
   sends when **Enter sends** is off); the placeholder is just `Message <agent>…`.
 - `/` completions come from `GET /api/pane/commands` and group built-in, user and project commands;

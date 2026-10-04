@@ -164,7 +164,6 @@
   display: grid;
   grid-template-columns: auto minmax(0, 1fr) auto;
   grid-template-areas:
-    "comments comments comments"
     "attachments attachments attachments"
     "left text right";
   align-items: end;
@@ -417,105 +416,34 @@
   white-space: nowrap;
 }
 
-/* comments on blocks of the agent's replies, waiting for the next message: one pill each */
-.composer-comments {
-  grid-area: comments;
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--space-1);
-  padding: var(--space-2) var(--space-3) 0;
-}
-
-.composer-comment {
-  display: flex;
+/* comments on blocks of the agent's replies, waiting for the next message: how many, beside the
+   paperclip. They are shown where they were written (BlockComments.css); this walks to them */
+.composer-comments-chip {
+  display: inline-flex;
+  flex: none;
   align-items: center;
-  max-width: 100%;
-  min-width: 0;
-  border: var(--hairline) solid var(--border);
+  gap: var(--space-1);
+  height: calc(var(--chip-h) + var(--space-2));
+  padding: 0 var(--space-2);
+  border: var(--hairline) solid transparent;
   border-radius: var(--radius-pill);
-  background: var(--bg-panel);
-  color: var(--text);
-  font-size: var(--fs-xs);
-}
-
-.composer-comment button {
-  display: flex;
-  align-items: center;
-  gap: var(--space-1);
-  min-width: 0;
-  padding: var(--space-1) var(--space-2);
-  border: 0;
-  background: none;
-  color: inherit;
+  background: var(--accent-tint);
+  color: var(--text-strong);
   font: inherit;
+  font-size: var(--fs-xs);
+  font-variant-numeric: tabular-nums;
   cursor: pointer;
 }
 
-.composer-comment-open {
-  border-radius: var(--radius-pill) 0 0 var(--radius-pill);
-}
-
-.composer-comment-open span {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.composer-comment-open svg {
-  flex: none;
-  width: 12px;
-  height: 12px;
+.composer-comments-chip svg {
+  width: 14px;
+  height: 14px;
   color: var(--accent);
 }
 
-.composer-comment .composer-comment-remove {
-  padding-left: 0;
-  color: var(--text-dim);
-  border-radius: 0 var(--radius-pill) var(--radius-pill) 0;
-}
-
-.composer-comment-remove svg {
-  width: 12px;
-  height: 12px;
-}
-
-.composer-comment .composer-comment-open:hover,
-.composer-comment .composer-comment-remove:hover {
-  color: var(--text-strong);
-}
-
-/* how many comments the next message carries; only where the pills scroll out of sight */
-.composer-comments-count {
-  display: none;
-}
-
-/* a phone keeps them on one row that scrolls, so the box does not grow taller than the reply */
-@media (max-width: 640px) {
-  .composer-comments {
-    flex-wrap: nowrap;
-    overflow-x: auto;
-  }
-
-  /* it stays at the left edge while the pills scroll under it */
-  .composer-comments-count {
-    position: sticky;
-    /* a sticky box keeps clear of the row's padding: this is the row's edge */
-    left: calc(-1 * var(--space-3));
-    z-index: 1;
-    display: flex;
-    flex: none;
-    align-items: center;
-    /* out over the row's own padding, so no pill shows at its left while they scroll under it */
-    margin-left: calc(-1 * var(--space-3));
-    padding: 0 var(--space-2) 0 var(--space-3);
-    background: var(--bg-elevated);
-    color: var(--text-dim);
-    font-size: var(--fs-xs);
-    white-space: nowrap;
-  }
-
-  .composer-comment {
-    flex: none;
+@media (hover: hover) {
+  .composer-comments-chip:hover {
+    border-color: var(--accent);
   }
 }
 
@@ -525,12 +453,6 @@
   gap: var(--space-2);
   padding: var(--space-2) var(--space-3) 0;
   overflow-x: auto;
-}
-
-/* under the comment pills: an attachment's remove button stands out 8px above its thumbnail, and
-   would touch the pills above it. The two rows are two kinds of thing, set apart by a step */
-.composer-comments + .composer-attachments {
-  padding-top: var(--space-4);
 }
 
 .composer-attachment {
@@ -648,14 +570,9 @@
     min-height: calc(var(--touch-target) + var(--space-1));
   }
 
-  /* a comment pill: both its halves are a finger's size */
-  .composer-comment button {
+  .composer-comments-chip {
     min-height: var(--touch-target);
-  }
-
-  .composer-comment .composer-comment-remove {
-    min-width: var(--touch-target);
-    justify-content: center;
+    padding: 0 var(--space-3);
   }
 
   .composer-resize {

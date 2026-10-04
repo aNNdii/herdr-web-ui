@@ -192,17 +192,21 @@
   background: var(--accent);
 }
 
-/* close under its block: the block's bottom margin stays below the row instead */
+/* The comment is the reader's own note, so it reads as one: a tinted box, in the text colour, not a
+   dim caption. Close under its block: the block's bottom margin stays below the row instead. Its
+   box starts where the block's tint does, so the words stay under the block's words. */
 .block-comment-row {
   display: flex;
   align-items: flex-start;
-  gap: var(--space-1);
-  width: 100%;
-  margin: calc(var(--space-1) - var(--space-3)) 0 var(--space-3);
-  padding: 0;
+  gap: var(--space-2);
+  width: fit-content;
+  max-width: calc(100% + var(--space-2));
+  margin: calc(var(--space-1) - var(--space-3)) 0 var(--space-3) calc(-1 * var(--space-2));
+  padding: var(--space-1) var(--space-2);
   border: 0;
-  background: none;
-  color: var(--text-dim);
+  border-radius: var(--radius-sm);
+  background: var(--accent-tint);
+  color: var(--text);
   font: inherit;
   font-size: var(--fs-sm);
   line-height: var(--lh-base);
@@ -211,7 +215,7 @@
 }
 
 li > .block-comment-row {
-  margin: var(--space-1) 0 0;
+  margin: var(--space-1) 0 0 calc(-1 * var(--space-2));
 }
 
 .block-comment-row svg {
@@ -231,6 +235,9 @@ li > .block-comment-row {
   overflow-wrap: anywhere;
 }
 
-.block-comment-row:hover span {
-  color: var(--text);
+@media (hover: hover) {
+  .block-comment-row:hover {
+    background: color-mix(in srgb, var(--accent) 20%, transparent);
+    color: var(--text-strong);
+  }
 }
