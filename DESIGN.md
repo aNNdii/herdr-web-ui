@@ -126,8 +126,9 @@ blue there instead of `--accent`, and Latte's colors are darkened to stay readab
 
 ### File viewer
 
-- `--notice` colors a note that the view is partial (a file cut short, code too long to color), always
-  beside a warning icon so the color is not the only sign. It is a warning yellow, at least 4.5:1 on
+- `--notice` colors a note that the view is partial (a file cut short, code too long to color): the
+  size in the header's meta line becomes `256 KB of 1.3 MB`, always beside a warning icon so the
+  color is not the only sign. It is a warning yellow, at least 4.5:1 on
   `--bg`, `--bg-panel` and `--bg-elevated`: amber `#e8c55c` / `#7a5a00`, dark report `#f5b544`, light
   report and charcoal `#8a5300`, dark charcoal `#d9b26a`, Catppuccin Mocha `#f9e2af` (yellow), Latte
   `#8a5710`.

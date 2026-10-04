@@ -1,5 +1,5 @@
-import { Fragment, useCallback, useEffect, useLayoutEffect, useRef, useState, type RefObject } from "react";
-import { Check, Code, Copy, Download, ExternalLink, TriangleAlert, WrapText, X } from "lucide-react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type RefObject } from "react";
+import { Check, Code, Copy, Download, ExternalLink, TriangleAlert, X } from "lucide-react";
 
 import "./FileViewer.css";
 import { DirectoryBrowser } from "./DirectoryBrowser.tsx";
@@ -62,7 +62,7 @@ function CopyFileButton({ text, sourceRef, onShowSource }: { text: string; sourc
  */
 export function FileViewer({ path: asked, paneId, onClose, onOpen }: FileViewerProps) {
   const t = useT();
-  const { settings, update } = useSettings();
+  const { settings } = useSettings();
   const { textLoadLimit } = settings;
   const { fetchFileInfo, fileUrl, fetchDirectories } = useMachineApi();
   // a remote PC's bridge reads a relative folder from the pane's folder only from its next bundle
@@ -140,11 +140,12 @@ export function FileViewer({ path: asked, paneId, onClose, onOpen }: FileViewerP
   const shownPath = info?.path ?? path;
   const { stem, extension } = pathParts(info?.name ?? shownPath);
   const { folder } = pathParts(shownPath);
-  // what holds for the whole file is said where it is seen first, not after a megabyte of text
-  const status = [
-    textFile && truncated && t("Showing the first {shown}", { shown: formatBytes(textLoadLimit) }),
-    codeShown && tooLongToHighlight(text, language, settings.highlightLimit) && t("Too long to highlight"),
-  ].filter((note): note is string => typeof note === "string");
+  // what holds for the whole file is said with its size, where it is seen first, not after a megabyte of text
+  const cutShort = textFile && truncated;
+  const leftPlain = codeShown && tooLongToHighlight(text, language, settings.highlightLimit);
+  const copyable = textFile && text !== null && !truncated;
+  // a phone stacks the actions under the name once there are two or more; one fits beside it
+  const stacked = textFile && (language === "markdown" ? 1 : 0) + 1 + (copyable ? 1 : 0) > 1;
   const body = (() => {
     if (directory !== null) return <DirectoryBrowser key={directory} start={directory} onOpenFile={onOpen ?? setPath} />;
     if (error !== null) return <p className="file-viewer-note" role="alert">{error}</p>;
@@ -177,24 +178,29 @@ export function FileViewer({ path: asked, paneId, onClose, onOpen }: FileViewerP
     <div className="modal-scrim file-viewer-scrim" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
       <section className="modal file-viewer" role="dialog" aria-modal="true" aria-label={info?.name ?? path}>
         {/* three groups, spaced apart: how the text shows, the file itself, the window */}
-        <header className={textFile ? "modal-header file-viewer-header file-viewer-header-text" : "modal-header file-viewer-header"}>
+        <header className={stacked ? "modal-header file-viewer-header file-viewer-header-stacked" : "modal-header file-viewer-header"}>
           <div className="file-viewer-title">
             {/* a long name is cut inside its stem, so its type stays in view */}
             <h2 className="modal-title"><span className="file-viewer-stem">{stem}</span>{extension}</h2>
             <p className="file-viewer-meta" title={shownPath}>
-              {info && <span className="file-viewer-size">{formatBytes(info.size)}</span>}
-              {info && folder !== "" && <span className="file-viewer-dot" aria-hidden="true">·</span>}
-              {folder !== "" && <span className="file-viewer-path"><span dir="ltr">{folder}</span></span>}
+              {/* a partial view is told by the size ("256 KB of 1.3 MB") in the warning color, beside an
+                  icon so the color is not the only sign */}
+              {info && (cutShort || leftPlain
+                ? <span className="file-viewer-notice" title={cutShort ? t("Showing the first {shown}", { shown: formatBytes(textLoadLimit) }) : undefined}>
+                  <TriangleAlert aria-hidden="true" />
+                  <span>{cutShort ? t("{done} of {total}", { done: formatBytes(textLoadLimit), total: formatBytes(info.size) }) : formatBytes(info.size)}</span>
+                  {leftPlain && <span>· {t("Too long to highlight")}</span>}
+                </span>
+                : <span className="file-viewer-size">{formatBytes(info.size)}</span>)}
+              {/* the dot is the folder's, so where the folder has no room left no dot dangles */}
+              {folder !== "" && <span className="file-viewer-path"><span dir="ltr">{info && <span className="file-viewer-dot" aria-hidden="true">·</span>}{folder}</span></span>}
             </p>
-            {/* in the warning color with its icon, so it is not missed (and not told by color alone); a
-                narrow screen breaks the line between notes, never inside one */}
-            {status.length > 0 && <p className="file-viewer-status"><TriangleAlert aria-hidden="true" /><span>{status.map((note, index) => <Fragment key={note}>{index > 0 && " · "}<span>{note}</span></Fragment>)}</span></p>}
           </div>
           <div className="file-viewer-actions">
-            {/* how the text shows: Preview or source is one choice of two, so one toggle */}
-            {textFile && <div className="file-viewer-group">
-              {language === "markdown" && <button type="button" className="icon-button" aria-pressed={mode === "code"} aria-label={t("Show source")} title={t("Show source")} onClick={() => setChosen({ path, mode: mode === "code" ? "preview" : "code" })}><Code aria-hidden="true" /></button>}
-              {!(language === "markdown" && mode === "preview") && <button type="button" className="icon-button" aria-pressed={settings.wrapCode} aria-label={t("Wrap long lines")} title={t("Wrap long lines")} onClick={() => update({ wrapCode: !settings.wrapCode })}><WrapText aria-hidden="true" /></button>}
+            {/* how the text shows: Preview or source is one choice of two, so one toggle; wrapping is a
+                setting (Settings → File viewer), not an action here */}
+            {textFile && language === "markdown" && <div className="file-viewer-group">
+              <button type="button" className="icon-button" aria-pressed={mode === "code"} aria-label={t("Show source")} title={t("Show source")} onClick={() => setChosen({ path, mode: mode === "code" ? "preview" : "code" })}><Code aria-hidden="true" /></button>
             </div>}
             {/* the file itself: a new tab shows it whole (Raw for text) and saves it from there, so a
                 download of its own is offered only for a file no tab can show */}
@@ -202,7 +208,7 @@ export function FileViewer({ path: asked, paneId, onClose, onOpen }: FileViewerP
               {info?.kind === "binary"
                 ? <a className="icon-button" href={fileUrl(shownPath, paneId, true)} download={info.name} aria-label={t("Download")} title={t("Download")}><Download aria-hidden="true" /></a>
                 : <a className="icon-button" href={url} target="_blank" rel="noopener" aria-label={textFile ? t("Raw") : t("Open in a new tab")} title={textFile ? t("Raw") : t("Open in a new tab")}><ExternalLink aria-hidden="true" /></a>}
-              {textFile && text !== null && !truncated && <CopyFileButton text={text} sourceRef={sourceRef} onShowSource={showSourceToSelect} />}
+              {copyable && <CopyFileButton text={text} sourceRef={sourceRef} onShowSource={showSourceToSelect} />}
             </div>
           </div>
           <button type="button" className="icon-button file-viewer-close" aria-label={t("Close file")} title={t("Close file")} onClick={onClose}><X aria-hidden="true" /></button>

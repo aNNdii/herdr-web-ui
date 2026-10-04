@@ -48,29 +48,29 @@
   white-space: nowrap;
 }
 
-.file-viewer-size,
-.file-viewer-dot { flex: none; }
+.file-viewer-size { flex: none; }
 
-/* what holds for the whole file (cut short, left plain): a line of its own in the warning color, with
-   an icon so the color is not the only sign, in the UI font, a step larger than the facts above */
-.file-viewer-status {
-  margin: var(--space-1) 0 0;
-  display: flex;
-  align-items: flex-start;
-  gap: var(--space-1);
+.file-viewer-dot { margin-inline-end: var(--space-2); }
+
+/* a partial view (cut short, left plain) in place of the bare size: the warning color with an icon,
+   so it is not missed and not told by color alone. It never yields to the folder; on a phone too
+   narrow for both notes it breaks between them, never inside one. */
+.file-viewer-notice {
+  flex: 0 1 auto;
+  min-width: 0;
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0 var(--space-1);
   color: var(--notice);
-  font-size: var(--fs-xs);
   font-weight: var(--fw-medium);
 }
 
-.file-viewer-status svg {
+.file-viewer-notice svg {
   flex: none;
-  width: 14px;
-  height: 14px;
-  margin-top: 1px;
+  width: 1.1em;
+  height: 1.1em;
 }
-
-.file-viewer-status span span { white-space: nowrap; }
 
 /* the folder (the name is the title already) gets only the room left, so it gives way first, from its start */
 .file-viewer-path {
@@ -80,6 +80,13 @@
   direction: rtl;
   text-align: left;
   text-overflow: ellipsis;
+}
+
+/* a folder cut to a letter or two says nothing: below that it is left out (the full path is the tooltip) */
+.file-viewer-path { container-type: inline-size; }
+
+@container (max-width: 64px) {
+  .file-viewer-path > span { visibility: hidden; }
 }
 
 .file-viewer-header .icon-button {
@@ -111,7 +118,7 @@
 
 .file-viewer-group { gap: var(--space-1); }
 
-/* an "on" toggle carries the accent on its glyph, as the chosen side of Preview | Code does */
+/* an "on" toggle (Show source) carries the accent on its glyph */
 .file-viewer-header .icon-button[aria-pressed="true"] {
   background: var(--bg-hover);
   color: var(--accent);
@@ -192,27 +199,27 @@
 .file-viewer-markdown-medium { max-width: 90ch; }
 
 /*
- * On a narrow screen a text file's switch and actions leave the name no room. The name and Close
+ * On a narrow screen two or more actions leave the name and its notes no room. The name and Close
  * keep the first row, so Close stays in its corner for every file; the actions take the second,
- * how the text shows on the left and the file's own actions on the right.
+ * under Close, where they are on a wider screen.
  */
 @media (max-width: 600px) {
-  .file-viewer-header-text {
+  .file-viewer-header-stacked {
     display: grid;
     grid-template-columns: minmax(0, 1fr) auto;
     grid-template-areas: "title close" "actions actions";
     row-gap: var(--space-2);
   }
 
-  .file-viewer-header-text .file-viewer-title { grid-area: title; }
+  .file-viewer-header-stacked .file-viewer-title { grid-area: title; }
   /* in the corner, however many lines the name's block takes */
-  .file-viewer-header-text .file-viewer-close {
+  .file-viewer-header-stacked .file-viewer-close {
     grid-area: close;
     align-self: start;
   }
-  .file-viewer-header-text .file-viewer-actions {
+  .file-viewer-header-stacked .file-viewer-actions {
     grid-area: actions;
-    justify-content: space-between;
+    justify-content: flex-end;
   }
 }
 

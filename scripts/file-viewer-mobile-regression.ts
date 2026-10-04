@@ -157,8 +157,8 @@ async function checkLayout(): Promise<void> {
         }
       } finally { await context.close(); }
     }
-    // A text file adds Wrap and Copy to the header: on a phone the name keeps the first row with Close in
-    // its corner, and the three actions share the second row inside the dialog.
+    // A text file adds Copy to the header: on a phone the name keeps the first row with Close in its
+    // corner, and the actions share the second row inside the dialog.
     const phone = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, locale: "en-US" });
     try {
       const page = await phone.newPage();
@@ -171,12 +171,12 @@ async function checkLayout(): Promise<void> {
       const dialog = await page.locator(".file-viewer").boundingBox();
       assert.ok(dialog, "text: dialog is laid out");
       const buttons = page.locator(".file-viewer-actions .icon-button");
-      assert.equal(await buttons.count(), 3, "text: Wrap, Raw and Copy");
+      assert.equal(await buttons.count(), 2, "text: Raw and Copy");
       const title = (await page.locator(".file-viewer-title").boundingBox())!;
       const close = (await page.getByRole("button", { name: "Close file", exact: true }).boundingBox())!;
       assert.ok(close.y < title.y + title.height && close.y + close.height > title.y, "text: Close shares the name's row");
       assert.ok(close.x + close.width >= dialog.x + dialog.width - 32, "text: Close sits in the right corner");
-      for (let index = 0; index < 3; index++) {
+      for (let index = 0; index < 2; index++) {
         const box = await buttons.nth(index).boundingBox();
         assert.ok(box, `text: button ${index} is laid out`);
         assert.equal(box.y, (await buttons.nth(0).boundingBox())!.y, `text: button ${index} shares the row`);

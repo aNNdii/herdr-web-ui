@@ -163,7 +163,7 @@ try {
   await page.getByRole("button", { name: "Close file", exact: true }).click();
   await page.locator(".file-viewer").waitFor({ state: "hidden" });
 
-  // Markdown: Show source (a toggle: off is the Preview), Raw, Wrap, Copy; no separate Download
+  // Markdown: Show source (a toggle: off is the Preview), Raw, Copy; no Download, no Wrap (a setting)
   const guide = page.getByRole("dialog", { name: "guide.md", exact: true });
   await page.getByRole("button", { name: "guide", exact: true }).click();
   await guide.getByRole("heading", { name: "Guide", exact: true }).waitFor();
@@ -182,16 +182,8 @@ try {
   assert.match(await raw.getAttribute("href") ?? "", /\/api\/fs\/file/);
   await guide.getByRole("button", { name: "Copy file", exact: true }).waitFor();
   console.log("PASS Raw opens the file in a new tab; Copy is offered");
-  const wrap = guide.getByRole("button", { name: "Wrap long lines", exact: true });
-  await wrap.click();
-  assert.equal(await wrap.getAttribute("aria-pressed"), "true");
-  await guide.getByRole("button", { name: "Close file", exact: true }).click();
-  await guide.waitFor({ state: "hidden" });
-  await page.getByRole("button", { name: "guide", exact: true }).click();
-  await guide.getByRole("button", { name: "Show source", exact: true }).click();
-  assert.equal(await guide.getByRole("button", { name: "Wrap long lines", exact: true }).getAttribute("aria-pressed"), "true");
-  await guide.locator(".file-viewer-text[data-wrap]").waitFor();
-  console.log("PASS Wrap is remembered across viewers");
+  assert.equal(await guide.getByRole("button", { name: "Wrap long lines", exact: true }).count(), 0, "wrapping is a setting, not a header action");
+  assert.equal(await guide.locator(".file-viewer-text[data-wrap]").count(), 0, "lines do not wrap by default");
   await guide.getByRole("button", { name: "Show source", exact: true }).click();
   // Without a clipboard API (plain-HTTP LAN) Copy selects the source: from a Preview it switches to Code first
   await page.evaluate(() => Object.defineProperty(navigator, "clipboard", { value: { writeText: () => Promise.reject(new Error("no clipboard")) }, configurable: true }));
@@ -217,8 +209,11 @@ try {
   // a text file past the load limit: shown in part, so it cannot be copied whole
   await page.getByRole("button", { name: "big", exact: true }).click();
   const big = page.getByRole("dialog", { name: "big.txt", exact: true });
-  // the note is in the header, where it is seen before the text
-  await big.locator(".file-viewer-status").getByText("Showing the first", { exact: false }).waitFor();
+  // the note is the header's size, where it is seen before the text: "256 KB of …"
+  const cut = big.locator(".file-viewer-meta .file-viewer-notice");
+  await cut.waitFor();
+  assert.match(await cut.innerText(), /^256 KB of \d/);
+  assert.match(await cut.getAttribute("title") ?? "", /^Showing the first 256 KB/);
   assert.equal(await big.getByRole("button", { name: "Copy file", exact: true }).count(), 0);
   assert.equal(await big.getByText("Too long to highlight").count(), 0, "plain text is never too long to highlight");
   console.log("PASS A text file past the load limit says so in its header and has no Copy");
@@ -229,17 +224,19 @@ try {
   // the highlight limit lets such code arrive whole.
   await page.evaluate(() => {
     const settings = JSON.parse(localStorage.getItem("herdr-web-ui:settings") ?? "{}") as Record<string, unknown>;
-    localStorage.setItem("herdr-web-ui:settings", JSON.stringify({ ...settings, textLoadLimit: 1024 * 1024 }));
+    localStorage.setItem("herdr-web-ui:settings", JSON.stringify({ ...settings, textLoadLimit: 1024 * 1024, wrapCode: true }));
   });
   await page.goto(`${origin}/?pane=${encodeURIComponent(pane)}`);
   await page.locator(".conn-live").waitFor();
   await page.getByRole("button", { name: "big code", exact: true }).click();
   const bigCode = page.getByRole("dialog", { name: "big.ts", exact: true });
-  await bigCode.locator(".file-viewer-status").getByText("Too long to highlight", { exact: true }).waitFor();
+  await bigCode.locator(".file-viewer-meta .file-viewer-notice").getByText("Too long to highlight", { exact: false }).waitFor();
   assert.equal(await bigCode.locator(".hl-note").count(), 0, "the note is not repeated under the code");
   assert.equal(await bigCode.locator(".file-viewer-text .hl-keyword").count(), 0, "the code is plain");
   await bigCode.getByRole("button", { name: "Copy file", exact: true }).waitFor();
   console.log("PASS Code too long to highlight says so in its header, once");
+  await bigCode.locator(".file-viewer-text[data-wrap]").waitFor();
+  console.log("PASS Settings → Wrap long lines wraps the code");
   assert.deepEqual(errors, []);
 } finally {
   await browser?.close();
