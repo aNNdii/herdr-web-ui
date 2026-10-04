@@ -288,7 +288,7 @@ export const JA: Record<string, string> = {
   // ---- files ----
   "Files": "ファイル",
   "Close files": "ファイルを閉じる",
-  "Showing the first {shown} of {total}.": "{total} 件中、最初の {shown} 件を表示しています。",
+  "Showing the first {shown}": "最初の {shown} を表示",
   "Open in a new tab": "新しいタブで開く",
   "View": "表示",
   "Preview": "プレビュー",

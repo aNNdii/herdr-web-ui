@@ -290,7 +290,7 @@ export const ZH: Record<string, string> = {
   // ---- files ----
   "Files": "文件",
   "Close files": "关闭文件",
-  "Showing the first {shown} of {total}.": "显示 {total} 项中的前 {shown} 项。",
+  "Showing the first {shown}": "显示前 {shown}",
   "Open in a new tab": "在新标签页中打开",
   "View": "视图",
   "Preview": "预览",

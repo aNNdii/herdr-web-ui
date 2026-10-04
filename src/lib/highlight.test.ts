@@ -4,6 +4,7 @@ import {
   highlightLines,
   languageForFence,
   languageForPath,
+  tooLongToHighlight,
   type HighlightResult,
 } from "./highlight.ts";
 
@@ -97,5 +98,19 @@ describe("highlightLines", () => {
   });
   it("is plain when the language is not registered", () => {
     expect(highlightLines("x", "klingon", CHAT_HIGHLIGHT_LIMIT)).toEqual({ lines: [[{ text: "x", role: null }]], tooLong: false });
+  });
+});
+
+describe("tooLongToHighlight", () => {
+  it("is true only for a registered language above the limit", () => {
+    expect(tooLongToHighlight("x".repeat(11), "ts", 10)).toBe(true);
+    expect(tooLongToHighlight("x".repeat(10), "ts", 10)).toBe(false);
+    expect(tooLongToHighlight("x".repeat(11), null, 10)).toBe(false);
+    expect(tooLongToHighlight("x".repeat(11), "no-such-language", 10)).toBe(false);
+  });
+
+  it("agrees with highlightLines", () => {
+    const code = "const a = 1;\n".repeat(5);
+    expect(highlightLines(code, "ts", 10).tooLong).toBe(tooLongToHighlight(code, "ts", 10));
   });
 });

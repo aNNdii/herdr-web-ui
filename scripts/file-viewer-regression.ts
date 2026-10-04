@@ -17,7 +17,7 @@ const transcript = join(codexHome, "sessions", `rollout-2026-09-28T00-00-00-${th
 writeFileSync(transcript, [
   { type: "session_meta", payload: { id: thread, cwd: root } },
   { type: "response_item", payload: { type: "message", role: "user", content: [{ type: "input_text", text: "Show me the demo video." }] } },
-  { type: "response_item", payload: { type: "message", role: "assistant", phase: "final_answer", content: [{ type: "output_text", text: `Open [demo video](./preview.webm) or [notes](./notes.txt) or [guide](./docs/guide.md) or [big](./big.txt) or [file URI notes](${new URL(`file://${join(root, "notes.txt")}`).href}) or [folder](${new URL(`file://${root}`).href}).\n\n${new URL(`file://${join(root, "notes.txt")}`).href}\n\n\`\`\`ts\nconst answer = 42;\n\nexport { answer };\n\`\`\`` }] } },
+  { type: "response_item", payload: { type: "message", role: "assistant", phase: "final_answer", content: [{ type: "output_text", text: `Open [demo video](./preview.webm) or [notes](./notes.txt) or [guide](./docs/guide.md) or [big](./big.txt) or [big code](./big.ts) or [file URI notes](${new URL(`file://${join(root, "notes.txt")}`).href}) or [folder](${new URL(`file://${root}`).href}).\n\n${new URL(`file://${join(root, "notes.txt")}`).href}\n\n\`\`\`ts\nconst answer = 42;\n\nexport { answer };\n\`\`\`` }] } },
 ].map((row) => JSON.stringify(row)).join("\n"));
 const db = new Database(join(codexHome, "state_5.sqlite"));
 db.exec("CREATE TABLE threads (id TEXT, rollout_path TEXT, cwd TEXT, archived INTEGER, agent_role TEXT, created_at INTEGER, updated_at INTEGER, source TEXT, first_user_message TEXT)");
@@ -34,6 +34,8 @@ writeFileSync(join(root, "docs", "guide.md"), "# Guide\n\nSee [notes](../notes.t
 // the load limit is seeded below at its smallest choice, so this file, a little past it, stays small
 const TEXT_LOAD_LIMIT = 256 * 1024;
 writeFileSync(join(root, "big.txt"), "a line of plain text, 0123456789\n".repeat(Math.ceil(TEXT_LOAD_LIMIT / 30)).slice(0, TEXT_LOAD_LIMIT + 10));
+// code past the highlight limit (256 KB) but within the larger load limit (1 MB): shown whole, in plain text
+writeFileSync(join(root, "big.ts"), "export const value = 1;\n".repeat(Math.ceil((TEXT_LOAD_LIMIT + 1024) / 24)));
 let workspace: string | undefined;
 let server: ReturnType<typeof createServer> | undefined;
 let browser: Awaited<ReturnType<typeof chromium.launch>> | undefined;
@@ -55,7 +57,10 @@ try {
   browser = await chromium.launch({ executablePath: process.env.CHROME_PATH ?? "/opt/google/chrome/chrome", headless: true, args: ["--no-sandbox"] });
   const context = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
   const page = await context.newPage();
-  await page.addInitScript((textLoadLimit) => localStorage.setItem("herdr-web-ui:settings", JSON.stringify({ language: "en", textLoadLimit })), TEXT_LOAD_LIMIT);
+  // seeded once: a later step raises the load limit and reloads
+  await page.addInitScript((textLoadLimit) => {
+    if (localStorage.getItem("herdr-web-ui:settings") === null) localStorage.setItem("herdr-web-ui:settings", JSON.stringify({ language: "en", textLoadLimit }));
+  }, TEXT_LOAD_LIMIT);
   page.setDefaultTimeout(10_000);
   const errors: string[] = [];
   page.on("pageerror", (error) => errors.push(error.message));
@@ -204,7 +209,7 @@ try {
   await guide.getByRole("button", { name: "notes", exact: true }).click();
   const linked = page.getByRole("dialog", { name: "notes.txt", exact: true });
   await linked.waitFor();
-  assert.doesNotMatch(await linked.locator(".file-viewer-path").innerText(), /\/docs\//);
+  assert.doesNotMatch(await linked.locator(".file-viewer-meta").getAttribute("title") ?? "", /\/docs\//);
   console.log("PASS A link in a Markdown preview opens the file it names");
   await page.getByRole("button", { name: "Close file", exact: true }).click();
   await page.locator(".file-viewer").waitFor({ state: "hidden" });
@@ -212,10 +217,29 @@ try {
   // a text file past the load limit: shown in part, so it cannot be copied whole
   await page.getByRole("button", { name: "big", exact: true }).click();
   const big = page.getByRole("dialog", { name: "big.txt", exact: true });
-  await big.getByText("Showing the first", { exact: false }).waitFor();
+  // the note is in the header, where it is seen before the text
+  await big.locator(".file-viewer-status").getByText("Showing the first", { exact: false }).waitFor();
   assert.equal(await big.getByRole("button", { name: "Copy file", exact: true }).count(), 0);
-  assert.equal(await big.locator(".hl-note").count(), 0, "plain text is never too long to highlight");
-  console.log("PASS A text file past the load limit shows a note and no Copy");
+  assert.equal(await big.getByText("Too long to highlight").count(), 0, "plain text is never too long to highlight");
+  console.log("PASS A text file past the load limit says so in its header and has no Copy");
+  await page.getByRole("button", { name: "Close file", exact: true }).click();
+  await page.locator(".file-viewer").waitFor({ state: "hidden" });
+
+  // code too long to color: shown whole and plain, and the header says why. Only a load limit above
+  // the highlight limit lets such code arrive whole.
+  await page.evaluate(() => {
+    const settings = JSON.parse(localStorage.getItem("herdr-web-ui:settings") ?? "{}") as Record<string, unknown>;
+    localStorage.setItem("herdr-web-ui:settings", JSON.stringify({ ...settings, textLoadLimit: 1024 * 1024 }));
+  });
+  await page.goto(`${origin}/?pane=${encodeURIComponent(pane)}`);
+  await page.locator(".conn-live").waitFor();
+  await page.getByRole("button", { name: "big code", exact: true }).click();
+  const bigCode = page.getByRole("dialog", { name: "big.ts", exact: true });
+  await bigCode.locator(".file-viewer-status").getByText("Too long to highlight", { exact: true }).waitFor();
+  assert.equal(await bigCode.locator(".hl-note").count(), 0, "the note is not repeated under the code");
+  assert.equal(await bigCode.locator(".file-viewer-text .hl-keyword").count(), 0, "the code is plain");
+  await bigCode.getByRole("button", { name: "Copy file", exact: true }).waitFor();
+  console.log("PASS Code too long to highlight says so in its header, once");
   assert.deepEqual(errors, []);
 } finally {
   await browser?.close();

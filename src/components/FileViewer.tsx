@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState, type RefObject } from "react";
-import { Check, Code, Copy, Download, Eye, ExternalLink, FileText, WrapText, X } from "lucide-react";
+import { Fragment, useCallback, useEffect, useLayoutEffect, useRef, useState, type RefObject } from "react";
+import { Check, Code, Copy, Download, Eye, ExternalLink, WrapText, X } from "lucide-react";
 
 import "./FileViewer.css";
 import { DirectoryBrowser } from "./DirectoryBrowser.tsx";
@@ -11,7 +11,8 @@ import { formatBytes } from "../lib/bridgeProgress.ts";
 import { LOCAL_MACHINE } from "../../shared/machines.ts";
 import { useMachineApi, useMachineId } from "../lib/machineContext.tsx";
 import { copyText, selectContents } from "../lib/clipboard.ts";
-import { languageForPath } from "../lib/highlight.ts";
+import { pathParts } from "../lib/filePaths.ts";
+import { languageForPath, tooLongToHighlight } from "../lib/highlight.ts";
 import { useT } from "../lib/i18n.ts";
 import { useSettings } from "../lib/settings.ts";
 import { dropPartialLastLine } from "../lib/textPreview.ts";
@@ -135,6 +136,15 @@ export function FileViewer({ path: asked, paneId, onClose, onOpen }: FileViewerP
   const textFile = info?.kind === "text";
   const language = languageForPath(info?.path ?? path);
   const truncated = info !== null && info.size > textLoadLimit;
+  const codeShown = textFile && text !== null && !(language === "markdown" && mode === "preview");
+  const shownPath = info?.path ?? path;
+  const { stem, extension } = pathParts(info?.name ?? shownPath);
+  const { folder } = pathParts(shownPath);
+  // what holds for the whole file is said where it is seen first, not after a megabyte of text
+  const status = [
+    textFile && truncated && t("Showing the first {shown}", { shown: formatBytes(textLoadLimit) }),
+    codeShown && tooLongToHighlight(text, language, settings.highlightLimit) && t("Too long to highlight"),
+  ].filter((note): note is string => typeof note === "string");
   const body = (() => {
     if (directory !== null) return <DirectoryBrowser key={directory} start={directory} onOpenFile={onOpen ?? setPath} />;
     if (error !== null) return <p className="file-viewer-note" role="alert">{error}</p>;
@@ -155,10 +165,9 @@ export function FileViewer({ path: asked, paneId, onClose, onOpen }: FileViewerP
       case "pdf":
         return <iframe className="file-viewer-pdf" src={url} title={info.name} />;
       case "text":
-        return text === null ? <p className="file-viewer-note">{t("Opening…")}</p> : <>
-          <TextFileView path={info.path} text={text} language={language} mode={mode} onOpen={onOpen ?? setPath} sourceRef={sourceRef} />
-          {truncated && <p className="file-viewer-note">{t("Showing the first {shown} of {total}.", { shown: formatBytes(textLoadLimit), total: formatBytes(info.size) })}</p>}
-        </>;
+        return text === null
+          ? <p className="file-viewer-note">{t("Opening…")}</p>
+          : <TextFileView path={info.path} text={text} language={language} mode={mode} onOpen={onOpen ?? setPath} sourceRef={sourceRef} />;
       default:
         return <p className="file-viewer-note">{info.mime}, {formatBytes(info.size)}. This file can't be shown here; download it instead.</p>;
     }
@@ -167,23 +176,35 @@ export function FileViewer({ path: asked, paneId, onClose, onOpen }: FileViewerP
   return (
     <div className="modal-scrim file-viewer-scrim" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
       <section className="modal file-viewer" role="dialog" aria-modal="true" aria-label={info?.name ?? path}>
-        <header className="modal-header file-viewer-header">
+        {/* three groups, spaced apart: how the text shows, the file itself, the window */}
+        <header className={textFile ? "modal-header file-viewer-header file-viewer-header-text" : "modal-header file-viewer-header"}>
           <div className="file-viewer-title">
-            <h2 className="modal-title">{info?.name ?? path.split("/").pop()}</h2>
-            <p className="file-viewer-meta" title={info?.path ?? path}>
+            {/* a long name is cut inside its stem, so its type stays in view */}
+            <h2 className="modal-title"><span className="file-viewer-stem">{stem}</span>{extension}</h2>
+            <p className="file-viewer-meta" title={shownPath}>
               {info && <span className="file-viewer-size">{formatBytes(info.size)}</span>}
-              <span className="file-viewer-path"><span dir="ltr">{info?.path ?? path}</span></span>
+              {info && folder !== "" && <span className="file-viewer-dot" aria-hidden="true">·</span>}
+              {folder !== "" && <span className="file-viewer-path"><span dir="ltr">{folder}</span></span>}
             </p>
+            {/* a narrow screen breaks the line between notes, never inside one */}
+            {status.length > 0 && <p className="file-viewer-status">{status.map((note, index) => <Fragment key={note}>{index > 0 && " · "}<span>{note}</span></Fragment>)}</p>}
           </div>
-          {textFile && language === "markdown" && <div className="segmented file-viewer-mode" role="group" aria-label={t("View")}>
-            <button type="button" aria-pressed={mode === "preview"} aria-label={t("Preview")} title={t("Preview")} onClick={() => setChosen({ path, mode: "preview" })}><Eye aria-hidden="true" /><span className="file-viewer-mode-label" aria-hidden="true">{t("Preview")}</span></button>
-            <button type="button" aria-pressed={mode === "code"} aria-label={t("Code")} title={t("Code")} onClick={() => setChosen({ path, mode: "code" })}><Code aria-hidden="true" /><span className="file-viewer-mode-label" aria-hidden="true">{t("Code")}</span></button>
-          </div>}
-          {textFile && !(language === "markdown" && mode === "preview") && <button type="button" className="icon-button" aria-pressed={settings.wrapCode} aria-label={t("Wrap long lines")} title={t("Wrap long lines")} onClick={() => update({ wrapCode: !settings.wrapCode })}><WrapText aria-hidden="true" /></button>}
-          <a className="icon-button" href={url} target="_blank" rel="noopener" aria-label={textFile ? t("Raw") : t("Open in a new tab")} title={textFile ? t("Raw") : t("Open in a new tab")}>{textFile ? <FileText aria-hidden="true" /> : <ExternalLink aria-hidden="true" />}</a>
-          {textFile && text !== null && !truncated && <CopyFileButton text={text} sourceRef={sourceRef} onShowSource={showSourceToSelect} />}
-          <a className="icon-button" href={fileUrl(info?.path ?? path, paneId, true)} download={info?.name ?? true} aria-label={t("Download")} title={t("Download")}><Download aria-hidden="true" /></a>
-          <button type="button" className="icon-button" aria-label={t("Close file")} onClick={onClose}><X aria-hidden="true" /></button>
+          <div className="file-viewer-actions">
+            {textFile && <div className="file-viewer-group">
+              {language === "markdown" && <div className="segmented file-viewer-mode" role="group" aria-label={t("View")}>
+                <button type="button" aria-pressed={mode === "preview"} aria-label={t("Preview")} title={t("Preview")} onClick={() => setChosen({ path, mode: "preview" })}><Eye aria-hidden="true" /><span className="file-viewer-mode-label" aria-hidden="true">{t("Preview")}</span></button>
+                <button type="button" aria-pressed={mode === "code"} aria-label={t("Code")} title={t("Code")} onClick={() => setChosen({ path, mode: "code" })}><Code aria-hidden="true" /><span className="file-viewer-mode-label" aria-hidden="true">{t("Code")}</span></button>
+              </div>}
+              {!(language === "markdown" && mode === "preview") && <button type="button" className="icon-button" aria-pressed={settings.wrapCode} aria-label={t("Wrap long lines")} title={t("Wrap long lines")} onClick={() => update({ wrapCode: !settings.wrapCode })}><WrapText aria-hidden="true" /></button>}
+            </div>}
+            <div className="file-viewer-group">
+              {/* Raw and an image's "open" do the same: the file alone, in a new tab */}
+              <a className="icon-button" href={url} target="_blank" rel="noopener" aria-label={textFile ? t("Raw") : t("Open in a new tab")} title={textFile ? t("Raw") : t("Open in a new tab")}><ExternalLink aria-hidden="true" /></a>
+              {textFile && text !== null && !truncated && <CopyFileButton text={text} sourceRef={sourceRef} onShowSource={showSourceToSelect} />}
+              <a className="icon-button" href={fileUrl(shownPath, paneId, true)} download={info?.name ?? true} aria-label={t("Download")} title={t("Download")}><Download aria-hidden="true" /></a>
+            </div>
+          </div>
+          <button type="button" className="icon-button file-viewer-close" aria-label={t("Close file")} title={t("Close file")} onClick={onClose}><X aria-hidden="true" /></button>
         </header>
         <div className="file-viewer-body">{body}</div>
       </section>

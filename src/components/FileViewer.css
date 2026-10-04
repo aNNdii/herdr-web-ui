@@ -16,7 +16,8 @@
   /* Only the body may shrink/scroll: large media must not collapse the controls. */
   flex: none;
   min-width: 0;
-  gap: var(--space-1);
+  /* name, actions and Close: the groups stand apart by space alone, no dividers */
+  gap: var(--space-4);
 }
 
 .file-viewer-title {
@@ -24,10 +25,17 @@
   min-width: 0;
 }
 
+/* the extension never gives way: a long name is cut inside its stem ("2026-10-04-file-vie….md") */
 .file-viewer-title .modal-title {
+  display: flex;
+  min-width: 0;
+  white-space: nowrap;
+}
+
+.file-viewer-stem {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .file-viewer-meta {
@@ -40,10 +48,22 @@
   white-space: nowrap;
 }
 
-.file-viewer-size { flex: none; }
+.file-viewer-size,
+.file-viewer-dot { flex: none; }
 
-/* the folder part of a long path gives way first */
+/* what holds for the whole file (cut short, left plain): a line of its own, brighter than the facts above */
+.file-viewer-status {
+  margin: 0;
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: var(--fs-2xs);
+}
+
+.file-viewer-status > span { white-space: nowrap; }
+
+/* the folder (the name is the title already) gets only the room left, so it gives way first, from its start */
 .file-viewer-path {
+  flex: 1 1 0;
   min-width: 0;
   overflow: hidden;
   direction: rtl;
@@ -55,9 +75,23 @@
   flex: none;
 }
 
+.file-viewer-actions,
+.file-viewer-group {
+  display: flex;
+  align-items: center;
+}
+
+.file-viewer-actions {
+  flex: none;
+  gap: var(--space-4);
+}
+
+.file-viewer-group { gap: var(--space-1); }
+
+/* an "on" toggle carries the accent on its glyph, as the chosen side of Preview | Code does */
 .file-viewer-header .icon-button[aria-pressed="true"] {
   background: var(--bg-hover);
-  color: var(--text-strong);
+  color: var(--accent);
 }
 
 .file-viewer-header a.icon-button {
@@ -121,23 +155,43 @@
   min-width: 0;
 }
 
-/* a rendered document reads on the viewer's own background, like a page: no panel around it */
+/*
+ * A rendered document reads on the viewer's own background, like a page: no panel around it. Its
+ * text starts on the title's edge (the body's padding plus this one is the header's) and keeps a
+ * readable line length; the room to its right stays empty rather than stretching the lines.
+ */
 .file-viewer-markdown {
-  padding: var(--space-2) var(--space-3);
+  /* about 80 characters of prose: the upper end of a readable line */
+  max-width: 65ch;
+  padding: var(--space-2);
 }
 
-/* Preview | Code sits in the header with the actions */
-.file-viewer-mode {
-  flex: none;
-  margin-inline-end: var(--space-1);
-}
+.file-viewer-mode { flex: none; }
 
-/* on a phone the switch and up to five actions leave the name no room: the name takes the first
-   row, the switch starts the second and the actions keep to its right */
+/*
+ * On a narrow screen a text file's switch and actions leave the name no room. The name and Close
+ * keep the first row, so Close stays in its corner for every file; the actions take the second,
+ * how the text shows on the left and the file's own actions on the right.
+ */
 @media (max-width: 600px) {
-  .file-viewer-header:has(.file-viewer-mode) { flex-wrap: wrap; }
-  .file-viewer-header:has(.file-viewer-mode) .file-viewer-title { flex-basis: 100%; }
-  .file-viewer-mode { margin-inline-end: auto; }
+  .file-viewer-header-text {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas: "title close" "actions actions";
+    row-gap: var(--space-2);
+  }
+
+  .file-viewer-header-text .file-viewer-title { grid-area: title; }
+  /* in the corner, however many lines the name's block takes */
+  .file-viewer-header-text .file-viewer-close {
+    grid-area: close;
+    align-self: start;
+  }
+  .file-viewer-header-text .file-viewer-actions {
+    grid-area: actions;
+    justify-content: space-between;
+  }
+
   .file-viewer-mode-label { display: none; }
   .file-viewer-mode > button { padding: 0 var(--space-2); }
 }

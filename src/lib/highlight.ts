@@ -158,6 +158,11 @@ function tokenize(code: string, language: string): Token[][] {
   return lines;
 }
 
+/** Code in `language` that `highlightLines` leaves plain for its length: a registered language above `limit` characters. */
+export function tooLongToHighlight(code: string, language: string | null, limit: number): boolean {
+  return language !== null && lowlight.registered(language) && code.length > limit;
+}
+
 /**
  * Tokenize `code` per line. `limit` counts characters (`code.length`), not bytes. Never throws:
  * a null, unknown or unregistered language, code above `limit` (`tooLong`) and any highlighter
@@ -166,7 +171,7 @@ function tokenize(code: string, language: string): Token[][] {
 export function highlightLines(code: string, language: string | null, limit: number): HighlightResult {
   const source = code.replace(/\r\n/g, "\n").replace(/\n$/, "");
   if (language === null || !lowlight.registered(language)) return { lines: plainLines(source), tooLong: false };
-  if (code.length > limit) return { lines: plainLines(source), tooLong: true };
+  if (tooLongToHighlight(code, language, limit)) return { lines: plainLines(source), tooLong: true };
   try {
     return { lines: tokenize(source, language), tooLong: false };
   } catch {

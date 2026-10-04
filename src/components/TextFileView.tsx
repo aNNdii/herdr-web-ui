@@ -28,6 +28,6 @@ export function TextFileView({ path, text, language, mode, onOpen, sourceRef }: 
   return <div className="file-viewer-content" ref={sourceRef}>
     {markdown && mode === "preview"
       ? <OpenFileContext.Provider value={openLink}><Markdown className="file-viewer-markdown">{text}</Markdown></OpenFileContext.Provider>
-      : <HighlightedCode className="file-viewer-text" code={text} language={language} limit={settings.highlightLimit} lineNumbers wrap={settings.wrapCode} />}
+      : <HighlightedCode className="file-viewer-text" code={text} language={language} limit={settings.highlightLimit} tooLongNote={false} lineNumbers wrap={settings.wrapCode} />}
   </div>;
 }

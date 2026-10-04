@@ -105,7 +105,8 @@ async function checkLayout(): Promise<void> {
             const dialog = document.querySelector<HTMLElement>(".file-viewer")!;
             const header = document.querySelector<HTMLElement>(".file-viewer-header")!;
             const body = document.querySelector<HTMLElement>(".file-viewer-body")!;
-            const title = document.querySelector<HTMLElement>(".file-viewer-title .modal-title")!;
+            // a long name is cut inside its stem; the extension stays whole
+            const title = document.querySelector<HTMLElement>(".file-viewer-title .file-viewer-stem")!;
             const controls = [...header.querySelectorAll<HTMLElement>(".icon-button")].map((element) => {
               const bounds = rect(element);
               // Rounded button corners do not belong to the hit target.
@@ -129,6 +130,7 @@ async function checkLayout(): Promise<void> {
           }
           assert.equal(geometry.title.overflow, "ellipsis", `${label}: title truncation`);
           assert.ok(geometry.title.scrollWidth > geometry.title.clientWidth, `${label}: long title is constrained`);
+          assert.ok((await page.locator(".file-viewer-title .modal-title").innerText()).endsWith(".svg"), `${label}: the extension stays in the title`);
           assert.ok(geometry.documentWidth <= scenario.width && geometry.documentHeight <= scenario.height, `${label}: no document scrolling`);
           // Stress overflowing content beyond the ordinary fitted preview: only the body scrolls.
           await page.locator(".file-viewer-media").evaluate((element) => {
@@ -154,7 +156,8 @@ async function checkLayout(): Promise<void> {
         }
       } finally { await context.close(); }
     }
-    // A text file adds Wrap, Raw and Copy to the header: on a phone they all stay on one row inside the dialog.
+    // A text file adds Wrap and Copy to the header: on a phone the name keeps the first row with Close in
+    // its corner, and the four actions share the second row inside the dialog.
     const phone = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, locale: "en-US" });
     try {
       const page = await phone.newPage();
@@ -166,16 +169,22 @@ async function checkLayout(): Promise<void> {
       await page.getByRole("button", { name: "Copy file", exact: true }).waitFor();
       const dialog = await page.locator(".file-viewer").boundingBox();
       assert.ok(dialog, "text: dialog is laid out");
-      const buttons = page.locator(".file-viewer-header .icon-button");
-      assert.equal(await buttons.count(), 5, "text: Wrap, Raw, Copy, Download and Close");
-      for (let index = 0; index < 5; index++) {
+      const buttons = page.locator(".file-viewer-actions .icon-button");
+      assert.equal(await buttons.count(), 4, "text: Wrap, Raw, Copy and Download");
+      const title = (await page.locator(".file-viewer-title").boundingBox())!;
+      const close = (await page.getByRole("button", { name: "Close file", exact: true }).boundingBox())!;
+      assert.ok(close.y < title.y + title.height && close.y + close.height > title.y, "text: Close shares the name's row");
+      assert.ok(close.x + close.width >= dialog.x + dialog.width - 32, "text: Close sits in the right corner");
+      for (let index = 0; index < 4; index++) {
         const box = await buttons.nth(index).boundingBox();
         assert.ok(box, `text: button ${index} is laid out`);
         assert.equal(box.y, (await buttons.nth(0).boundingBox())!.y, `text: button ${index} shares the row`);
+        assert.ok(box.y >= title.y + title.height, `text: button ${index} below the name`);
         assert.ok(box.x >= dialog.x && box.x + box.width <= dialog.x + dialog.width, `text: button ${index} inside the dialog`);
       }
+      assert.ok((await page.locator(".file-viewer-title .modal-title").innerText()).endsWith(".ts"), "text: the extension stays in the title");
       assert.deepEqual(errors, []);
-      console.log("PASS text: header buttons share one row inside the dialog at 390px");
+      console.log("PASS text: name and Close on the first row, the actions on the second, at 390px");
     } finally { await phone.close(); }
   } finally {
     await browser?.close();

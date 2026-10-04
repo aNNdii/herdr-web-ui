@@ -286,7 +286,7 @@ export const KO: Record<string, string> = {
   // ---- files ----
   "Files": "파일",
   "Close files": "파일 닫기",
-  "Showing the first {shown} of {total}.": "전체 {total} 중 처음 {shown}만 보입니다.",
+  "Showing the first {shown}": "처음 {shown}만 표시",
   "Open in a new tab": "새 탭에서 열기",
   "View": "보기",
   "Preview": "미리보기",
