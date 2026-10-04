@@ -86,7 +86,11 @@ export interface Settings {
   voicePolishTerminal: boolean;
   /** the file viewer wraps long lines instead of scrolling sideways */
   wrapCode: boolean;
-  /** the largest text file the file viewer syntax-highlights, in bytes; one of SIZE_LIMIT_CHOICES */
+  /**
+   * the longest text the file viewer syntax-highlights, in characters (`code.length`), one of
+   * SIZE_LIMIT_CHOICES. Shown as "256 KB": code is nearly all ASCII, one byte a character, and a
+   * size is what a reader compares with the file's. The text the viewer loads is cut in bytes.
+   */
   highlightLimit: number;
   /** how much of a text file the file viewer loads, in bytes; one of SIZE_LIMIT_CHOICES */
   textLoadLimit: number;
@@ -97,7 +101,7 @@ export interface Settings {
 export const MARKDOWN_WIDTHS = ["readable", "full"] as const;
 export type MarkdownWidth = (typeof MARKDOWN_WIDTHS)[number];
 
-/** the byte sizes the file viewer's limits offer: 256 KB and 1 MB */
+/** the sizes the file viewer's limits offer, 256 KB and 1 MB: bytes loaded, characters highlighted */
 export const SIZE_LIMIT_CHOICES = [256 * 1024, 1024 * 1024] as const;
 
 function sizeLimit(value: unknown, fallback: number): number {
