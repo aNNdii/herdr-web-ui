@@ -108,7 +108,8 @@ Code in chat and in the file viewer is colored by `--syntax-*` tokens. Four foll
 `--syntax-comment` is `--text-dim`, `--syntax-function` is `--accent`, `--syntax-inserted` is
 `--status-done` and `--syntax-deleted` is `--status-blocked`. The other six are literals per block
 (each at least 4.5:1 on `--bg-panel` and `--bg-elevated`); light charcoal uses the light report
-column.
+column. Catppuccin follows Catppuccin's own mapping: keywords are mauve, so `--syntax-function` is
+blue there instead of `--accent`, and Latte's colors are darkened to stay readable.
 
 | Block | keyword | string | number | type | variable | meta |
 |-------|---------|--------|--------|------|----------|------|
@@ -117,6 +118,10 @@ column.
 | Dark report | `#f78c6c` | `#3ddc97` | `#f5b544` | `#7fd4ff` | `#c9d1dc` | `#b392f0` |
 | Light report and charcoal | `#b3261e` | `#22743a` | `#8a5300` | `#0b6e8a` | `#3b3b3b` | `#6f42c1` |
 | Dark charcoal | `#d7a08a` | `#a7b789` | `#c2a2af` | `#9fb4c2` | `#dcd8d0` | `#b8a5c9` |
+| Catppuccin Mocha | `#cba6f7` | `#a6e3a1` | `#fab387` | `#f9e2af` | `#f5e0dc` | `#f5c2e7` |
+| Catppuccin Latte | `#712fc6` | `#2f7620` | `#b44201` | `#905c13` | `#4c4f69` | `#bc1d91` |
+
+`--syntax-function` in Catppuccin: Mocha `#89b4fa`, Latte `#0b59f4`.
 
 ### Rules
 - Amber is the one chrome color. Accent (selected, focused, informational) and primary (the user's

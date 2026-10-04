@@ -385,6 +385,14 @@
   --term-fg: #cdd6f4;
   --term-cursor: #f5e0dc;
   --term-selection: #3b3d4f;
+  /* Catppuccin's own mapping: keywords mauve, so functions take blue instead of --accent */
+  --syntax-keyword: #cba6f7;
+  --syntax-string: #a6e3a1;
+  --syntax-number: #fab387;
+  --syntax-type: #f9e2af;
+  --syntax-variable: #f5e0dc;
+  --syntax-meta: #f5c2e7;
+  --syntax-function: #89b4fa;
 }
 
 [data-theme="light"][data-palette="catppuccin"] {
@@ -421,6 +429,13 @@
   --term-fg: #4c4f69;
   --term-cursor: #dc8a78;
   --term-selection: #d2d4dc;
+  --syntax-keyword: #712fc6;
+  --syntax-string: #2f7620;
+  --syntax-number: #b44201;
+  --syntax-type: #905c13;
+  --syntax-variable: #4c4f69;
+  --syntax-meta: #bc1d91;
+  --syntax-function: #0b59f4;
 }
 
 [data-density="compact"] {
