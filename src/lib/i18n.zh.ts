@@ -79,8 +79,6 @@ export const ZH: Record<string, string> = {
   "Load text files up to": "文本文件加载上限",
   "Highlight files up to": "语法高亮上限",
   "Markdown width": "Markdown 宽度",
-  "Narrow": "窄",
-  "Medium": "适中",
   "Full width": "全宽",
   "Show source": "显示源代码",
   "Shortcuts": "快捷键",

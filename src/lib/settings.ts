@@ -90,11 +90,11 @@ export interface Settings {
   highlightLimit: number;
   /** how much of a text file the file viewer loads, in bytes; one of SIZE_LIMIT_CHOICES */
   textLoadLimit: number;
-  /** the line length of a Markdown preview: about 80 or 120 characters (centered), or the viewer's width */
+  /** the line length of a Markdown preview: about 120 characters, centered, or the viewer's width */
   markdownWidth: MarkdownWidth;
 }
 
-export const MARKDOWN_WIDTHS = ["narrow", "medium", "full"] as const;
+export const MARKDOWN_WIDTHS = ["readable", "full"] as const;
 export type MarkdownWidth = (typeof MARKDOWN_WIDTHS)[number];
 
 /** the byte sizes the file viewer's limits offer: 256 KB and 1 MB */
@@ -140,7 +140,7 @@ export const DEFAULT_SETTINGS: Settings = {
   wrapCode: false,
   highlightLimit: 256 * 1024,
   textLoadLimit: 1024 * 1024,
-  markdownWidth: "medium",
+  markdownWidth: "readable",
 };
 
 export const QUICK_REPLIES_MAX = 12;

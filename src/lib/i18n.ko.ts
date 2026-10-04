@@ -75,8 +75,6 @@ export const KO: Record<string, string> = {
   "Load text files up to": "텍스트 파일 불러오기 한도",
   "Highlight files up to": "구문 강조 한도",
   "Markdown width": "Markdown 너비",
-  "Narrow": "좁게",
-  "Medium": "보통",
   "Full width": "전체 너비",
   "Show source": "소스 보기",
   "Shortcuts": "단축키",

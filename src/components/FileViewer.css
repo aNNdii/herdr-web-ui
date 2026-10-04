@@ -186,16 +186,15 @@
 
 /*
  * A rendered document reads on the viewer's own background, like a page: no panel around it. The
- * Markdown width setting keeps it to about 80 or 120 characters a line, centered as an image or a
- * PDF is, or lets it fill the viewer (then its text starts on the title's edge).
+ * Markdown width setting keeps it to about 120 characters a line, centered as an image or a PDF
+ * is, or lets it fill the viewer (then its text starts on the title's edge).
  */
 .file-viewer-markdown {
   margin-inline: auto;
   padding: var(--space-2);
 }
 
-.file-viewer-markdown-narrow { max-width: 60ch; }
-.file-viewer-markdown-medium { max-width: 90ch; }
+.file-viewer-markdown-readable { max-width: 90ch; }
 
 /*
  * On a narrow screen two or more actions leave the name and its notes no room. The name and Close

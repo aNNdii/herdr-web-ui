@@ -77,8 +77,6 @@ export const JA: Record<string, string> = {
   "Load text files up to": "テキストファイルの読み込み上限",
   "Highlight files up to": "シンタックスハイライトの上限",
   "Markdown width": "Markdown の幅",
-  "Narrow": "狭い",
-  "Medium": "標準",
   "Full width": "全幅",
   "Show source": "ソースを表示",
   "Shortcuts": "ショートカット",

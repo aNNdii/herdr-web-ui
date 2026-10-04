@@ -141,7 +141,7 @@ export function SettingsDialog({ open, onClose, actions, updates, auth, onEnable
   const usage = useUsage(open && settings.showUsage);
   const t = useT();
   // literal keys, so the i18n check finds them
-  const markdownWidthLabel = { narrow: t("Narrow"), medium: t("Medium"), full: t("Full width") };
+  const markdownWidthLabel = { readable: t("Default"), full: t("Full width") };
   const installPrompt = useInstallPrompt();
   const firstControlRef = useRef<HTMLButtonElement>(null);
   // the Sound switch as last set: the preview waits for the audio, and must not play once it is off

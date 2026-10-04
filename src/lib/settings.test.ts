@@ -318,8 +318,8 @@ it("keeps the file viewer's wrap and size limits to the offered choices", () => 
   }
 });
 
-it("keeps the Markdown preview's width to narrow, medium or full, medium by default", () => {
-  expect(DEFAULT_SETTINGS.markdownWidth).toBe("medium");
+it("keeps the Markdown preview's width to readable or full, readable by default", () => {
+  expect(DEFAULT_SETTINGS.markdownWidth).toBe("readable");
   for (const width of MARKDOWN_WIDTHS) expect(sanitizeSettings({ markdownWidth: width }).markdownWidth).toBe(width);
-  for (const bad of ["wide", "", null, 80]) expect(sanitizeSettings({ markdownWidth: bad }).markdownWidth).toBe("medium");
+  for (const bad of ["narrow", "medium", "wide", "", null, 80]) expect(sanitizeSettings({ markdownWidth: bad }).markdownWidth).toBe("readable");
 });
