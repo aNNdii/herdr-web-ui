@@ -7,6 +7,21 @@ between releases do not reach them. Remote-PC runtime bundles are versioned sepa
 
 ## [Unreleased]
 
+### Added
+- The file viewer renders a Markdown file as a **Preview**, with **Show source** for its text,
+  and shows every text file as highlighted code with line numbers. **Raw** opens the file in a new
+  tab and **Copy** copies the file; a file cut short says so in its size (`256 KB of 1.3 MB`), and a
+  warning sign there marks it, or one too long to color, with the reason as its tooltip. Code
+  blocks in the chat are highlighted too. **Settings → File viewer** sets line wrapping, the width
+  of a Markdown preview, how much of a text file is loaded and up to what size it is highlighted.
+- A task list (`- [x] done`, `- [ ] open`) in the chat and in a Markdown preview shows a checked or
+  empty box instead of the brackets.
+
+### Changed
+- The file viewer offers a download only for a file it cannot show; every other file opens whole in
+  a new tab, where it can be saved. A text file loads up to 1 MB by default (was 256 KB), and a size
+  under 10 MB shows one decimal (`1.3 MB`), in the viewer and in a bridge update's progress.
+
 ### Fixed
 - Switching to another pane no longer shows the previous pane's chat for a moment before the
   new one loads.
@@ -40,19 +55,6 @@ between releases do not reach them. Remote-PC runtime bundles are versioned sepa
   the page's own audio, so it is heard when a macOS Focus or Do Not Disturb silences system
   notifications. Off until chosen; the tab needs one tap or key before it may play.
   ([#346](https://github.com/devswha/herdr-web-ui/pull/346) by @WOULDU-pres)
-- The file viewer renders a Markdown file as a **Preview**, with **Show source** for its text,
-  and shows every text file as highlighted code with line numbers. **Raw** opens the file in a new
-  tab and **Copy** copies the file; a file cut short says so in its size (`256 KB of 1.3 MB`), and a
-  warning sign there marks it, or one too long to color, with the reason as its tooltip. Code
-  blocks in the chat are highlighted too. **Settings → File viewer** sets line wrapping, the width
-  of a Markdown preview, how much of a text file is loaded and up to what size it is highlighted.
-- A task list (`- [x] done`, `- [ ] open`) in the chat and in a Markdown preview shows a checked or
-  empty box instead of the brackets.
-
-### Changed
-- The file viewer offers a download only for a file it cannot show; every other file opens whole in
-  a new tab, where it can be saved. A text file loads up to 1 MB by default (was 256 KB), and a size
-  under 10 MB shows one decimal (`1.3 MB`), in the viewer and in a bridge update's progress.
 
 ### Fixed
 - On an Android phone, dragging down at the top of a chat no longer reloads the app. The drag
