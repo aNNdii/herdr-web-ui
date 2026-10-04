@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type RefObject } from "react";
-import { Check, Copy, Download, ExternalLink, FileText, WrapText, X } from "lucide-react";
+import { Check, Code, Copy, Download, Eye, ExternalLink, FileText, WrapText, X } from "lucide-react";
 
 import "./FileViewer.css";
 import { DirectoryBrowser } from "./DirectoryBrowser.tsx";
@@ -156,7 +156,7 @@ export function FileViewer({ path: asked, paneId, onClose, onOpen }: FileViewerP
         return <iframe className="file-viewer-pdf" src={url} title={info.name} />;
       case "text":
         return text === null ? <p className="file-viewer-note">{t("Opening…")}</p> : <>
-          <TextFileView path={info.path} text={text} language={language} mode={mode} onModeChange={(next) => setChosen({ path, mode: next })} onOpen={onOpen ?? setPath} sourceRef={sourceRef} />
+          <TextFileView path={info.path} text={text} language={language} mode={mode} onOpen={onOpen ?? setPath} sourceRef={sourceRef} />
           {truncated && <p className="file-viewer-note">{t("Showing the first {shown} of {total}.", { shown: formatBytes(textLoadLimit), total: formatBytes(info.size) })}</p>}
         </>;
       default:
@@ -175,6 +175,10 @@ export function FileViewer({ path: asked, paneId, onClose, onOpen }: FileViewerP
               <span className="file-viewer-path"><span dir="ltr">{info?.path ?? path}</span></span>
             </p>
           </div>
+          {textFile && language === "markdown" && <div className="segmented file-viewer-mode" role="group" aria-label={t("View")}>
+            <button type="button" aria-pressed={mode === "preview"} aria-label={t("Preview")} title={t("Preview")} onClick={() => setChosen({ path, mode: "preview" })}><Eye aria-hidden="true" /><span className="file-viewer-mode-label" aria-hidden="true">{t("Preview")}</span></button>
+            <button type="button" aria-pressed={mode === "code"} aria-label={t("Code")} title={t("Code")} onClick={() => setChosen({ path, mode: "code" })}><Code aria-hidden="true" /><span className="file-viewer-mode-label" aria-hidden="true">{t("Code")}</span></button>
+          </div>}
           {textFile && !(language === "markdown" && mode === "preview") && <button type="button" className="icon-button" aria-pressed={settings.wrapCode} aria-label={t("Wrap long lines")} title={t("Wrap long lines")} onClick={() => update({ wrapCode: !settings.wrapCode })}><WrapText aria-hidden="true" /></button>}
           <a className="icon-button" href={url} target="_blank" rel="noopener" aria-label={textFile ? t("Raw") : t("Open in a new tab")} title={textFile ? t("Raw") : t("Open in a new tab")}>{textFile ? <FileText aria-hidden="true" /> : <ExternalLink aria-hidden="true" />}</a>
           {textFile && text !== null && !truncated && <CopyFileButton text={text} sourceRef={sourceRef} onShowSource={showSourceToSelect} />}

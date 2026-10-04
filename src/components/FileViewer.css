@@ -124,17 +124,25 @@
   min-width: 0;
 }
 
+/* a rendered document reads on the viewer's own background, like a page: no panel around it */
 .file-viewer-markdown {
-  padding: var(--space-3);
-  border: var(--hairline) solid var(--border);
-  border-radius: var(--radius-md);
-  background: var(--bg-panel);
+  padding: var(--space-2) var(--space-3);
 }
 
-.file-viewer-toolbar {
-  align-self: stretch;
-  display: flex;
-  margin-bottom: var(--space-3);
+/* Preview | Code sits in the header with the actions */
+.file-viewer-mode {
+  flex: none;
+  margin-inline-end: var(--space-1);
+}
+
+/* on a phone the switch and up to five actions leave the name no room: the name takes the first
+   row, the switch starts the second and the actions keep to its right */
+@media (max-width: 600px) {
+  .file-viewer-header:has(.file-viewer-mode) { flex-wrap: wrap; }
+  .file-viewer-header:has(.file-viewer-mode) .file-viewer-title { flex-basis: 100%; }
+  .file-viewer-mode { margin-inline-end: auto; }
+  .file-viewer-mode-label { display: none; }
+  .file-viewer-mode > button { padding: 0 var(--space-2); }
 }
 
 .file-viewer-note {
@@ -166,6 +174,12 @@
   .file-viewer-header .icon-button {
     width: max(44px, var(--touch-target));
     height: max(44px, var(--touch-target));
+  }
+
+  /* with its 2px inset and hairline the switch is as tall as the icon buttons beside it */
+  .file-viewer-mode > button {
+    min-width: 38px;
+    height: 38px;
   }
 
   .file-viewer-media { max-height: max(0px, calc(var(--app-height, 100dvh) - 120px)); }
