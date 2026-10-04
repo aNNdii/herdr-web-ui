@@ -229,6 +229,21 @@ describe("numbered lists as agents write them", () => {
   };
   const lists = (source: string) => parseMarkdown(source).map((block) => block.type === "list" ? { start: block.start ?? 1, items: block.items.length } : block.type);
 
+  it("reads a task list item's box as checked or open, and keeps the rest as its text", () => {
+    const [block] = parseMarkdown("- [x] done\n- [ ] open\n- [X] also done\n- [ ]\n- [y] not a box\n- plain");
+    expect((block as ListBlock).items.map((item) => [item.checked, item.content])).toEqual([
+      [true, [{ type: "text", value: "done" }]],
+      [false, [{ type: "text", value: "open" }]],
+      [true, [{ type: "text", value: "also done" }]],
+      [false, []],
+      [undefined, [{ type: "text", value: "[y] not a box" }]],
+      [undefined, [{ type: "text", value: "plain" }]],
+    ]);
+    const html = render("1. step\n   - [x] done\n   - [ ] open");
+    expect(html).toMatch(/<li class="markdown-task"><span class="markdown-task-box" role="checkbox" aria-checked="true" aria-disabled="true"><svg[^]*?<\/svg><\/span><span>done<\/span><\/li>/);
+    expect(html).toContain('<li class="markdown-task"><span class="markdown-task-box" role="checkbox" aria-checked="false" aria-disabled="true"></span><span>open</span></li>');
+  });
+
   it("keeps one list across blank lines between its items", () => {
     expect(lists("1. a\n\n2. b\n\n3. c")).toEqual([{ start: 1, items: 3 }]);
   });

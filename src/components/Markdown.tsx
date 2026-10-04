@@ -65,7 +65,10 @@ function List({ block }: { block: ListBlock }) {
   return (
     <Tag className="markdown-list" start={block.ordered ? block.start : undefined}>
       {block.items.map((item, index) => (
-        <li key={index}>
+        <li key={index} className={item.checked === undefined ? undefined : "markdown-task"}>
+          {/* a task's box shows its state; the agent's text owns it, so it cannot be ticked here. Drawn,
+              not an <input>: a disabled checkbox is greyed by the browser and ignores the accent */}
+          {item.checked !== undefined && <span className="markdown-task-box" role="checkbox" aria-checked={item.checked} aria-disabled="true">{item.checked && <Check aria-hidden="true" />}</span>}
           <Inline nodes={item.content} />
           {item.blocks !== undefined && <Blocks blocks={item.blocks} />}
         </li>
