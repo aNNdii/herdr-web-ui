@@ -38,7 +38,8 @@
   border-color: var(--accent);
 }
 
-/* Delete stands apart from the two that leave the comment as it is */
+/* Delete stands apart from the two that leave the comment as it is, and stays quiet: a ghost
+   button, not a red one beside Save, since deleting is not what the dialog is for */
 .comment-editor-delete {
   margin-right: auto;
 }

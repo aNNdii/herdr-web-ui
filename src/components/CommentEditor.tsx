@@ -110,7 +110,7 @@ export function CommentEditor({ block, initialComment, onSave, onClose }: Commen
           />
         </div>
         <footer className="modal-footer">
-          {initialComment !== "" && <button type="button" className="btn btn-danger comment-editor-delete" onClick={() => onSave("")}>{t("Delete")}</button>}
+          {initialComment !== "" && <button type="button" className="btn btn-ghost comment-editor-delete" onClick={() => onSave("")}>{t("Delete")}</button>}
           <button type="button" className="btn" onClick={onClose}>{t("Cancel")}</button>
           <button type="button" className="btn btn-primary" onClick={save}>{t("Save")}</button>
         </footer>

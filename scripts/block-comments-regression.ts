@@ -204,13 +204,26 @@ try {
     assert.equal(await page.locator("p.is-commented + .block-comment-row").innerText(), "Explain why, briefly");
 
     await page.locator(".markdown-block.is-commented + .block-comment-row").click();
-    // Delete stays a danger button under the pointer, not the neutral grey of the others
+    // Delete is not what the dialog is for: a quiet ghost button, not a red one beside Save
     const del = editor.getByRole("button", { name: "Delete", exact: true });
-    const rest = await del.evaluate((node) => getComputedStyle(node).borderColor);
-    await del.hover();
+    assert.equal(await del.evaluate((node) => node.classList.contains("btn-ghost") && !node.classList.contains("btn-danger")), true, "Delete is a ghost button");
+    if (evidence) await editor.screenshot({ path: join(evidence, "block-comments-editor-edit.png") });
+    // a danger button elsewhere (a confirm, Remove PC) stays one under the pointer, not the neutral grey of the others
+    await page.evaluate(() => {
+      const button = document.createElement("button");
+      button.className = "btn btn-danger";
+      button.id = "danger-probe";
+      button.textContent = "Remove";
+      button.style.cssText = "position:fixed;left:8px;top:8px;z-index:100000";
+      document.body.append(button);
+    });
+    const probe = page.locator("#danger-probe");
+    const rest = await probe.evaluate((node) => getComputedStyle(node).borderColor);
+    await probe.hover();
     await page.waitForTimeout(250);
-    const hovered = await del.evaluate((node) => getComputedStyle(node).borderColor);
-    assert.equal(hovered, rest, "Delete keeps its danger border on hover");
+    const hovered = await probe.evaluate((node) => getComputedStyle(node).borderColor);
+    assert.equal(hovered, rest, "a danger button keeps its danger border on hover");
+    await probe.evaluate((node) => node.remove());
     await del.click();
     await editor.waitFor({ state: "hidden" });
     assert.equal(await page.locator(".composer-comment-open").count(), 2);
@@ -293,6 +306,13 @@ try {
     const itemBox = (await item.boundingBox())!;
     const badge = (await ownAdd(item).boundingBox())!;
     assert.ok(badge.y < itemBox.y && badge.x + badge.width > itemBox.x + itemBox.width, "the + stands out past the block's top right corner");
+    // the badge is drawn small, but a finger gets the whole touch target around it
+    const reach = await ownAdd(item).evaluate((node, edge) => {
+      const box = node.getBoundingClientRect();
+      const hit = document.elementFromPoint(box.left - edge, box.top + box.height / 2);
+      return hit === node || node.contains(hit);
+    }, 4);
+    assert.ok(reach, "a tap just beside the + still reaches it");
     if (evidence) await page.screenshot({ path: join(evidence, "block-comments-phone-selected.png"), clip: { x: 0, y: Math.max(0, itemBox.y - 60), width: 390, height: 160 } });
     await page.locator(".chat-turn-user .chat-bubble").tap();
     await page.locator(".is-commentable.is-selected").waitFor({ state: "detached" });
@@ -318,6 +338,21 @@ try {
     await page.waitForTimeout(300);
     assert.equal(await page.locator(".is-commentable.is-selected").count(), 0, "a tap on a link does not choose its paragraph");
     console.log("PASS phone: a link tap opens the link and leaves the block alone");
+
+    // a comment pill: both its halves are a finger's size
+    await item.tap();
+    await shown(ownAdd(item));
+    await ownAdd(item).tap();
+    await editor.waitFor();
+    await editor.getByRole("textbox", { name: "Comment" }).fill("On a phone");
+    await editor.getByRole("button", { name: "Save", exact: true }).tap();
+    await editor.waitFor({ state: "hidden" });
+    const touchTarget = await page.evaluate(() => parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--touch-target")));
+    for (const part of [".composer-comment-open", ".composer-comment-remove"]) {
+      const box = (await page.locator(part).first().boundingBox())!;
+      assert.ok(box.height >= touchTarget && box.width >= touchTarget, `${part} is ${box.width}x${box.height}, under the ${touchTarget}px touch target`);
+    }
+    console.log("PASS phone: the + and the comment pills are touch-sized");
     assert.deepEqual(errors, []);
     await page.context().close();
   }

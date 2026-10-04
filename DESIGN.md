@@ -252,7 +252,10 @@ One set for both themes: the card is island black wherever it shows.
 
 ### Button (`.btn`, `.icon-button`)
 - `.btn` is a medium text control. Variants: neutral, `.btn-primary`, `.btn-danger`, `.btn-ghost`.
-  Primary uses `--primary`; danger uses danger tint plus blocked border; ghost removes fill/edge.
+  Primary uses `--primary`; danger uses danger tint plus blocked border, and keeps both a shade
+  stronger under the pointer instead of the neutral hover grey; ghost removes fill/edge.
+- A destructive action that is not what its dialog is for (Delete in the comment editor, a device's
+  first Revoke) is ghost; danger is for the confirmation.
 - `.icon-button` is a square unlabeled visual control with mandatory `aria-label`; `.is-outlined`
   adds the border. Both families use `--control-h`, `--radius-md`, focus ring, hover and disabled.
 - Coarse pointers grow controls to `--touch-target`.
@@ -454,6 +457,17 @@ One set for both themes: the card is island black wherever it shows.
 - Markdown supports headings, lists, links, quotes, tables, inline/fenced code and code-copy actions.
   Code blocks never scroll inside: one longer than 30 lines opens at its first 20 behind **Show all N lines**.
   Thinking renders as a folded block only when **Show thinking** is enabled.
+- Block comments (`BlockComments.css`): every part of a final reply (paragraph, heading, list item,
+  code block, table, display formula, a whole blockquote) takes a comment. Hovering a part for
+  150ms tints it with an 8% `--accent` mix and shows its comment button (`MessageSquarePlus`,
+  hairline, `--radius-sm`); on a touch screen a tap chooses the part. Beside a chat column of
+  880px and more the button sits in the left gutter, so no text moves; narrower, it is a 28px badge
+  on the part's top right corner, with a tap area of `--touch-target`. A commented part gets an
+  `--accent` bar of `--rail-w` and its comment in `--fs-sm` `--text-dim` right under it, clamped to
+  two lines; a click there edits it.
+- The comment editor is a 560px `.modal` (a bottom sheet on a phone): the part quoted on `--bg`
+  with a `--border-strong` rail, a field that grows from one line to four, then Delete (ghost, on
+  the left), Cancel and Save.
 - Auto-follow stops when the reader scrolls up; later output raises a **New messages** pill.
 
 ### Work block (`.work-block`, `.work-row`)
@@ -486,6 +500,10 @@ One set for both themes: the card is island black wherever it shows.
   completion popover; inside, ONE row — attach control | auto-growing textarea | Send / Queue /
   Stop — with the controls bottom-aligned so they stay beside the last line as the box grows;
   the image strip is its own row above that line.
+- Block comments waiting for the next message are pills in a row above the image strip, in reading
+  order: `--bg-panel`, hairline, `--radius-pill`, `--fs-xs`, the quoted part ellipsized beside a
+  `--accent` icon and an `x` that removes it. On touch both halves are `--touch-target` tall; at
+  `<=640px` the row stays one line and scrolls sideways.
 - The status line ends, on fine pointers, with `/` commands and `@` files keycaps (plus `Mod+Enter`
   sends when **Enter sends** is off); the placeholder is just `Message <agent>…`.
 - `/` completions come from `GET /api/pane/commands` and group built-in, user and project commands;

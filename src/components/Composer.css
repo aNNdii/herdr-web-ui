@@ -619,6 +619,16 @@
     min-height: calc(var(--touch-target) + var(--space-1));
   }
 
+  /* a comment pill: both its halves are a finger's size */
+  .composer-comment button {
+    min-height: var(--touch-target);
+  }
+
+  .composer-comment .composer-comment-remove {
+    min-width: var(--touch-target);
+    justify-content: center;
+  }
+
   .composer-resize {
     width: 64px;
     height: 20px;

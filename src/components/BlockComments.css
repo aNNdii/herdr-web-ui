@@ -66,6 +66,15 @@ li.is-commentable {
   transition: opacity 150ms ease 300ms;
 }
 
+/* a finger gets the whole touch target, the eye the small badge: the tap area reaches past it */
+@media (pointer: coarse) {
+  .block-comment-add::before {
+    content: "";
+    position: absolute;
+    inset: calc((var(--comment-add-size) - var(--touch-target)) / 2);
+  }
+}
+
 .block-comment-add svg {
   width: 16px;
   height: 16px;
@@ -155,7 +164,7 @@ li.is-commentable {
   top: 0;
   bottom: 0;
   left: var(--comment-bar-x);
-  width: 3px;
+  width: var(--rail-w);
   border-radius: 2px;
   background: var(--accent);
 }

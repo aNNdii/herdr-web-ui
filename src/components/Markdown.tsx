@@ -258,8 +258,8 @@ function useCommentable(path: number[], block: MarkdownBlock, enabled: boolean, 
       if ((window.getSelection()?.toString() ?? "") !== "") return;
       selectBlock(target.anchor);
     },
-    add: <button type="button" className="block-comment-add" aria-label={t("Comment on this part")} onClick={open}><MessageSquarePlus aria-hidden="true" /></button>,
-    after: after(commented && <button type="button" className="block-comment-row" onClick={open}><MessageSquare aria-hidden="true" /><span>{commented.comment}</span></button>),
+    add: <button type="button" className="block-comment-add" aria-label={t("Comment on this part")} title={t("Comment on this part")} onClick={open}><MessageSquarePlus aria-hidden="true" /></button>,
+    after: after(commented && <button type="button" className="block-comment-row" title={t("Edit comment")} onClick={open}><MessageSquare aria-hidden="true" /><span>{commented.comment}</span></button>),
   };
 }
 

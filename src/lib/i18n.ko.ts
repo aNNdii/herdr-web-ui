@@ -757,6 +757,7 @@ export const KO: Record<string, string> = {
   "Save": "저장",
   "Comment on this part": "이 부분에 댓글 달기",
   "Remove comment": "댓글 삭제",
+  "Edit comment": "댓글 수정",
   "Comments stay here: they are not sent with a command.": "댓글은 여기에 남습니다. 명령과 함께 보내지지 않습니다.",
   "Too long to send. Shorten the message or remove comments.": "너무 길어서 보낼 수 없습니다. 메시지를 줄이거나 댓글을 삭제하세요.",
   "Comments could not be saved. They are lost on reload.": "댓글을 저장하지 못했습니다. 새로고침하면 사라집니다.",
