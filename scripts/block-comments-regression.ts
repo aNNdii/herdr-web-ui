@@ -96,7 +96,8 @@ try {
   const errors: string[] = [];
   /** Opens the pane's chat in a new context, with `comments` stored for it beforehand, and records every submitted text. */
   const open = async (options: Parameters<NonNullable<typeof browser>["newContext"]>[0], comments?: unknown): Promise<{ page: Page; sent: string[] }> => {
-    const context = await browser!.newContext(options);
+    // evidence for a PR is drawn at twice the resolution; the layout is the same
+    const context = await browser!.newContext({ deviceScaleFactor: evidence ? 2 : 1, ...options });
     await context.route("https://example.com/**", (route) => route.abort());
     const page = await context.newPage();
     await page.addInitScript(({ id, stored }) => {
@@ -171,6 +172,7 @@ try {
     await comment(page, code, "Use let");
     assert.equal(await page.locator(".is-commented").count(), 3);
     if (evidence) await page.screenshot({ path: join(evidence, "block-comments-desktop.png") });
+    if (evidence) await page.screenshot({ path: join(evidence, "block-comments-desktop-composer.png"), clip: { x: 380, y: (await page.locator(".composer-status").boundingBox())!.y - 8, width: 840, height: 100 } });
 
     // from the last line of a long block, through the gutter, up to its "+": it stays to be clicked
     const long = page.locator("p.is-commentable", { hasText: "A longer paragraph" });
@@ -400,6 +402,7 @@ try {
     await editor.waitFor({ state: "hidden" });
     assert.equal(await chip.innerText(), "2");
     assert.equal((await page.locator(".composer").boundingBox())!.height, boxBefore, "a second comment does not grow the composer");
+    if (evidence) await page.screenshot({ path: join(evidence, "block-comments-phone.png") });
     if (evidence) await page.screenshot({ path: join(evidence, "block-comments-phone-chip.png"), clip: { x: 0, y: (await page.locator(".composer-status").boundingBox())!.y - 8, width: 390, height: 130 } });
     console.log("PASS phone: the chip is touch-sized and takes no row of its own");
     assert.deepEqual(errors, []);
