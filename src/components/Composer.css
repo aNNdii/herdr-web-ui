@@ -504,6 +504,12 @@
   overflow-x: auto;
 }
 
+/* under the comment pills: an attachment's remove button stands out 8px above its thumbnail, and
+   would touch the pills above it. The two rows are two kinds of thing, set apart by a step */
+.composer-comments + .composer-attachments {
+  padding-top: var(--space-4);
+}
+
 .composer-attachment {
   position: relative;
   flex: 0 0 auto;
