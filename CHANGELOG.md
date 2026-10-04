@@ -49,6 +49,11 @@ between releases do not reach them. Remote-PC runtime bundles are versioned sepa
 - A task list (`- [x] done`, `- [ ] open`) in the chat and in a Markdown preview shows a checked or
   empty box instead of the brackets.
 
+### Changed
+- The file viewer offers a download only for a file it cannot show; every other file opens whole in
+  a new tab, where it can be saved. A text file loads up to 1 MB by default (was 256 KB), and a size
+  under 10 MB shows one decimal (`1.3 MB`), in the viewer and in a bridge update's progress.
+
 ### Fixed
 - On an Android phone, dragging down at the top of a chat no longer reloads the app. The drag
   was handed on to the page, where Chrome takes it for pull-to-refresh, so reading back

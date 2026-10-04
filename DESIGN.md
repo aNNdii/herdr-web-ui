@@ -186,6 +186,10 @@ blue there instead of `--accent`, and Latte's colors are darkened to stay readab
   `--font-mono`. At most 200 characters, with `;`, `{`, `}`, `<`,
   `>`, `\` and control characters stripped and names with spaces quoted.
 - Composer Enter behavior and folded thinking visibility are preferences, not typography tokens.
+- File viewer: `wrapCode` (wrap long lines instead of scrolling sideways; default off),
+  `textLoadLimit` (bytes of a text file loaded) and `highlightLimit` (characters highlighted), each
+  256 KB or 1 MB with defaults 1 MB and 256 KB, and `markdownWidth`: `readable` (about 120
+  characters, centered; default) or `full`.
 - All settings share one sanitized `localStorage["herdr-web-ui:settings"]` record.
 
 ## 4. Spacing & Layout
@@ -485,7 +489,9 @@ One set for both themes: the card is island black wherever it shows.
   cards (`--bg-elevated`, hairline edge, `--radius-lg` with a `--radius-sm` tail corner, ≤80% wide,
   no avatar or name) and open a new exchange with a hairline above. Assistant turns have no header: the answer is plain prose; a meta row (MD / TXT
   copy, time) fades in on hover (always visible on coarse pointers).
-- Markdown supports headings, lists, links, quotes, tables, inline/fenced code and code-copy actions.
+- Markdown supports headings, lists (a task item `- [x]` / `- [ ]` shows a checked or empty box in
+  place of its bullet, not clickable), links, quotes, tables, inline/fenced code and code-copy
+  actions. Fenced code is syntax-highlighted by role (`--syntax-*`) up to 100 KB.
   Code blocks never scroll inside: one longer than 30 lines opens at its first 20 behind **Show all N lines**.
   Thinking renders as a folded block only when **Show thinking** is enabled.
 - Auto-follow stops when the reader scrolls up; later output raises a **New messages** pill.
@@ -549,8 +555,9 @@ One set for both themes: the card is island black wherever it shows.
 ### Settings dialog
 - Appearance: Dark / Light / System, Comfortable / Compact, terminal font `10–22px`, terminal font
   family.
-- Composer: Enter sends. Chat: Show thinking, chat font size and family. Shortcuts: the complete
-  platform-resolved table.
+- Composer: Enter sends. Chat: Show thinking, chat font size and family. File viewer: Wrap long
+  lines, Markdown width (Default / Full width), Load text files up to and Highlight files up to
+  (256 KB / 1 MB). Shortcuts: the complete platform-resolved table.
 - A font family is a text field saved when it is left, on Enter or when the dialog closes, not
   per keystroke.
 - Remote PCs follows Devices: an **Add PC** row (label, one-line description, button) opens the PC
