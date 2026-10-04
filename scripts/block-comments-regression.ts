@@ -248,6 +248,10 @@ try {
     const chip = page.locator(".composer-comments-chip");
     assert.equal(await chip.innerText(), "3");
     assert.equal(await chip.getAttribute("aria-label"), "Comments to send: 3");
+    // where the message is written and sent from, it says how many go with it
+    const sendButton = page.getByRole("button", { name: /^Send message/ });
+    assert.equal(await sendButton.locator(".composer-send-count").innerText(), "3");
+    assert.equal(await sendButton.getAttribute("title"), "Send message · Comments to send: 3");
     await page.emulateMedia({ reducedMotion: "reduce" });
     await page.setViewportSize({ width: 1280, height: 380 });
     const view = page.locator(".chat-view");
@@ -309,7 +313,7 @@ try {
     console.log("PASS desktop: comments survive a reload");
 
     await page.getByRole("textbox", { name: "Message", exact: true }).fill("Thanks");
-    await page.getByRole("button", { name: "Send message", exact: true }).click();
+    await page.getByRole("button", { name: /^Send message/ }).click();
     await page.locator(".composer-comments-chip").waitFor({ state: "detached" });
     assert.equal(await page.locator(".is-commented").count(), 0);
     assert.ok(sent.some((text) => text.startsWith("> Intro paragraph about the state.\nExplain why, briefly\n\n> check the logs\nAlso the exit code\n\nThanks")), `sent: ${JSON.stringify(sent)}`);

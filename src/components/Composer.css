@@ -319,6 +319,32 @@
   border-color: var(--primary);
 }
 
+/* how many comments this send carries (the status line's chip counts all of them) */
+.composer-send,
+.composer-queue-button {
+  position: relative;
+}
+
+.composer-send-count {
+  position: absolute;
+  top: calc(-1 * var(--space-1));
+  right: calc(-1 * var(--space-1));
+  display: grid;
+  min-width: 16px;
+  height: 16px;
+  place-items: center;
+  padding: 0 var(--space-1);
+  border: var(--hairline) solid var(--accent);
+  border-radius: var(--radius-pill);
+  background: var(--bg-elevated);
+  color: var(--text-strong);
+  font-size: var(--fs-2xs);
+  font-weight: var(--fw-medium);
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+  pointer-events: none;
+}
+
 .composer-stop {
   background: var(--status-blocked-tint);
   border-color: var(--status-blocked);

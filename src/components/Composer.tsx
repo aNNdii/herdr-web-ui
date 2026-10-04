@@ -265,6 +265,9 @@ export function Composer({
   const shownNote = note ?? (outgoing.tooLong ? t("Too long to send. Shorten the message or remove comments.")
     : blockComments.isUnsaved(commentOwner) ? t("Comments could not be saved. They are lost on reload.") : null);
   const uploading = attachments.some((attachment) => attachment.state === "uploading");
+  /** the comments that go with the next message: on the send buttons, where it is sent from */
+  const goingComments = outgoing.sentIds.length;
+  const withComments = (label: string): string => goingComments > 0 ? `${label} · ${t("Comments to send: {count}", { count: goingComments })}` : label;
   const agentLabel = agentDisplayLabel(agent);
   // the agent's suggestion stands in the empty box as it does in its own input, until anything is typed
   const offered = connected && answerHint === null && suggestion !== null ? suggestion : null;
@@ -891,13 +894,14 @@ export function Composer({
             <button
               type="button"
               className="composer-queue-button"
-              aria-label={t("Queue message")}
-              title={t("Queue as the next message")}
+              aria-label={withComments(t("Queue message"))}
+              title={withComments(t("Queue as the next message"))}
               disabled={!connected || uploading || sending || !outgoing.sendable}
               onClick={send}
             >
               <Clock aria-hidden="true" />
               {t("Queue")}
+              {goingComments > 0 && <span className="composer-send-count" aria-hidden="true">{goingComments}</span>}
             </button>
           )}
           {isWorking ? (
@@ -915,12 +919,13 @@ export function Composer({
             <button
               type="button"
               className="composer-action composer-send"
-              aria-label={t("Send message")}
-              title={t("Send message")}
+              aria-label={withComments(t("Send message"))}
+              title={withComments(t("Send message"))}
               disabled={!connected || uploading || sending || !outgoing.sendable}
               onClick={send}
             >
               <SendHorizontal aria-hidden="true" />
+              {goingComments > 0 && <span className="composer-send-count" aria-hidden="true">{goingComments}</span>}
             </button>
           ) : null}
         </div>

@@ -510,7 +510,11 @@ One set for both themes: the card is island black wherever it shows.
   and edge, so they take no row of their own and the box is untouched. A tap walks the chat to
   the next commented part, round again; a comment whose part is not in the chat opens in its
   editor instead. On touch the chip keeps its size and its tap area grows to `--touch-target`
-  (the line clips its sides only).
+  (the line clips its sides only). The chip counts every stored comment; the Send and Queue
+  buttons carry a small count badge (`--bg-elevated`, `--accent` edge, `--fs-2xs`, top right) of
+  the comments this send takes, with the number in their name and tooltip: it is where the eyes
+  are when the message goes out, and comments stored for a pane outlive a reload. No badge when
+  they wait (a command, an answer, no agent).
 - The status line ends, on fine pointers, with `/` commands and `@` files keycaps (plus `Mod+Enter`
   sends when **Enter sends** is off); the placeholder is just `Message <agent>…`.
 - `/` completions come from `GET /api/pane/commands` and group built-in, user and project commands;
