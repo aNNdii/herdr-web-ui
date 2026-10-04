@@ -24,6 +24,15 @@ export function loadedText(body: string, fileSize: number, limit: number): Loade
   return { text, truncated: true, limit };
 }
 
+/**
+ * The first `limit` bytes of a file's body as text. A 206 is that part already; a server that
+ * ignores the range answers 200 with the whole file, and is cut here, so the limit holds either
+ * way. A cut inside a UTF-8 character decodes to U+FFFD, which `loadedText` drops.
+ */
+export function decodeStart(bytes: Uint8Array, limit: number): string {
+  return new TextDecoder().decode(bytes.subarray(0, limit));
+}
+
 /** Whether a file in `language` has a rendered Preview besides its source: Markdown does. */
 export function hasPreview(language: string | null): boolean {
   return language === "markdown";

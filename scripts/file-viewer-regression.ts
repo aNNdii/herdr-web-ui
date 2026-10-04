@@ -241,6 +241,19 @@ try {
   console.log("PASS Code too long to highlight says so in its header, once");
   await bigCode.locator(".file-viewer-text[data-wrap]").waitFor();
   console.log("PASS Settings → Wrap long lines wraps the code");
+  await page.getByRole("button", { name: "Close file", exact: true }).click();
+  await page.locator(".file-viewer").waitFor({ state: "hidden" });
+
+  // the file found, then its body refused (the file gone since, a remote PC dropped): the error's
+  // JSON must never show as the file's text
+  await page.route("**/api/fs/file?**", (route) => route.fulfill({ status: 502, contentType: "application/json", body: JSON.stringify({ error: { code: "machine_unavailable", message: "The PC connection was interrupted" } }) }), { times: 1 });
+  await page.getByRole("button", { name: "notes", exact: true }).click();
+  const refused = page.getByRole("dialog", { name: "notes.txt", exact: true });
+  await refused.getByRole("alert").waitFor();
+  assert.equal(await refused.getByRole("alert").innerText(), "The file could not be opened.");
+  assert.equal(await refused.getByText("machine_unavailable").count(), 0);
+  assert.equal(await refused.locator(".file-viewer-text").count(), 0);
+  console.log("PASS A file whose body is refused shows an error, not the error's JSON");
   assert.deepEqual(errors, []);
 } finally {
   await browser?.close();

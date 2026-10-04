@@ -15,7 +15,7 @@ import { pathParts } from "../lib/filePaths.ts";
 import { languageForPath, tooLongToHighlight } from "../lib/highlight.ts";
 import { useT } from "../lib/i18n.ts";
 import { useSettings } from "../lib/settings.ts";
-import { hasPreview, loadedText, textView, type LoadedText, type TextViewMode } from "../lib/textPreview.ts";
+import { decodeStart, hasPreview, loadedText, textView, type LoadedText, type TextViewMode } from "../lib/textPreview.ts";
 
 /** Bigger images are offered as a download: a phone decodes an image whole. */
 const MAX_INLINE_IMAGE_BYTES = 20 * 1024 * 1024;
@@ -108,7 +108,9 @@ export function FileViewer({ path: asked, paneId, onClose, onOpen }: FileViewerP
       if (next.kind !== "text") return;
       // only the first part of a text file travels: a range, whatever the file's size
       const response = await fetch(fileUrl(next.path, paneId), { headers: { range: `bytes=0-${textLoadLimit - 1}` }, signal: download.signal });
-      const body = await response.text();
+      // an error (the file gone since, a remote PC dropped) answers with JSON, never the file's text
+      if (!response.ok) throw new Error(`the file answered ${response.status}`);
+      const body = decodeStart(new Uint8Array(await response.arrayBuffer()), textLoadLimit);
       if (!cancelled) setLoaded(loadedText(body, next.size, textLoadLimit));
     }).catch(async (reason: unknown) => {
       if (cancelled) return;

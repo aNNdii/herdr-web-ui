@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { hasPreview, loadedText, textView } from "./textPreview.ts";
+import { decodeStart, hasPreview, loadedText, textView } from "./textPreview.ts";
 
 describe("loadedText", () => {
   it("cuts the incomplete last line of a file longer than the limit only", () => {
@@ -14,6 +14,20 @@ describe("loadedText", () => {
 
   it("keeps a file of exactly the limit whole", () => {
     expect(loadedText("abc", 3, 3).truncated).toBe(false);
+  });
+});
+
+describe("decodeStart", () => {
+  const bytes = (text: string) => new TextEncoder().encode(text);
+  it("cuts a whole file sent in place of its first part to the limit", () => {
+    expect(decodeStart(bytes("a\nb\nc\n"), 4)).toBe("a\nb\n");
+    expect(decodeStart(bytes("short"), 100)).toBe("short");
+  });
+  it("leaves a broken last character for loadedText to drop", () => {
+    // "ä" is two bytes: a cut after the first leaves U+FFFD
+    const text = decodeStart(bytes("xä"), 2);
+    expect(text).toBe("x\uFFFD");
+    expect(loadedText(text, 3, 2).text).toBe("x");
   });
 });
 
