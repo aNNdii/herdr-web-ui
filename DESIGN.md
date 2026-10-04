@@ -460,11 +460,14 @@ One set for both themes: the card is island black wherever it shows.
 - Block comments (`BlockComments.css`): every part of a final reply (paragraph, heading, list item,
   code block, table, display formula, a whole blockquote) takes a comment. Hovering a part for
   150ms tints it with an 8% `--accent` mix and shows its comment button (`MessageSquarePlus`,
-  hairline, `--radius-sm`); on a touch screen a tap chooses the part. Beside a chat column of
-  880px and more the button sits in the left gutter, so no text moves; narrower, it is a 28px badge
-  on the part's top right corner, with a tap area of `--touch-target`. A commented part gets an
-  `--accent` bar of `--rail-w` and its comment in `--fs-sm` `--text-dim` right under it, clamped to
-  two lines; a click there edits it.
+  28px, `--radius-sm`); on a touch screen a tap chooses the part. The tint starts `--space-2`
+  before the text column, a list item's marker included, so the tints, bars and buttons of all
+  parts line up at any list depth. Beside a chat column of 880px and more the button sits in the
+  left gutter, `--space-2` from the tint, as a bare icon that takes `--bg-hover` under the pointer,
+  so no text moves; narrower, it is a hairline `--bg-panel` badge on the part's top right corner,
+  with a tap area of `--touch-target`. A commented part gets an `--accent` bar of `--rail-w` on the
+  tint's left edge and its comment in `--fs-sm` `--text-dim` right under it, clamped to two lines;
+  a click there edits it.
 - The comment editor is a 560px `.modal` (a bottom sheet on a phone): the part quoted on `--bg`
   with a `--border-strong` rail, a field that grows from one line to four, then Delete (ghost, on
   the left), Cancel and Save.
