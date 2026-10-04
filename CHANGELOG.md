@@ -10,9 +10,10 @@ between releases do not reach them. Remote-PC runtime bundles are versioned sepa
 ### Added
 - Comment on single parts of an agent's final reply in the chat: a paragraph, a heading, a list
   item, a code block, a table or a formula. Point at a part (or tap it on a phone) and its comment
-  button appears; the comment is written in a small dialog that quotes the part. Commented parts
-  are marked in the chat and collect as pills above the message box, and the next message sends
-  them first, each quoting its part, in reading order. A command or an answer to the agent's open
+  button appears; the comment is written in a small dialog that quotes the part. A commented part
+  is marked in the chat and carries its comment in a note under it; a chip at the end of the
+  status line counts them and walks to them. The next message sends them first, each quoting
+  its part, in reading order. A command or an answer to the agent's open
   question goes without them; they wait for the next message. They only ever go to an agent: when
   none runs in the pane, what is typed goes alone (a shell would run the quoted lines), and its
   terminal output takes no comments. A message with comments queued during a turn keeps that
