@@ -424,8 +424,8 @@
   flex: none;
   align-items: center;
   gap: var(--space-1);
-  height: calc(var(--chip-h) + var(--space-1));
-  margin: -2px 0 -2px auto;
+  height: var(--chip-h);
+  margin-left: auto;
   padding: 0 var(--space-2);
   border: var(--hairline) solid transparent;
   border-radius: var(--radius-pill);
@@ -440,6 +440,11 @@
   width: 14px;
   height: 14px;
   color: var(--accent);
+}
+
+/* the status line clips what leaves it, a ring outside the chip included */
+.composer-comments-chip:focus-visible {
+  outline-offset: calc(-1 * var(--space-1));
 }
 
 @media (hover: hover) {
@@ -576,7 +581,6 @@
   .composer-comments-chip {
     height: auto;
     min-height: calc(var(--touch-target) - var(--space-2));
-    margin-block: 0;
     padding: 0 var(--space-3);
   }
 
