@@ -1189,13 +1189,14 @@ export function PaneTerminal({
   // the composer goes straight to the socket, not through onData: an armed key-bar Ctrl
   // must not turn a one-letter message into a control key. Offline it sends nothing and
   // keeps its text (never-queue); a message the server could not deliver keeps it too,
-  // with the reason. Bracketed-paste wrapping follows the pane program's mode.
-  const sendComposerText = useCallback((text: string): false | Promise<true | string> => {
+  // with the reason. Bracketed-paste wrapping follows the pane program's mode. `agentOnly`: a
+  // message with comments, refused rather than typed into a pane whose agent is gone
+  const sendComposerText = useCallback((text: string, agentOnly = false): false | Promise<true | string> => {
     const term = termRef.current;
     const socket = socketRef.current;
     const pane = paneRef.current;
     if (!term || !socket || pane === null || secretRef.current !== null || heldRef.current) return false;
-    const sent = socket.submit(pane, composerMessage(text), composerPayload(text, term.modes.bracketedPasteMode));
+    const sent = socket.submit(pane, composerMessage(text), composerPayload(text, term.modes.bracketedPasteMode), false, agentOnly);
     if (sent === null) return false;
     term.scrollToBottom();
     setChatSent((current) => current + 1);
@@ -1314,7 +1315,7 @@ export function PaneTerminal({
   }, [greetingDue, paneId]);
 
   const composerSend = useCallback(
-    (text: string): boolean | string | Promise<boolean | string> => {
+    (text: string, { agentOnly = false }: { agentOnly?: boolean } = {}): boolean | string | Promise<boolean | string> => {
       const pane = paneRef.current;
       // Codex's queue open in the terminal holds the input: a message would become the answer
       if (pane !== null && heldByOpenQueue) {
@@ -1338,10 +1339,11 @@ export function PaneTerminal({
         );
       }
       if (pane !== null && agent !== null && agentStatus === "working") {
-        queueStore.add(paneStorageId(machineId, pane), text);
+        // the agent may be gone by Send now: one with comments must not reach a shell then
+        queueStore.add(paneStorageId(machineId, pane), text, { agentOnly });
         return true; // the composer may clear its box: the text lives in the queue card
       }
-      return sendComposerText(text);
+      return sendComposerText(text, agentOnly);
     },
     [agent, agentStatus, answerPanePrompt, answering, heldByOpenQueue, sendComposerText, queueStore, machineId],
   );
@@ -1498,7 +1500,7 @@ export function PaneTerminal({
                   sendingRef.current = true;
                   setQueueSending(message.id); setQueueError(null);
                   const owner = queueOwner;
-                  void Promise.resolve(sendComposerText(message.text))
+                  void Promise.resolve(sendComposerText(message.text, message.agentOnly === true))
                     .then((result) => {
                       if (result === true) { queueStore.remove(owner, message.id); }
                       else setQueueError({ owner, id: message.id, text: typeof result === "string" ? result : t("Not sent. Reconnect and try again.") });
