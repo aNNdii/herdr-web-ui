@@ -311,6 +311,7 @@ export const ZH: Record<string, string> = {
   "Close file": "关闭文件",
   "No readable file at this path.": "此路径下没有可读取的文件。",
   "The file could not be opened.": "无法打开该文件。",
+  "This preview can't be shown.": "无法显示此预览。",
   "Open {path}": "打开 {path}",
 
   // ---- PC dialog ----
@@ -447,10 +448,10 @@ export const ZH: Record<string, string> = {
   "Not sent: it waited too long behind an earlier message, and nothing was typed. Send it again.": "未发送：在前一条消息之后等待过久，且未输入任何内容。请重新发送。",
   "Not confirmed: the pane did not confirm this message. Check the terminal before sending it again.": "未确认：窗格未确认此消息。重新发送前请检查终端。",
   "Not sent: {message}": "未发送：{message}",
-  "Answer above: type the numbers you choose, e.g. 1 3": "请在上方回答：输入所选编号，例如 1 3",
-  "Answer above: type your reply…": "请在上方回答：输入你的回复…",
-  "Answer above: type {range} or your own reply…": "请在上方回答：输入 {range} 或你自己的回复…",
-  "Answer above: type {range} to choose…": "请在上方回答：输入 {range} 进行选择…",
+  "Type the numbers you choose, e.g. 1 3": "输入所选编号，例如 1 3",
+  "Type your reply…": "输入你的回复…",
+  "Type {range} or your own reply…": "输入 {range} 或你自己的回复…",
+  "Type {range} to choose…": "输入 {range} 进行选择…",
   "Choose with the option numbers above, e.g. 1 3.": "请使用上方的选项编号进行选择，例如 1 3。",
   "Choose one of the options above: type {range}.": "请从上方选项中选择一项：输入 {range}。",
 
@@ -675,6 +676,10 @@ export const ZH: Record<string, string> = {
   "pi kept them in the session file but answers from the branch you chose. Use /tree in the terminal to go back.": "pi 会将其保留在会话文件中，但会基于你选择的分支作答。可在终端中使用 /tree 返回。",
   "{command} opens a tree the chat cannot show. It runs in the terminal — tap the terminal button at the top of the screen to choose a branch.": "{command} 打开的树无法在聊天中显示。它会在终端中运行——点按屏幕顶部的终端按钮即可选择分支。",
   "Background result delivered": "后台结果已送达",
+  "Background task ended": "后台任务已结束",
+  "{n} background tasks ended": "{n} 个后台任务已结束",
+  "The task reported no result": "该任务没有返回结果",
+  "This is the first part of a longer result": "这是较长结果的开头部分",
   "Skill activity": "Skill 活动",
   "Skill requested": "已请求调用",
   "Skill invoked": "已调用",

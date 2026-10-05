@@ -8,6 +8,8 @@ export interface LoadedText {
   truncated: boolean;
   /** the bytes asked for: what "the first 256 KB" says */
   limit: number;
+  /** the file's size when its text was sent (`answeredFileSize`), null when the answer did not say */
+  size: number | null;
 }
 
 /**
@@ -15,13 +17,14 @@ export interface LoadedText {
  * count, so its end is a broken line, or a broken UTF-8 character (decoded as U+FFFD): it is cut
  * back to the last whole line. A single huge line (minified JSON) has no whole line to cut back
  * to, so it stays, less a broken character. Whether the file was cut is decided here, once, from
- * the limit the part was loaded with, not from whatever the limit is later.
+ * the limit the part was loaded with, not from whatever the limit is later. A file of unknown size
+ * (null) counts as cut: the part is never taken, and copied, for the whole file.
  */
-export function loadedText(body: string, fileSize: number, limit: number): LoadedText {
-  if (fileSize <= limit) return { text: body, truncated: false, limit };
+export function loadedText(body: string, fileSize: number | null, limit: number): LoadedText {
+  if (fileSize !== null && fileSize <= limit) return { text: body, truncated: false, limit, size: fileSize };
   const newline = body.lastIndexOf("\n");
   const text = newline >= 0 ? body.slice(0, newline + 1) : body.replace(/\uFFFD+$/, "");
-  return { text, truncated: true, limit };
+  return { text, truncated: true, limit, size: fileSize };
 }
 
 /**
@@ -31,6 +34,21 @@ export function loadedText(body: string, fileSize: number, limit: number): Loade
  */
 export function decodeStart(bytes: Uint8Array, limit: number): string {
   return new TextDecoder().decode(bytes.subarray(0, limit));
+}
+
+/**
+ * The size of a file as the answer to the request for its first bytes says it is, read when the
+ * body was sent rather than from the stat before it: a file that grew in between is then still
+ * known to go on past the part. A 206 names it in its `Content-Range` (`bytes 0-1023/4096`), a
+ * server that ignored the range sent the whole file (200), and an empty file answers 416 with
+ * `bytes *\/0`. Null when the answer does not say: the part is then not taken for the whole file.
+ */
+export function answeredFileSize(status: number, contentRange: string | null, received: number): number | null {
+  if (status === 200) return received;
+  const total = status === 206 ? /^bytes \d+-\d+\/(\d+)$/.exec(contentRange?.trim() ?? "")
+    : status === 416 ? /^bytes \*\/(\d+)$/.exec(contentRange?.trim() ?? "")
+    : null;
+  return total ? Number(total[1]) : null;
 }
 
 /** Whether a file in `language` has a rendered Preview besides its source: Markdown does. */

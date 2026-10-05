@@ -1,19 +1,48 @@
 import { describe, expect, it } from "bun:test";
-import { decodeStart, hasPreview, loadedText, textView } from "./textPreview.ts";
+import { answeredFileSize, decodeStart, hasPreview, loadedText, textView } from "./textPreview.ts";
 
 describe("loadedText", () => {
   it("cuts the incomplete last line of a file longer than the limit only", () => {
-    expect(loadedText("a\nb\nhal", 100, 8)).toEqual({ text: "a\nb\n", truncated: true, limit: 8 });
-    expect(loadedText("a\nb\nhal", 8, 8)).toEqual({ text: "a\nb\nhal", truncated: false, limit: 8 });
+    expect(loadedText("a\nb\nhal", 100, 8)).toEqual({ text: "a\nb\n", truncated: true, limit: 8, size: 100 });
+    expect(loadedText("a\nb\nhal", 8, 8)).toEqual({ text: "a\nb\nhal", truncated: false, limit: 8, size: 8 });
     // one huge line (minified JSON): nothing to cut back to, so it stays
     expect(loadedText("{\"a\":1,\"b\"", 100, 10).text).toBe("{\"a\":1,\"b\"");
     // the cut may land inside a UTF-8 sequence, which decodes to U+FFFD: drop only that
     expect(loadedText("{\"a\":\"ä\uFFFD", 100, 10).text).toBe("{\"a\":\"ä");
-    expect(loadedText("", 100, 10)).toEqual({ text: "", truncated: true, limit: 10 });
+    expect(loadedText("", 100, 10)).toEqual({ text: "", truncated: true, limit: 10, size: 100 });
   });
 
   it("keeps a file of exactly the limit whole", () => {
     expect(loadedText("abc", 3, 3).truncated).toBe(false);
+  });
+
+  it("takes a file of unknown size for one cut short, so its part is never copied as the whole", () => {
+    expect(loadedText("abc", null, 10)).toEqual({ text: "abc", truncated: true, limit: 10, size: null });
+  });
+});
+
+describe("answeredFileSize", () => {
+  it("reads the size a 206 sends with its part, not the size the stat saw before", () => {
+    // the stat said 900 bytes; the file has grown to 4096 by the time its first 1024 are sent
+    expect(answeredFileSize(206, "bytes 0-1023/4096", 1024)).toBe(4096);
+    expect(loadedText("a\n", answeredFileSize(206, "bytes 0-1023/4096", 1024), 1024).truncated).toBe(true);
+    expect(answeredFileSize(206, "bytes 0-11/12", 12)).toBe(12);
+  });
+
+  it("takes a 200 for the whole file, whatever its length", () => {
+    expect(answeredFileSize(200, null, 5000)).toBe(5000);
+  });
+
+  it("reads an empty file from the 416 that answers a range of it", () => {
+    expect(answeredFileSize(416, "bytes */0", 0)).toBe(0);
+  });
+
+  it("does not know the size when the answer does not say it", () => {
+    expect(answeredFileSize(206, null, 1024)).toBeNull();
+    expect(answeredFileSize(206, "bytes 0-1023/*", 1024)).toBeNull();
+    expect(answeredFileSize(206, "garbage", 1024)).toBeNull();
+    expect(answeredFileSize(416, null, 0)).toBeNull();
+    expect(answeredFileSize(502, null, 40)).toBeNull();
   });
 });
 
