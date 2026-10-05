@@ -27,6 +27,10 @@ between releases do not reach them. Remote-PC runtime bundles are versioned sepa
   ([#429](https://github.com/devswha/herdr-web-ui/pull/429) by @aNNdii)
 
 ### Fixed
+- A table in the chat that is wider than the reply scrolls sideways in its own box. Before, it
+  squeezed every column to fit, down to a letter or two, so words and file paths broke after
+  any letter. A column is now never narrower than its longest word.
+  ([#481](https://github.com/devswha/herdr-web-ui/pull/481) by @aNNdii)
 - A Markdown quote nested deeper than 32 levels shows its remaining `>` as text. A few kilobytes of
   nested quotes overflowed the renderer: a chat message showed that it can't be shown, and a
   Markdown file blanked the app. A preview that still cannot be drawn now says so in the file
