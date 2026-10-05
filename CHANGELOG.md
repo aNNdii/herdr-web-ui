@@ -142,8 +142,8 @@ between releases do not reach them. Remote-PC runtime bundles are versioned sepa
 
 ### Fixed
 - A table in the chat that is wider than the reply scrolls sideways in its own box. Before, it
-  squeezed every column to fit, down to a letter or two, and broke words like "Partly" into
-  "Par/tly". A column is now never narrower than its longest word.
+  squeezed every column to fit, down to a letter or two, so words and file paths broke after
+  any letter. A column is now never narrower than its longest word.
 - On a phone, the chat's message box keeps the keyboard's word suggestions, autocorrect and
   spell checking, and starts a sentence with a capital. The box used to turn all of them off,
   as the terminal does.
