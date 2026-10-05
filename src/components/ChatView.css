@@ -9,14 +9,18 @@
 
 /* The chat's text has its own size (Settings → Chat font size): the view scales the type
    tokens by --chat-scale (lib/settings.ts) and the transcript uses the scaled ones under
-   the same names, so every message, code block and prompt card grows together. A file
-   viewer's Markdown preview is the same rendering, so it takes the chat's size and font too */
+   the same names, so every message and code block grows together. The prompt card is outside
+   this view, over the message box, and grows with them: its dock does the same (Composer.css).
+   A file viewer's Markdown preview is the same rendering, so it takes the chat's size and font too */
 .chat-view,
 .file-viewer-content {
   --chat-fs-2xs: calc(var(--fs-2xs) * var(--chat-scale, 1));
   --chat-fs-xs: calc(var(--fs-xs) * var(--chat-scale, 1));
   --chat-fs-sm: calc(var(--fs-sm) * var(--chat-scale, 1));
   --chat-fs-md: calc(var(--fs-md) * var(--chat-scale, 1));
+  /* what is read at length (answers, the user's words, live narration) is one step above the
+     body size; labels, rows and meta keep the sizes above */
+  --chat-fs-body: calc(var(--fs-chat) * var(--chat-scale, 1));
   --chat-fs-lg: calc(var(--fs-lg) * var(--chat-scale, 1));
   --chat-fs-xl: calc(var(--fs-xl) * var(--chat-scale, 1));
 }
@@ -118,6 +122,8 @@
   border-radius: var(--radius-lg);
   background: var(--bg-elevated);
   color: var(--text-strong);
+  font-size: var(--chat-fs-body);
+  line-height: var(--lh-prose);
   overflow-wrap: anywhere;
 }
 
@@ -240,8 +246,8 @@
 
 .markdown {
   width: 100%;
-  font-size: var(--fs-md);
-  line-height: var(--lh-base);
+  font-size: var(--chat-fs-body);
+  line-height: var(--lh-prose);
   overflow-wrap: anywhere;
 }
 
@@ -269,11 +275,12 @@
 
 .markdown h1 { font-size: var(--fs-xl); }
 .markdown h2 { font-size: var(--fs-lg); }
-.markdown h3 { font-size: var(--fs-md); }
-/* below h3 the size stops shrinking: the weight, then the dim colour, tell the levels apart */
+/* h3 is the prose size, and below it the size stops shrinking: the weight, then the dim colour,
+   tell the levels apart */
+.markdown h3,
 .markdown h4,
 .markdown h5,
-.markdown h6 { font-size: var(--fs-md); }
+.markdown h6 { font-size: var(--chat-fs-body); }
 .markdown h1,
 .markdown h2,
 .markdown h3,
@@ -320,6 +327,17 @@
   stroke-width: 3.5;
 }
 
+.markdown-list li + li {
+  margin-top: var(--space-1);
+}
+
+/* emphasis is semibold: at the prose size the bold weight shouts */
+.markdown strong,
+.markdown b {
+  color: var(--text-strong);
+  font-weight: var(--fw-semibold);
+}
+
 /* a table or text below it in a list item: a little air above and below, as between two items */
 .markdown-list .markdown-table-wrap,
 .markdown-list p {
@@ -332,13 +350,15 @@
   color: var(--text-dim);
 }
 
+/* code sits under the line it is in, at any size of that line: a chip in a heading, in settled
+   narration and in an answer are each a step below their own text */
 .markdown :not(pre) > code {
-  padding-inline: var(--space-1);
+  padding: var(--hairline) var(--space-1);
   border-radius: var(--radius-sm);
   background: var(--bg-elevated);
   color: var(--text-strong);
   font-family: var(--font-mono);
-  font-size: var(--fs-xs);
+  font-size: 0.87em;
 }
 
 .chat-bubble .markdown :not(pre) > code {
@@ -423,7 +443,9 @@
 
 /* no height cap: an inner scroll hid the rest of the block on phones */
 .markdown-code .hl-code {
-  padding: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  font-size: var(--fs-sm);
+  line-height: var(--lh-code);
 }
 
 .markdown-code-more {
@@ -558,6 +580,17 @@
   animation: pulse var(--dur-pulse) var(--ease-pulse) infinite;
 }
 
+/* A blocked agent is not working: the open block keeps its live layout and reads "Needs you",
+   the sidebar's words, in the dim color. Only the dot is red, and it holds still. */
+.work-block.is-live.is-waiting .work-block-title {
+  color: var(--text-dim);
+}
+
+.work-block.is-live.is-waiting .work-block-title::before {
+  background: var(--status-blocked);
+  animation: none;
+}
+
 /* the counts take what the title and the failure count leave, and are the first to be cut */
 .work-block-summary {
   flex: 1 1 0;
@@ -621,7 +654,7 @@
   color: var(--text-dim);
 }
 
-/* what the agent said mid-work: prose, dim and one step smaller than the answer once the turn settles */
+/* what the agent said mid-work: once the turn settles, a quiet row again (dim, --fs-sm) */
 .work-narration {
   padding: var(--space-1) 0 var(--space-2);
   color: var(--text-dim);
@@ -637,7 +670,7 @@
 }
 
 .work-block.is-live .work-narration .markdown {
-  font-size: var(--fs-md);
+  font-size: var(--chat-fs-body);
 }
 
 /* the tool's own id, first in the opened detail of a row that shows a verb in its place */
@@ -1067,6 +1100,30 @@
   border-radius: var(--radius-lg);
 }
 
+/* a summary opened on request, not the conversation: it keeps the body size */
+.chat-compact-text .markdown {
+  font-size: var(--fs-md);
+  line-height: var(--lh-base);
+}
+
+/* and so do the parts of it that name a size of their own: a heading from h3 down is the size
+   of the summary's text, and code is the step below it */
+.chat-compact-text .markdown h3,
+.chat-compact-text .markdown h4,
+.chat-compact-text .markdown h5,
+.chat-compact-text .markdown h6 {
+  font-size: inherit;
+}
+
+.chat-compact-text .markdown :not(pre) > code {
+  font-size: var(--fs-xs);
+}
+
+.chat-compact-text .markdown-code pre {
+  font-size: var(--fs-xs);
+  line-height: var(--lh-base);
+}
+
 /* a notice named by its own first line: one line, cut short, between the divider rules */
 .chat-notice-label {
   flex: 0 1 auto;
@@ -1163,6 +1220,95 @@
 .chat-goal-detail p { margin: 0 0 var(--space-1); }
 .chat-goal-text { white-space: pre-wrap; }
 .chat-goal-reason, .chat-goal-spent { color: var(--text-dim); }
+
+/* OmO's background tasks reporting back: one card in the transcript's column, a row per task
+   whose status is written and colored as in the background-task list, its result on request */
+.chat-task-results {
+  margin: var(--space-4) 0;
+  overflow: hidden;
+  border: var(--hairline) solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--bg-elevated);
+}
+.chat-task-results-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  margin: 0;
+  padding: var(--space-2) var(--space-3);
+  color: var(--text-dim);
+  font-size: var(--fs-xs);
+}
+.chat-task-results-head > svg { width: 12px; height: 12px; flex: none; }
+.chat-task-result { border-top: var(--hairline) solid var(--border); }
+.chat-task-result > summary {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  cursor: pointer;
+  list-style: none;
+}
+.chat-task-result > summary::-webkit-details-marker { display: none; }
+.chat-task-result > summary:hover { background: var(--bg-hover); }
+.chat-task-result-icon { width: 16px; height: 16px; flex: none; margin-top: 2px; color: var(--text-dim); }
+.chat-task-result.is-completed .chat-task-result-icon,
+.chat-task-result.is-completed .chat-task-result-status { color: var(--status-done); }
+.chat-task-result.is-failed .chat-task-result-icon,
+.chat-task-result.is-failed .chat-task-result-status { color: var(--status-blocked); }
+.chat-task-result-main {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-width: 0;
+}
+.chat-task-result-title {
+  color: var(--text);
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-medium);
+  overflow-wrap: anywhere;
+}
+.chat-task-result-meta { color: var(--text-dim); font-size: var(--fs-xs); overflow-wrap: anywhere; }
+.chat-task-result-status { flex: none; margin-top: 2px; color: var(--text-dim); font-size: var(--fs-xs); }
+.chat-task-result > summary > .chat-skill-caret { width: 14px; height: 14px; flex: none; margin-top: 3px; color: var(--text-dim); }
+.chat-task-result[open] .chat-skill-caret { transform: rotate(180deg); }
+/* the result reads as the agent's answer does, under the title and bounded like a whole tool output */
+.chat-task-result-body {
+  max-height: 60vh;
+  overflow: auto;
+  padding: 0 var(--space-3) var(--space-3) calc(var(--space-3) + 16px + var(--space-2));
+  overflow-wrap: anywhere;
+}
+.chat-task-result-note { margin: var(--space-2) 0 0; color: var(--text-dim); font-size: var(--fs-xs); }
+
+/* a task call's tasks: what each is for and the agent it runs as, the prompt under it */
+.chat-task-calls {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  width: 100%;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.chat-task-call-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-2);
+  margin: 0 0 var(--space-1);
+  font-size: var(--fs-sm);
+}
+.chat-task-call-title { color: var(--text); overflow-wrap: anywhere; }
+.chat-task-call-agent {
+  padding: 0 var(--space-2);
+  border: var(--hairline) solid var(--border);
+  border-radius: var(--radius-pill);
+  color: var(--text-dim);
+  font-family: var(--font-mono);
+  font-size: var(--fs-2xs);
+}
+.chat-task-call-prompt { white-space: pre-wrap; overflow-wrap: anywhere; }
 
 /* under the message that invoked it, on the message's side */
 .chat-turn-user .chat-skills { justify-content: flex-end; margin: 0; }

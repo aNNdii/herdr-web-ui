@@ -26,6 +26,7 @@ import { checkDroplet } from "./droplet-regression.ts";
 import { checkAlertSound } from "./alert-sound-regression.ts";
 import { checkChatKeepsTerminalSize, checkPaneSwitchKeepsTerminalSize } from "./chat-size-regression.ts";
 import { checkCommandBackspace } from "./terminal-command-backspace-regression.ts";
+import { checkCtrlEnter } from "./terminal-ctrl-enter-regression.ts";
 import { checkCommandArrows } from "./terminal-command-arrows-regression.ts";
 import { checkUpdateNotice } from "./update-notice-regression.ts";
 import { UsageService } from "../server/usage.ts";
@@ -231,6 +232,7 @@ try {
   console.log("PASS terminal Shift+Enter sends a newline chord once and preserves Enter, Alt+Enter and IME");
   console.log("PASS pending IME commit precedes Shift+Enter without duplicate text");
   await checkCommandBackspace(browser, origin, paneA);
+  await checkCtrlEnter(browser, origin, paneA);
   await checkCommandArrows(browser, origin, paneA);
   // a pane shortcut switches panes and types nothing: xterm used to send ESC[1;6B / ESC[1;6A too
   const selectedTitle = () => page.locator(".pane-item.is-selected .pane-select").getAttribute("title");
@@ -395,7 +397,7 @@ try {
   if (process.env.UI_EVIDENCE_DIR) await page.screenshot({ path: join(process.env.UI_EVIDENCE_DIR, "multiple-queue.png") });
   // one column: the held list, the box and the conversation share their edges, and the status
   // line is the box's own last row, inside it.
-  // The default Chat width follows the pane: min 820px, max 960px, 71% of the pane between. This
+  // The default Chat width follows the pane: min 820px, max 60rem (960px at this 16px root), 71% of the pane between. This
   // pane is under 1148px, so the lane is its 820px floor, as at Narrow; at Wide the lane is wider
   // than the pane and the column is the pane less its gutters. A larger window grows the lane
   const chatWidth = async (name: string): Promise<void> => {
@@ -896,6 +898,12 @@ try {
   await page.locator('.composer-status[data-status="idle"]').waitFor();
   const startupPrompt = page.locator(".prompt-card");
   await startupPrompt.getByRole("button", { name: "1. Yes, continue", exact: true }).waitFor();
+  // the card is docked on the composer's column, directly over it, and is no part of the transcript
+  assert.deepEqual(await startupPrompt.evaluate((node) => ({
+    inTranscript: node.closest(".chat-view") !== null,
+    next: node.parentElement?.nextElementSibling?.classList.contains("composer") ?? false,
+    over: node.getBoundingClientRect().bottom <= document.querySelector(".composer-surface")!.getBoundingClientRect().top,
+  })), { inTranscript: false, next: true, over: true });
   assert.equal(await page.locator('.composer-status[data-status="idle"]').count(), 1);
   assert.equal(await page.locator(".chat-empty").count(), 0);
   await startupPrompt.getByRole("button", { name: "1. Yes, continue", exact: true }).click();
