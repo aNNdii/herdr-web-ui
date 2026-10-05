@@ -547,7 +547,9 @@ One set for both themes: the card is island black wherever it shows.
   A link keeps `--accent` and a file chip reads in `--text-strong` with a dotted underline; both
   underlines are `--text-dim` at rest and both take the accent on hover and focus-visible.
   Code blocks are `--radius-lg` and never scroll inside: one longer than 30 lines opens at its
-  first 20 behind **Show all N lines**. On touch a block has a header strip (language, copy);
+  first 20 behind **Show all N lines**. A table fills the reply's width; its cells break between
+  words only, so a column is never narrower than its longest word, and a table without room
+  scrolls sideways in its own box. On touch a block has a header strip (language, copy);
   with a mouse and no touch screen the strip becomes a corner control over the block's top right,
   shown on hover or focus-within (no transition under reduced motion).
   Thinking renders as a folded block only when **Show thinking** is enabled.
