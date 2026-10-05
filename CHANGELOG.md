@@ -8,6 +8,9 @@ between releases do not reach them. Remote-PC runtime bundles are versioned sepa
 ## [Unreleased]
 
 ### Fixed
+- A table in the chat that is wider than the reply scrolls sideways in its own box. Before, it
+  squeezed every column to fit, down to a letter or two, and broke words like "Partly" into
+  "Par/tly". A column is now never narrower than its longest word.
 - In the chat of an OmO pane, a background task that ends shows where OmO reported it: a
   card that says how many tasks ended, and for each its summary, whether it finished, failed
   or was cancelled, the agent and model it ran as, how long it took, its turns, tool calls and

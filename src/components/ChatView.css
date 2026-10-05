@@ -441,10 +441,15 @@
   font-size: var(--fs-sm);
 }
 
+/* A cell breaks between words only, so a column is never narrower than its longest word and a
+   table without room scrolls in its wrap. The reply's `overflow-wrap: anywhere` counts toward a
+   cell's narrowest width: with it a table squeezed every column down to a letter or two and
+   never overflowed. */
 .markdown th,
 .markdown td {
   padding: var(--space-2);
   border: var(--hairline) solid var(--border);
+  overflow-wrap: normal;
   text-align: left;
 }
 
