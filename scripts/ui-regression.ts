@@ -112,6 +112,10 @@ try {
   await until(() => painted.has(paneA), "owned pane paint");
   const composer = page.getByRole("textbox", { name: "Message", exact: true });
   await composer.waitFor();
+  // the message box is prose: a phone keyboard keeps its suggestions, autocorrect and capitals
+  assert.equal(await composer.getAttribute("autocorrect"), null, "the message box leaves autocorrect to the keyboard");
+  assert.equal(await composer.getAttribute("spellcheck"), null, "the message box leaves spell checking to the browser");
+  assert.equal(await composer.getAttribute("autocapitalize"), "sentences", "the message box capitalizes sentences");
 
   // Hold a real machines response, then deliver a newer status through herdr/SSE.
   const badge = page.locator(".pane-item.is-selected .badge");
