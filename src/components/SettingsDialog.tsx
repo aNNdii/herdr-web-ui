@@ -6,7 +6,8 @@ import "./SettingsDialog.css";
 import type { AppActions } from "../lib/actions.ts";
 import { useInstallPrompt } from "../lib/install.ts";
 import { SHORTCUTS, formatKeys, shortcutKeys, shortcutConflict } from "../lib/shortcuts.ts";
-import { CHAT_FONT_MAX, CHAT_FONT_MIN, CHAT_WIDTHS, chatFontSize, DEFAULT_SETTINGS, QUICK_REPLIES_MAX, QUICK_REPLY_MAX_CHARS, TERMINAL_FONT_MAX, TERMINAL_FONT_MIN, TERMINAL_WHEEL_SPEED_MAX, TERMINAL_WHEEL_SPEED_MIN, useSettings, forgetPaneViews } from "../lib/settings.ts";
+import { CHAT_FONT_MAX, CHAT_FONT_MIN, CHAT_WIDTHS, chatFontSize, DEFAULT_SETTINGS, MARKDOWN_WIDTHS, QUICK_REPLIES_MAX, QUICK_REPLY_MAX_CHARS, SIZE_LIMIT_CHOICES, TERMINAL_FONT_MAX, TERMINAL_FONT_MIN, TERMINAL_WHEEL_SPEED_MAX, TERMINAL_WHEEL_SPEED_MIN, useSettings, forgetPaneViews } from "../lib/settings.ts";
+import { formatBytes } from "../lib/bridgeProgress.ts";
 import { LANGUAGE_NAMES, LANGUAGE_SETTINGS, useT } from "../lib/i18n.ts";
 import { FONT_FAMILY_MAX_CHARS, sanitizeFontFamily } from "../lib/fontFamily.ts";
 import type { UpdatesModel } from "../lib/updates.ts";
@@ -136,11 +137,14 @@ function UsageAccounts({ providers }: { providers: readonly ProviderUsage[] }) {
   );
 }
 
+/** The per-device preferences, saved as they change: appearance, chat, file viewer, alerts, devices and more. */
 export function SettingsDialog({ open, onClose, actions, updates, auth, herdrVersion, onEnableNotifications }: SettingsDialogProps) {
   const { settings, update } = useSettings();
   // the accounts to order and hide: the same report the meters show, from the server's cache
   const usage = useUsage(open && settings.showUsage);
   const t = useT();
+  // literal keys, so the i18n check finds them
+  const markdownWidthLabel = { readable: t("Default"), full: t("Full width") };
   const installPrompt = useInstallPrompt();
   const firstControlRef = useRef<HTMLButtonElement>(null);
   // the Sound switch as last set: the preview waits for the audio, and must not play once it is off
@@ -201,6 +205,7 @@ export function SettingsDialog({ open, onClose, actions, updates, auth, herdrVer
   useEffect(() => {
     if (!open) return;
     firstControlRef.current?.focus();
+    /** Escape closes Settings, without the browser's own default for the key. */
     const closeOnEscape = (event: KeyboardEvent): void => {
       if (event.key !== "Escape") return;
       event.preventDefault();
@@ -419,6 +424,44 @@ export function SettingsDialog({ open, onClose, actions, updates, auth, herdrVer
             <div className="settings-row">
               <div><span className="settings-label">{t("Chat font")}</span><span className="settings-description">{t("Message text; code stays monospace. Comma-separated, tried in order. A font this device does not have falls back to the default.")}</span></div>
               <FontFamilyInput value={settings.chatFontFamily} label={t("Chat font")} onCommit={(chatFontFamily) => update({ chatFontFamily })} />
+            </div>
+          </section>
+
+          <section className="settings-section">
+            <h3>{t("File viewer")}</h3>
+            <div className="settings-row">
+              <span className="settings-label">{t("Wrap long lines")}</span>
+              <Toggle label={t("Wrap long lines")} checked={settings.wrapCode} onChange={(wrapCode) => update({ wrapCode })} />
+            </div>
+            <div className="settings-row">
+              <span className="settings-label">{t("Load text files up to")}</span>
+              <div className="segmented" aria-label={t("Load text files up to")}>
+                {SIZE_LIMIT_CHOICES.map((textLoadLimit) => (
+                  <button key={textLoadLimit} type="button" aria-pressed={settings.textLoadLimit === textLoadLimit} onClick={() => update({ textLoadLimit })}>
+                    {formatBytes(textLoadLimit)}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div className="settings-row">
+              <span className="settings-label">{t("Highlight files up to")}</span>
+              <div className="segmented" aria-label={t("Highlight files up to")}>
+                {SIZE_LIMIT_CHOICES.map((highlightLimit) => (
+                  <button key={highlightLimit} type="button" aria-pressed={settings.highlightLimit === highlightLimit} onClick={() => update({ highlightLimit })}>
+                    {formatBytes(highlightLimit)}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div className="settings-row">
+              <span className="settings-label">{t("Markdown width")}</span>
+              <div className="segmented" aria-label={t("Markdown width")}>
+                {MARKDOWN_WIDTHS.map((markdownWidth) => (
+                  <button key={markdownWidth} type="button" aria-pressed={settings.markdownWidth === markdownWidth} onClick={() => update({ markdownWidth })}>
+                    {markdownWidthLabel[markdownWidth]}
+                  </button>
+                ))}
+              </div>
             </div>
           </section>
 

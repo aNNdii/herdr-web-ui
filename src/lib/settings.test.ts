@@ -3,7 +3,7 @@ import { describe, expect, it } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { FONT_FAMILY_MAX_CHARS } from "./fontFamily.ts";
-import { alertPrefs, CHAT_FONT_MAX, CHAT_FONT_MIN, CHAT_LANE_MAX, CHAT_LANE_MIN, CHAT_WIDTHS, chatFontSize, chatLaneWidth, DEFAULT_SETTINGS, QUICK_REPLIES_MAX, QUICK_REPLY_MAX_CHARS, quickReplyButtons, sanitizeSettings, terminalTheme, forgetPaneViews } from "./settings.ts";
+import { alertPrefs, CHAT_FONT_MAX, CHAT_FONT_MIN, CHAT_LANE_MAX, CHAT_LANE_MIN, CHAT_WIDTHS, chatFontSize, chatLaneWidth, DEFAULT_SETTINGS, MARKDOWN_WIDTHS, QUICK_REPLIES_MAX, QUICK_REPLY_MAX_CHARS, quickReplyButtons, sanitizeSettings, terminalTheme, forgetPaneViews } from "./settings.ts";
 
 it("keeps the screen wake lock off until this device explicitly enables it", () => {
   expect(DEFAULT_SETTINGS.keepScreenOn).toBe(false);
@@ -357,4 +357,24 @@ describe("default lens", () => {
     expect(forgetPaneViews(storage)).toBe(2);
     expect([...data.keys()]).toEqual(["herdr-web-ui:settings"]);
   });
+});
+
+it("keeps the file viewer's wrap and size limits to the offered choices", () => {
+  expect(DEFAULT_SETTINGS.wrapCode).toBe(false);
+  expect(DEFAULT_SETTINGS.highlightLimit).toBe(256 * 1024);
+  expect(DEFAULT_SETTINGS.textLoadLimit).toBe(1024 * 1024);
+  expect(sanitizeSettings({ wrapCode: true }).wrapCode).toBe(true);
+  expect(sanitizeSettings({ wrapCode: "yes" }).wrapCode).toBe(false);
+  expect(sanitizeSettings({ highlightLimit: 1024 * 1024 }).highlightLimit).toBe(1024 * 1024);
+  expect(sanitizeSettings({ textLoadLimit: 256 * 1024 }).textLoadLimit).toBe(256 * 1024);
+  for (const bad of [0, 128 * 1024, 4 * 1024 * 1024, "1048576", null]) {
+    expect(sanitizeSettings({ highlightLimit: bad }).highlightLimit).toBe(256 * 1024);
+    expect(sanitizeSettings({ textLoadLimit: bad }).textLoadLimit).toBe(1024 * 1024);
+  }
+});
+
+it("keeps the Markdown preview's width to readable or full, readable by default", () => {
+  expect(DEFAULT_SETTINGS.markdownWidth).toBe("readable");
+  for (const width of MARKDOWN_WIDTHS) expect(sanitizeSettings({ markdownWidth: width }).markdownWidth).toBe(width);
+  for (const bad of ["narrow", "medium", "wide", "", null, 80]) expect(sanitizeSettings({ markdownWidth: bad }).markdownWidth).toBe("readable");
 });

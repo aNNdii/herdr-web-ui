@@ -91,6 +91,29 @@ export interface Settings {
   voicePolishChat: boolean;
   /** off by default: a terminal line is usually a command, kept as spoken */
   voicePolishTerminal: boolean;
+  /** the file viewer wraps long lines instead of scrolling sideways */
+  wrapCode: boolean;
+  /**
+   * the longest text the file viewer syntax-highlights, in characters (`code.length`), one of
+   * SIZE_LIMIT_CHOICES. Shown as "256 KB": code is nearly all ASCII, one byte a character, and a
+   * size is what a reader compares with the file's. The text the viewer loads is cut in bytes.
+   */
+  highlightLimit: number;
+  /** how much of a text file the file viewer loads, in bytes; one of SIZE_LIMIT_CHOICES */
+  textLoadLimit: number;
+  /** the line length of a Markdown preview: about 120 characters, centered, or the viewer's width */
+  markdownWidth: MarkdownWidth;
+}
+
+export const MARKDOWN_WIDTHS = ["readable", "full"] as const;
+export type MarkdownWidth = (typeof MARKDOWN_WIDTHS)[number];
+
+/** the sizes the file viewer's limits offer, 256 KB and 1 MB: bytes loaded, characters highlighted */
+export const SIZE_LIMIT_CHOICES = [256 * 1024, 1024 * 1024] as const;
+
+/** A stored limit if it is one of the choices; anything else (an old or hand-edited value) falls back. */
+function sizeLimit(value: unknown, fallback: number): number {
+  return SIZE_LIMIT_CHOICES.find((choice) => choice === value) ?? fallback;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -127,6 +150,10 @@ export const DEFAULT_SETTINGS: Settings = {
   voiceInput: false,
   voicePolishChat: true,
   voicePolishTerminal: false,
+  wrapCode: false,
+  highlightLimit: 256 * 1024,
+  textLoadLimit: 1024 * 1024,
+  markdownWidth: "readable",
 };
 
 export const QUICK_REPLIES_MAX = 12;
@@ -236,6 +263,10 @@ export function sanitizeSettings(raw: unknown): Settings {
     voiceInput: typeof record["voiceInput"] === "boolean" ? record["voiceInput"] : DEFAULT_SETTINGS.voiceInput,
     voicePolishChat: typeof record["voicePolishChat"] === "boolean" ? record["voicePolishChat"] : DEFAULT_SETTINGS.voicePolishChat,
     voicePolishTerminal: typeof record["voicePolishTerminal"] === "boolean" ? record["voicePolishTerminal"] : DEFAULT_SETTINGS.voicePolishTerminal,
+    wrapCode: typeof record["wrapCode"] === "boolean" ? record["wrapCode"] : DEFAULT_SETTINGS.wrapCode,
+    highlightLimit: sizeLimit(record["highlightLimit"], DEFAULT_SETTINGS.highlightLimit),
+    textLoadLimit: sizeLimit(record["textLoadLimit"], DEFAULT_SETTINGS.textLoadLimit),
+    markdownWidth: MARKDOWN_WIDTHS.find((width) => width === record["markdownWidth"]) ?? DEFAULT_SETTINGS.markdownWidth,
   };
 }
 
