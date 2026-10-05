@@ -1,4 +1,4 @@
-import { useCallback, useContext, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from "react";
+import { useCallback, useContext, useEffect, useLayoutEffect, useReducer, useRef, useState, useSyncExternalStore } from "react";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
@@ -10,9 +10,10 @@ import { HerdrSocket } from "../lib/ws.ts";
 import { controlCode, isPrintable, keySequence, type KeyBarKey } from "../lib/keys.ts";
 import { EMPTY_DRAFT, applyToDraft, draftIsEmpty, type InputDraft } from "../lib/draft.ts";
 import { messageQueues } from "../lib/messageQueue.ts";
-import { MAX_COMPOSER_CHARS, QUEUE_READY_STATUS, composerMessage, composerPayload, submitNote } from "../lib/compose.ts";
+import { MAX_COMPOSER_CHARS, QUEUE_READY_STATUS, agentDisplayLabel, composerMessage, composerPayload, submitNote, submitNotTyped } from "../lib/compose.ts";
+import { afterRead, afterSend, afterSettled, composerLift, greetingMemory, rememberGreeting, greetingFits, greetingFolder, roomOverComposer, showsGreeting, type ChatRead } from "../lib/greeting.ts";
 import { answerFromText, answerHint, answerRefusal, needsConfirmation, type TypedAnswer } from "../lib/promptAnswer.ts";
-import { ApiError, fetchPaneScroll, fetchPaneSelection, scrollPane } from "../lib/api.ts";
+import { ApiError, assertAttachable, fetchPaneScroll, fetchPaneSelection, scrollPane } from "../lib/api.ts";
 import { parseOsc52 } from "../lib/osc52.ts";
 import { matchHerdrWidths } from "../lib/terminalWidths.ts";
 import { useMachineApi, useMachineId } from "../lib/machineContext.tsx";
@@ -26,7 +27,7 @@ import { RenderBoundary } from "./RenderBoundary.tsx";
 import { Composer } from "./Composer.tsx";
 import type { AgentStatus, ClientRole, ConversationMetadata, InteractivePrompt, ServerMessage } from "../../shared/protocol.ts";
 import type { PaneView } from "../lib/actions.ts";
-import { useSettings, terminalTheme, type Palette, type ResolvedTheme } from "../lib/settings.ts";
+import { chatLaneWidth, useSettings, terminalTheme, type Palette, type ResolvedTheme } from "../lib/settings.ts";
 import { loadFontStack, TERMINAL_FONT_STACK, terminalFontStack } from "../lib/fontFamily.ts";
 import { useT } from "../lib/i18n.ts";
 import { isAppShortcut } from "../lib/shortcuts.ts";
@@ -51,6 +52,9 @@ export interface PaneTerminalProps {
   agentStatus?: AgentStatus;
   /** an OmO pane's running background tasks: the composer's status line offers their list */
   backgroundTasks?: number;
+  /** the pane's working directory and its PC's name: an empty chat's greeting names them */
+  cwd?: string | null;
+  machineName?: string;
   /** the lens over the pane: the chat transcript, or the live xterm grid (App remembers it per pane) */
   view: PaneView;
   /** App selected this pane itself (the selected one closed): switching to it must not take the keyboard */
@@ -102,6 +106,8 @@ export function PaneTerminal({
   agent = null,
   agentStatus,
   backgroundTasks = 0,
+  cwd = null,
+  machineName = "",
   view,
   autoSelected = false,
   terminalFontSize,
@@ -129,6 +135,7 @@ export function PaneTerminal({
   const wheelSpeedRef = useRef(terminalWheelSpeed);
   wheelSpeedRef.current = terminalWheelSpeed;
   const hostRef = useRef<HTMLDivElement | null>(null);
+  const stackRef = useRef<HTMLDivElement | null>(null);
   const termRef = useRef<Terminal | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
   const socketRef = useRef<HerdrSocket | null>(null);
@@ -174,6 +181,23 @@ export function PaneTerminal({
   const { settings, update: updateSettings } = useSettings();
   const shortcutSettings = useRef(settings.shortcutOverrides);
   shortcutSettings.current = settings.shortcutOverrides;
+  // Settings → Chat width, Default: the lane follows this pane. One px length on the stack, which
+  // the transcript, the composer column, the held list and the menus all inherit: a percentage
+  // would resolve against each one's own box and leave them a gutter apart. The other steps are
+  // fixed and stay with the stylesheet (styles.css)
+  useLayoutEffect(() => {
+    const stack = stackRef.current;
+    if (!stack) return;
+    if (settings.chatWidth !== "default") {
+      stack.style.removeProperty("--chat-w");
+      return;
+    }
+    const apply = (): void => stack.style.setProperty("--chat-w", `${chatLaneWidth(stack.clientWidth)}px`);
+    apply();
+    const observer = new ResizeObserver(apply);
+    observer.observe(stack);
+    return () => observer.disconnect();
+  }, [settings.chatWidth]);
   const directTyping = settings.terminalInputMode === "direct" || (settings.terminalInputMode === "auto" && (!coarse || storedDirectTyping()));
   const inputLine = !directTyping && !chatView;
   const inputLineRef = useRef(inputLine);
@@ -199,6 +223,21 @@ export function PaneTerminal({
   // bumped as a composer message goes out: the chat must not title the turn before it as running
   const [chatSent, setChatSent] = useState(0);
   const [chatMetadata, setChatMetadata] = useState<{ pane: string; value: ConversationMetadata | null } | null>(null);
+  // What each pane's chat last read, and whether a message went out since: kept per pane here,
+  // not in the chat, so a message sent ends the greeting at once and neither another lens, another
+  // pane nor a failed read brings it back before the conversation shows a turn or a new history.
+  // It lives in lib/greeting.ts, over this component, which another PC's pane mounts again.
+  const [, redrawGreeting] = useReducer((count: number) => count + 1, 0);
+  const onChatRead = useCallback((pane: string, read: ChatRead | null) => {
+    const owner = paneStorageId(machineId, pane);
+    const memory = greetingMemory(owner);
+    const next = afterRead(memory, read);
+    if (next === memory) return;
+    rememberGreeting(owner, next); redrawGreeting();
+  }, [machineId]);
+  // the stack (stackRef, above) holds the composer and the greeting over it (measured below)
+  const [greetingRoom, setGreetingRoom] = useState(true);
+  const greetingRef = useRef<HTMLDivElement | null>(null);
   // The prompt the chat shows: while it waits, a message from the composer answers it.
   const [chatPrompt, setChatPrompt] = useState<{ pane: string; value: InteractivePrompt } | null>(null);
   const [promptRefresh, setPromptRefresh] = useState(0);
@@ -765,6 +804,18 @@ export function PaneTerminal({
         && event.key === "Backspace" && event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey
         && !event.isComposing && event.keyCode !== 229;
     });
+    // xterm ignores Cmd+arrows. Handle them on the bubble phase, after its textarea
+    // keydown listener drains pending IME text, so movement never precedes that text.
+    const onCommandArrow = (event: KeyboardEvent): void => {
+      if (!isMac || event.target !== term.textarea || event.defaultPrevented || term.options.disableStdin
+        || composingRef.current || event.isComposing || event.keyCode === 229
+        || !event.metaKey || event.ctrlKey || event.altKey || event.shiftKey) return;
+      const sequence = event.key === "ArrowLeft" ? "\x01" : event.key === "ArrowRight" ? "\x05" : null;
+      if (sequence === null) return;
+      event.preventDefault();
+      term.input(sequence);
+    };
+    host.addEventListener("keydown", onCommandArrow);
     const onData = term.onData((data) => {
       if (shiftEnter && data === "\r") data = "\x1b\r";
       shiftEnter = false;
@@ -800,6 +851,8 @@ export function PaneTerminal({
     const uploadBatch = async (pane: string, files: File[]): Promise<void> => {
       if (paneRef.current !== pane || !socket.connected || term.options.disableStdin) return;
       try {
+        // the paths of a batch are pasted together: one file too large and none is uploaded
+        for (const file of files) assertAttachable(file);
         const paths: string[] = [];
         for (const file of files) paths.push(await uploadFileRef.current(pane, file));
         // An upload can finish after the user has switched panes or lost input access.
@@ -961,6 +1014,7 @@ export function PaneTerminal({
       document.removeEventListener("visibilitychange", onVisible);
       onShiftEnter.dispose();
       onCommandBackspace.dispose();
+      host.removeEventListener("keydown", onCommandArrow);
       onData.dispose();
       host.removeEventListener("paste", onFilePaste, { capture: true });
       host.removeEventListener("dragover", onDragOver);
@@ -1146,15 +1200,25 @@ export function PaneTerminal({
     if (sent === null) return false;
     term.scrollToBottom();
     setChatSent((current) => current + 1);
+    const owner = paneStorageId(machineId, pane);
+    const history = greetingMemory(owner).history;
+    rememberGreeting(owner, afterSend(greetingMemory(owner))); redrawGreeting();
     // a message went out, from the box or a queued one: the agent's suggestion was for the turn before it
     onChatSuggestion(pane, null);
     return sent.then((result) => {
+      // a message refused before anything was typed leaves the greeting as it was; each answer
+      // settles its own message only, so one on its way beside it (a queued "Send now") is not undone
+      rememberGreeting(owner, afterSettled(greetingMemory(owner), result.ok || !submitNotTyped(result.code), history)); redrawGreeting();
       if (!result.ok) return submitNote(result.code, result.message);
       // the chat lens refetches at once so the sent prompt appears without a poll beat
       setChatRefresh((current) => current + 1);
       return true;
+    }, (error: unknown) => {
+      // the send broke with no answer: it may have been typed, and it is no longer on its way
+      rememberGreeting(owner, afterSettled(greetingMemory(owner), true, history)); redrawGreeting();
+      throw error;
     });
-  }, [onChatSuggestion]);
+  }, [onChatSuggestion, machineId]);
 
   // the terminal's input line: the text typed like the keyboard would, into an agent's open
   // menu too, then Enter after the server's gap; several lines go as one paste
@@ -1220,6 +1284,35 @@ export function PaneTerminal({
   const heldByOpenQueue = chatView && chatPrompt !== null && chatPrompt.pane === paneId && chatPrompt.value.queued === "open";
   const busy = agent !== null && agentStatus === "working" && answering === null;
   const readyForQueue = agentStatus !== undefined && QUEUE_READY_STATUS[agentStatus] === true;
+  // an empty chat: one greeting line over the composer, which a mouse-driven window centres
+  const folder = greetingFolder(cwd);
+  const greetingDue = chatView && paneId !== null && agent !== null && !secretActive && !observing && !ended
+    && showsGreeting({ memory: greetingMemory(paneStorageId(machineId, paneId)), agentStatus, queued: queued.length, folder });
+  // a stack too short for the composer and the greeting keeps the chat's own empty line
+  const greeted = greetingDue && greetingRoom;
+  // Only the composer moves (Composer.css): the surface under it keeps its box, so the xterm
+  // mount is never resized by a greeting coming or going. Measured before paint, so the composer
+  // is never seen docked first. The greeting stays mounted while it does not fit, so that it is
+  // measured when the stack grows again.
+  useLayoutEffect(() => {
+    const stack = stackRef.current;
+    const greeting = greetingRef.current;
+    const composer = greeting?.parentElement;
+    if (!greetingDue || !stack || !greeting || !composer) return;
+    const place = (): void => {
+      const lift = composerLift(stack.clientHeight, composer.offsetHeight, greeting.offsetHeight);
+      const card = composer.querySelector(".composer-surface");
+      // a difference of two boxes of the same composer: the lift moves both
+      const cardOffset = card === null ? 0 : card.getBoundingClientRect().top - composer.getBoundingClientRect().top;
+      stack.style.setProperty("--composer-lift", `${lift}px`);
+      stack.style.setProperty("--composer-room", `${roomOverComposer(stack.clientHeight, composer.offsetHeight, lift, cardOffset)}px`);
+      setGreetingRoom(greetingFits(stack.clientHeight, composer.offsetHeight, greeting.offsetHeight));
+    };
+    place();
+    const observer = new ResizeObserver(place);
+    observer.observe(stack); observer.observe(composer); observer.observe(greeting);
+    return () => { observer.disconnect(); stack.style.removeProperty("--composer-lift"); stack.style.removeProperty("--composer-room"); setGreetingRoom(true); };
+  }, [greetingDue, paneId]);
 
   const composerSend = useCallback(
     (text: string, { agentOnly = false }: { agentOnly?: boolean } = {}): boolean | string | Promise<boolean | string> => {
@@ -1261,7 +1354,7 @@ export function PaneTerminal({
 
   return (
     // data-direct-typing: xterm's own field raises the soft keyboard here (lib/viewport.ts)
-    <div className={`terminal-stack${chatView ? " is-chat" : ""}`} data-direct-typing={coarse && directTyping && !chatView ? "" : undefined}>
+    <div ref={stackRef} className={`terminal-stack${chatView ? " is-chat" : ""}${greeted ? " is-greeted" : ""}`} data-direct-typing={coarse && directTyping && !chatView ? "" : undefined}>
       {paneId === null && restoreError !== null && (
         <div className="terminal-placeholder is-restore-error" role="status">
           <div className="terminal-placeholder-inner">
@@ -1364,6 +1457,8 @@ export function PaneTerminal({
             agent={agent}
             agentStatus={agentStatus}
             onMetadata={onChatMetadata}
+            onRead={onChatRead}
+            greeted={greeted}
             onPrompt={onChatPrompt}
             onSuggestion={onChatSuggestion}
             promptRefreshKey={promptRefresh}
@@ -1443,6 +1538,13 @@ export function PaneTerminal({
             : pendingAnswer?.promptId === answering.id ? t("Confirm your answer in the card above, or type another…") : answerHint(answering)}
           // no suggestion under any card, a fallback or queued one included
           suggestion={chatPrompt?.pane !== paneId && chatSuggestion?.pane === paneId ? chatSuggestion.value : null}
+          greeting={greetingDue ? (
+            <div className={`composer-greeting${greeted ? "" : " is-out"}`} ref={greetingRef} aria-hidden={greeted ? undefined : true}>
+              <p className="composer-greeting-title">{t("What should {agent} do in {folder}?", { agent: agentDisplayLabel(agent), folder })}</p>
+              {/* each part keeps its own direction: a right-to-left PC name does not reorder the path */}
+              <p className="composer-greeting-where">{machineName && <bdi>{machineName}</bdi>}{machineName && cwd ? " · " : ""}{cwd && <bdi>{cwd}</bdi>}</p>
+            </div>
+          ) : null}
           onSend={composerSend}
           onAbort={abortTurn}
           onUploadImage={uploadImage}
