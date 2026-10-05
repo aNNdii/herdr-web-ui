@@ -81,7 +81,9 @@ export function commentTarget(comment: BlockComment): CommentTarget {
 
 /** Item `index` of `list` as a one-item list: it keeps its number, not its nested blocks (they have their own targets). */
 function itemBlock(list: ListBlock, index: number): ListBlock {
-  const item = { content: list.items[index]!.content };
+  // a task item keeps its box, so the editor's quote shows it
+  const { content, checked } = list.items[index]!;
+  const item = checked === undefined ? { content } : { content, checked };
   return list.ordered
     ? { type: "list", ordered: true, start: (list.start ?? 1) + index, items: [item] }
     : { type: "list", ordered: false, items: [item] };
