@@ -307,6 +307,7 @@ export const KO: Record<string, string> = {
   "Close file": "파일 닫기",
   "No readable file at this path.": "이 경로에 읽을 수 있는 파일이 없습니다.",
   "The file could not be opened.": "파일을 열 수 없습니다.",
+  "This preview can't be shown.": "이 미리보기는 표시할 수 없습니다.",
   "Open {path}": "{path} 열기",
 
   // ---- PC dialog ----
@@ -441,10 +442,10 @@ export const KO: Record<string, string> = {
   "Not sent: it waited too long behind an earlier message, and nothing was typed. Send it again.": "보내지 않음: 앞선 메시지 뒤에서 너무 오래 기다렸고 아무것도 입력되지 않았습니다. 다시 보내세요.",
   "Not confirmed: the pane did not confirm this message. Check the terminal before sending it again.": "확인되지 않음: 패널이 이 메시지를 확인하지 않았습니다. 다시 보내기 전에 터미널을 확인하세요.",
   "Not sent: {message}": "보내지 않음: {message}",
-  "Answer above: type the numbers you choose, e.g. 1 3": "위에서 답하세요: 고른 번호를 입력 (예: 1 3)",
-  "Answer above: type your reply…": "위에서 답하세요: 답을 입력…",
-  "Answer above: type {range} or your own reply…": "위에서 답하세요: {range} 중 하나 또는 직접 입력…",
-  "Answer above: type {range} to choose…": "위에서 답하세요: {range} 중 하나를 입력…",
+  "Type the numbers you choose, e.g. 1 3": "고른 번호를 입력 (예: 1 3)",
+  "Type your reply…": "답을 입력…",
+  "Type {range} or your own reply…": "{range} 또는 직접 입력…",
+  "Type {range} to choose…": "{range} 중 하나를 입력…",
   "Choose with the option numbers above, e.g. 1 3.": "위 선택지 번호로 고르세요 (예: 1 3).",
   "Choose one of the options above: type {range}.": "위 선택지 중 하나를 고르세요: {range} 입력.",
 
@@ -669,6 +670,10 @@ export const KO: Record<string, string> = {
   "pi kept them in the session file but answers from the branch you chose. Use /tree in the terminal to go back.": "pi는 세션 파일에 그대로 두지만 선택한 브랜치로 답변합니다. 터미널에서 /tree로 돌아갈 수 있습니다.",
   "{command} opens a tree the chat cannot show. It runs in the terminal — tap the terminal button at the top of the screen to choose a branch.": "{command}이 연 트리는 채팅에서 표시할 수 없습니다. 터미널에서 실행됩니다 — 화면 상단의 터미널 버튼을 눌러 분기를 선택하세요.",
   "Background result delivered": "백그라운드 결과 도착",
+  "Background task ended": "백그라운드 작업 끝남",
+  "{n} background tasks ended": "백그라운드 작업 {n}개 끝남",
+  "The task reported no result": "작업이 결과를 남기지 않았습니다",
+  "This is the first part of a longer result": "긴 결과의 앞부분만 표시합니다",
   "Skill activity": "스킬 활동",
   "Skill requested": "호출 요청",
   "Skill invoked": "호출됨",

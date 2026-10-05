@@ -3,6 +3,7 @@ import { Check, Code, Copy, Download, ExternalLink, TriangleAlert, X } from "luc
 
 import "./FileViewer.css";
 import { DirectoryBrowser } from "./DirectoryBrowser.tsx";
+import { RenderBoundary } from "./RenderBoundary.tsx";
 import { TextFileView } from "./TextFileView.tsx";
 
 import type { FileInfo } from "../../shared/protocol.ts";
@@ -15,7 +16,7 @@ import { pathParts } from "../lib/filePaths.ts";
 import { languageForPath, tooLongToHighlight } from "../lib/highlight.ts";
 import { useT } from "../lib/i18n.ts";
 import { useSettings } from "../lib/settings.ts";
-import { decodeStart, hasPreview, loadedText, textView, type LoadedText, type TextViewMode } from "../lib/textPreview.ts";
+import { answeredFileSize, decodeStart, hasPreview, loadedText, textView, type LoadedText, type TextViewMode } from "../lib/textPreview.ts";
 
 /** Bigger images are offered as a download: a phone decodes an image whole. */
 const MAX_INLINE_IMAGE_BYTES = 20 * 1024 * 1024;
@@ -108,10 +109,15 @@ export function FileViewer({ path: asked, paneId, onClose, onOpen }: FileViewerP
       if (next.kind !== "text") return;
       // only the first part of a text file travels: a range, whatever the file's size
       const response = await fetch(fileUrl(next.path, paneId), { headers: { range: `bytes=0-${textLoadLimit - 1}` }, signal: download.signal });
+      const range = response.headers.get("content-range");
+      // an empty file has no first byte to send: its range answers 416, `bytes */0`
+      const empty = response.status === 416 && answeredFileSize(response.status, range, 0) === 0;
       // an error (the file gone since, a remote PC dropped) answers with JSON, never the file's text
-      if (!response.ok) throw new Error(`the file answered ${response.status}`);
-      const body = decodeStart(new Uint8Array(await response.arrayBuffer()), textLoadLimit);
-      if (!cancelled) setLoaded(loadedText(body, next.size, textLoadLimit));
+      if (!response.ok && !empty) throw new Error(`the file answered ${response.status}`);
+      const bytes = new Uint8Array(await response.arrayBuffer());
+      // the size as it was sent, not as the stat saw it: a file grown since is still cut short
+      const size = answeredFileSize(response.status, range, bytes.length);
+      if (!cancelled) setLoaded(loadedText(decodeStart(bytes, textLoadLimit), size, textLoadLimit));
     }).catch(async (reason: unknown) => {
       if (cancelled) return;
       // a folder is listed from the pane's folder, as a file is found from it
@@ -180,7 +186,16 @@ export function FileViewer({ path: asked, paneId, onClose, onOpen }: FileViewerP
       case "text":
         return loaded === null
           ? <p className="file-viewer-note">{t("Opening…")}</p>
-          : <TextFileView path={info.path} text={loaded.text} language={language} view={view} onOpen={onOpen ?? setPath} sourceRef={sourceRef} />;
+          // a text the renderer cannot draw fails here, not the app: the header (Show source, Raw,
+          // Close) stays, and a Preview that fails offers its source
+          : <RenderBoundary key={view} resetKey={loaded} fallback={() => view === "markdown"
+            ? <div className="file-viewer-note" role="alert">
+              <p>{t("This preview can't be shown.")}</p>
+              <button type="button" className="btn btn-ghost" onClick={() => setChosen({ path, mode: "code" })}>{t("Show source")}</button>
+            </div>
+            : <p className="file-viewer-note" role="alert">{t("The file could not be opened.")}</p>}>
+            <TextFileView path={info.path} text={loaded.text} language={language} view={view} onOpen={onOpen ?? setPath} sourceRef={sourceRef} />
+          </RenderBoundary>;
       default:
         return <p className="file-viewer-note">{info.mime}, {formatBytes(info.size)}. This file can't be shown here; download it instead.</p>;
     }
@@ -200,7 +215,7 @@ export function FileViewer({ path: asked, paneId, onClose, onOpen }: FileViewerP
               {info && (cutShort || leftPlain
                 ? <span className="file-viewer-notice" title={notes.join("\n")}>
                   <TriangleAlert aria-hidden="true" />
-                  <span>{cutShort ? t("{done} of {total}", { done: formatBytes(loaded.limit), total: formatBytes(info.size) }) : formatBytes(info.size)}</span>
+                  <span>{cutShort ? t("{done} of {total}", { done: formatBytes(loaded.limit), total: formatBytes(loaded.size ?? info.size) }) : formatBytes(info.size)}</span>
                   <span className="visually-hidden">{notes.join(". ")}</span>
                 </span>
                 : <span className="file-viewer-size">{formatBytes(info.size)}</span>)}

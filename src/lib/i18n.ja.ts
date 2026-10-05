@@ -309,6 +309,7 @@ export const JA: Record<string, string> = {
   "Close file": "ファイルを閉じる",
   "No readable file at this path.": "このパスに読み取り可能なファイルはありません。",
   "The file could not be opened.": "ファイルを開けませんでした。",
+  "This preview can't be shown.": "このプレビューは表示できません。",
   "Open {path}": "{path} を開く",
 
   // ---- PC dialog ----
@@ -443,10 +444,10 @@ export const JA: Record<string, string> = {
   "Not sent: it waited too long behind an earlier message, and nothing was typed. Send it again.": "未送信: 前のメッセージの後で長く待ちすぎたため、何も入力されませんでした。もう一度送信してください。",
   "Not confirmed: the pane did not confirm this message. Check the terminal before sending it again.": "未確認: ペインがこのメッセージを確認しませんでした。再送信する前にターミナルを確認してください。",
   "Not sent: {message}": "未送信: {message}",
-  "Answer above: type the numbers you choose, e.g. 1 3": "上で回答: 選ぶ番号を入力 (例: 1 3)",
-  "Answer above: type your reply…": "上で回答: 返答を入力…",
-  "Answer above: type {range} or your own reply…": "上で回答: {range} または返答を入力…",
-  "Answer above: type {range} to choose…": "上で回答: {range} を入力して選択…",
+  "Type the numbers you choose, e.g. 1 3": "選ぶ番号を入力 (例: 1 3)",
+  "Type your reply…": "返答を入力…",
+  "Type {range} or your own reply…": "{range} または返答を入力…",
+  "Type {range} to choose…": "{range} を入力して選択…",
   "Choose with the option numbers above, e.g. 1 3.": "上の選択肢の番号で選んでください (例: 1 3)。",
   "Choose one of the options above: type {range}.": "上の選択肢から 1 つ選んでください: {range} を入力。",
 
@@ -671,6 +672,10 @@ export const JA: Record<string, string> = {
   "pi kept them in the session file but answers from the branch you chose. Use /tree in the terminal to go back.": "pi はセッションファイルに残していますが、選択したブランチから回答します。ターミナルで /tree を使うと戻れます。",
   "{command} opens a tree the chat cannot show. It runs in the terminal — tap the terminal button at the top of the screen to choose a branch.": "{command} が開くツリーはチャットでは表示できません。ターミナルで実行されます — 画面上部のターミナルボタンをタップしてブランチを選んでください。",
   "Background result delivered": "バックグラウンドの結果が届きました",
+  "Background task ended": "バックグラウンドタスクが終了しました",
+  "{n} background tasks ended": "バックグラウンドタスク {n} 件が終了しました",
+  "The task reported no result": "タスクは結果を返しませんでした",
+  "This is the first part of a longer result": "長い結果の最初の部分です",
   "Skill activity": "スキルのアクティビティ",
   "Skill requested": "呼び出しを要求",
   "Skill invoked": "呼び出し済み",

@@ -177,8 +177,9 @@
 /*
  * A rendered document reads on the viewer's own background, like a page: no panel around it. Its
  * size and font are the chat's (ChatView.css). The Markdown width setting keeps it to the chat's
- * lane (--chat-w: 820px for the Default and Narrow chat widths), centered as an image or a PDF is
- * and narrower with the viewer, or lets it fill the viewer (then its text starts on the title's edge).
+ * lane (--chat-w, whatever Settings → Chat width makes it: the Default lane that follows the pane
+ * is written on the document, PaneTerminal.tsx), centered as an image or a PDF is and narrower
+ * with the viewer, or lets it fill the viewer (then its text starts on the title's edge).
  */
 .file-viewer-markdown {
   margin-inline: auto;
@@ -217,6 +218,11 @@
   color: var(--text-dim);
   font-size: var(--fs-sm);
   text-align: center;
+}
+
+/* a Preview that could not be drawn: the note, and its source a button below it */
+.file-viewer-note > p {
+  margin: 0 0 var(--space-2);
 }
 
 @media (pointer: coarse) {

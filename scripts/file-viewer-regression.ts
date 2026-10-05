@@ -17,7 +17,7 @@ const transcript = join(codexHome, "sessions", `rollout-2026-09-28T00-00-00-${th
 writeFileSync(transcript, [
   { type: "session_meta", payload: { id: thread, cwd: root } },
   { type: "response_item", payload: { type: "message", role: "user", content: [{ type: "input_text", text: "Show me the demo video." }] } },
-  { type: "response_item", payload: { type: "message", role: "assistant", phase: "final_answer", content: [{ type: "output_text", text: `Open [demo video](./preview.webm) or [notes](./notes.txt) or [guide](./docs/guide.md) or [big](./big.txt) or [big code](./big.ts) or [file URI notes](${new URL(`file://${join(root, "notes.txt")}`).href}) or [folder](${new URL(`file://${root}`).href}).\n\n${new URL(`file://${join(root, "notes.txt")}`).href}\n\n\`\`\`ts\nconst answer = 42;\n\nexport { answer };\n\`\`\`` }] } },
+  { type: "response_item", payload: { type: "message", role: "assistant", phase: "final_answer", content: [{ type: "output_text", text: `Open [demo video](./preview.webm) or [notes](./notes.txt) or [guide](./docs/guide.md) or [big](./big.txt) or [big code](./big.ts) or [deep quotes](./deep.md) or [empty](./empty.txt) or [file URI notes](${new URL(`file://${join(root, "notes.txt")}`).href}) or [folder](${new URL(`file://${root}`).href}).\n\n${new URL(`file://${join(root, "notes.txt")}`).href}\n\n\`\`\`ts\nconst answer = 42;\n\nexport { answer };\n\`\`\`` }] } },
 ].map((row) => JSON.stringify(row)).join("\n"));
 const db = new Database(join(codexHome, "state_5.sqlite"));
 db.exec("CREATE TABLE threads (id TEXT, rollout_path TEXT, cwd TEXT, archived INTEGER, agent_role TEXT, created_at INTEGER, updated_at INTEGER, source TEXT, first_user_message TEXT)");
@@ -36,6 +36,10 @@ const TEXT_LOAD_LIMIT = 256 * 1024;
 writeFileSync(join(root, "big.txt"), "a line of plain text, 0123456789\n".repeat(Math.ceil(TEXT_LOAD_LIMIT / 30)).slice(0, TEXT_LOAD_LIMIT + 10));
 // code past the highlight limit (256 KB) but within the larger load limit (1 MB): shown whole, in plain text
 writeFileSync(join(root, "big.ts"), "export const value = 1;\n".repeat(Math.ceil((TEXT_LOAD_LIMIT + 1024) / 24)));
+// 20 KB of nested quotes: parsed one level per `>`, they overflowed the stack and blanked the app
+writeFileSync(join(root, "deep.md"), `${">".repeat(20_000)} deepest\n`);
+// an empty file has no first byte: its range answers 416, which is not an error
+writeFileSync(join(root, "empty.txt"), "");
 let workspace: string | undefined;
 let server: ReturnType<typeof createServer> | undefined;
 let browser: Awaited<ReturnType<typeof chromium.launch>> | undefined;
@@ -181,13 +185,24 @@ try {
   });
   const chatText = await textStyle(".chat-transcript .chat-turn-agent .markdown");
   const previewText = await textStyle(".file-viewer-markdown");
-  assert.equal(chatText.fontSize, "17px", "the chat font size is applied in the chat");
+  // --fs-chat (15px), the size of prose read at length, at the chat's scale, 17 / 14
+  assert.ok(Math.abs(Number.parseFloat(chatText.fontSize) - 15 * 17 / 14) < 0.05, `the chat font size is applied in the chat: ${chatText.fontSize}`);
   assert.match(chatText.fontFamily, /^Georgia,/);
   assert.equal(previewText.fontSize, chatText.fontSize, "the preview's text has the chat's font size");
   assert.equal(previewText.fontFamily, chatText.fontFamily, "the preview's text has the chat's font");
   // --fs-xl (18px) at the chat's scale, 17 / 14
   assert.ok(Math.abs(Number.parseFloat(previewText.headingSize ?? "") - 18 * 17 / 14) < 0.05, `its headings scale with it: ${previewText.headingSize}`);
   assert.equal(await page.locator(".file-viewer-markdown").evaluate((element) => getComputedStyle(element).maxWidth), "820px", "Default is the chat's Default lane");
+  // on a wide screen the Default lane follows the pane (71.43% of it, up to 60rem): the preview
+  // follows with it, as wide as the chat beside it, not the 820px floor
+  await page.setViewportSize({ width: 1920, height: 1080 });
+  await page.waitForFunction(() => {
+    const preview = document.querySelector(".file-viewer-markdown");
+    const chat = document.querySelector(".chat-transcript");
+    return preview !== null && chat !== null && getComputedStyle(preview).maxWidth === `${chat.getBoundingClientRect().width}px`;
+  });
+  assert.equal(await page.locator(".file-viewer-markdown").evaluate((element) => getComputedStyle(element).maxWidth), "960px", "Default is as wide as the chat's lane");
+  await page.setViewportSize({ width: 390, height: 844 });
   assert.match(await guide.locator(".file-viewer-markdown pre, .file-viewer-markdown .hl-code").first().evaluate((element) => getComputedStyle(element).fontFamily), /monospace/, "its code stays monospace");
   console.log("PASS A Markdown preview takes the chat's font size, font and width");
   await guide.getByRole("button", { name: "Show source", exact: true }).click();
@@ -259,6 +274,26 @@ try {
   console.log("PASS Code too long to highlight says so in its header, once");
   await bigCode.locator(".file-viewer-text[data-wrap]").waitFor();
   console.log("PASS Settings → Wrap long lines wraps the code");
+  await page.getByRole("button", { name: "Close file", exact: true }).click();
+  await page.locator(".file-viewer").waitFor({ state: "hidden" });
+
+  // a quote nested 20 000 deep renders as a quote nested to the parser's limit, the rest its text
+  await page.getByRole("button", { name: "deep quotes", exact: true }).click();
+  const deep = page.getByRole("dialog", { name: "deep.md", exact: true });
+  // one paragraph, in the innermost quote: the markers past the limit, then the text
+  await deep.locator(".file-viewer-markdown blockquote p", { hasText: "> deepest" }).waitFor();
+  assert.equal(await deep.getByRole("alert").count(), 0, "the preview renders, not its fallback");
+  console.log("PASS A Markdown file of 20 000 nested quotes renders, and the app stays");
+  await page.getByRole("button", { name: "Close file", exact: true }).click();
+  await page.locator(".file-viewer").waitFor({ state: "hidden" });
+
+  // an empty file opens empty, whole, with Copy: not as an error
+  await page.getByRole("button", { name: "empty", exact: true }).click();
+  const empty = page.getByRole("dialog", { name: "empty.txt", exact: true });
+  await empty.getByRole("button", { name: "Copy file", exact: true }).waitFor();
+  assert.equal(await empty.getByRole("alert").count(), 0);
+  assert.equal(await empty.locator(".file-viewer-notice").count(), 0, "an empty file is not cut short");
+  console.log("PASS An empty file opens as an empty file, not as an error");
   await page.getByRole("button", { name: "Close file", exact: true }).click();
   await page.locator(".file-viewer").waitFor({ state: "hidden" });
 

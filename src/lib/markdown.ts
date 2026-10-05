@@ -254,8 +254,15 @@ export function foldCode(value: string): { head: string; lines: number } | null 
   return { head: lines.slice(0, FOLDED_CODE_LINES).join("\n"), lines: lines.length };
 }
 
+/**
+ * How deep quotes nest. A quote's contents recurse into `parseBlocks` once per level, so a file of
+ * nothing but `>` (20 000 of them are 20 KB) would overflow the stack while rendering; past this
+ * depth the remaining markers are the quote's text.
+ */
+export const MAX_QUOTE_DEPTH = 32;
+
 /** Markdown source as blocks, uncached; `parseMarkdown` is the entry, and a quote's contents recurse here. */
-function parseBlocks(source: string): MarkdownBlock[] {
+function parseBlocks(source: string, depth: number): MarkdownBlock[] {
   const lines = source.replace(/\r\n?/g, "\n").split("\n");
   const blocks: MarkdownBlock[] = [];
   let index = 0;
@@ -315,10 +322,10 @@ function parseBlocks(source: string): MarkdownBlock[] {
       continue;
     }
 
-    if (/^\s*>/.test(line)) {
+    if (depth < MAX_QUOTE_DEPTH && /^\s*>/.test(line)) {
       const quoted: string[] = [];
       while (index < lines.length && /^\s*>/.test(lineAt(lines, index))) quoted.push(lineAt(lines, index++).replace(/^\s*>\s?/, ""));
-      blocks.push({ type: "blockquote", blocks: parseBlocks(quoted.join("\n")) });
+      blocks.push({ type: "blockquote", blocks: parseBlocks(quoted.join("\n"), depth + 1) });
       continue;
     }
 
@@ -350,4 +357,4 @@ function parseBlocks(source: string): MarkdownBlock[] {
  * Markdown source as blocks. The last call is remembered (`memoizeLast`): a file viewer's Preview,
  * toggled to the source and back, mounts anew and would parse a long document again.
  */
-export const parseMarkdown = memoizeLast(parseBlocks);
+export const parseMarkdown = memoizeLast((source: string): MarkdownBlock[] => parseBlocks(source, 0));
