@@ -57,9 +57,10 @@ try {
   browser = await chromium.launch({ executablePath: process.env.CHROME_PATH ?? "/opt/google/chrome/chrome", headless: true, args: ["--no-sandbox"] });
   const context = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
   const page = await context.newPage();
-  // seeded once: a later step raises the load limit and reloads
+  // seeded once: a later step raises the load limit and reloads. The chat's own font size and
+  // family are set, so a Markdown preview can be shown to take them over
   await page.addInitScript((textLoadLimit) => {
-    if (localStorage.getItem("herdr-web-ui:settings") === null) localStorage.setItem("herdr-web-ui:settings", JSON.stringify({ language: "en", textLoadLimit }));
+    if (localStorage.getItem("herdr-web-ui:settings") === null) localStorage.setItem("herdr-web-ui:settings", JSON.stringify({ language: "en", textLoadLimit, chatFontSize: 17, chatFontFamily: "Georgia" }));
   }, TEXT_LOAD_LIMIT);
   page.setDefaultTimeout(10_000);
   const errors: string[] = [];
@@ -172,6 +173,23 @@ try {
   assert.equal(await guide.getByRole("link", { name: "Download", exact: true }).count(), 0, "a new tab (Raw) saves the file too");
   assert.equal(await guide.getByRole("button", { name: "Wrap long lines", exact: true }).count(), 0, "Wrap is for code, not the rendered Markdown");
   console.log("PASS Markdown opens as a Preview with a highlighted code block");
+  // the preview reads as the chat does: its font size and family, and at most its lane's width
+  const textStyle = (selector: string) => page.locator(selector).first().evaluate((element) => {
+    const style = getComputedStyle(element);
+    const heading = element.querySelector("h1");
+    return { fontSize: style.fontSize, fontFamily: style.fontFamily, headingSize: heading === null ? null : getComputedStyle(heading).fontSize };
+  });
+  const chatText = await textStyle(".chat-transcript .chat-turn-agent .markdown");
+  const previewText = await textStyle(".file-viewer-markdown");
+  assert.equal(chatText.fontSize, "17px", "the chat font size is applied in the chat");
+  assert.match(chatText.fontFamily, /^Georgia,/);
+  assert.equal(previewText.fontSize, chatText.fontSize, "the preview's text has the chat's font size");
+  assert.equal(previewText.fontFamily, chatText.fontFamily, "the preview's text has the chat's font");
+  // --fs-xl (18px) at the chat's scale, 17 / 14
+  assert.ok(Math.abs(Number.parseFloat(previewText.headingSize ?? "") - 18 * 17 / 14) < 0.05, `its headings scale with it: ${previewText.headingSize}`);
+  assert.equal(await page.locator(".file-viewer-markdown").evaluate((element) => getComputedStyle(element).maxWidth), "820px", "Default is the chat's Default lane");
+  assert.match(await guide.locator(".file-viewer-markdown pre, .file-viewer-markdown .hl-code").first().evaluate((element) => getComputedStyle(element).fontFamily), /monospace/, "its code stays monospace");
+  console.log("PASS A Markdown preview takes the chat's font size, font and width");
   await guide.getByRole("button", { name: "Show source", exact: true }).click();
   await guide.locator(".file-viewer-text .hl-line").first().waitFor();
   assert.equal(await guide.locator(".file-viewer-text .hl-line").count(), 7);

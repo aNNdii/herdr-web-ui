@@ -175,16 +175,17 @@
 }
 
 /*
- * A rendered document reads on the viewer's own background, like a page: no panel around it. The
- * Markdown width setting keeps it to about 120 characters a line, centered as an image or a PDF
- * is, or lets it fill the viewer (then its text starts on the title's edge).
+ * A rendered document reads on the viewer's own background, like a page: no panel around it. Its
+ * size and font are the chat's (ChatView.css). The Markdown width setting keeps it to the chat's
+ * lane (--chat-w: 820px for the Default and Narrow chat widths), centered as an image or a PDF is
+ * and narrower with the viewer, or lets it fill the viewer (then its text starts on the title's edge).
  */
 .file-viewer-markdown {
   margin-inline: auto;
   padding: var(--space-2);
 }
 
-.file-viewer-markdown-readable { max-width: 90ch; }
+.file-viewer-markdown-readable { max-width: var(--chat-w); }
 
 /*
  * On a narrow screen two or more actions leave the name and its notes no room. The name and Close
