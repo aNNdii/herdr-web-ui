@@ -550,6 +550,9 @@ One set for both themes: the card is island black wherever it shows.
   first 20 behind **Show all N lines**. On touch a block has a header strip (language, copy);
   with a mouse and no touch screen the strip becomes a corner control over the block's top right,
   shown on hover or focus-within (no transition under reduced motion).
+  A table fills the reply's width; its cells, file paths included, break between words only, so a
+  column is never narrower than its longest word, and a table without room scrolls sideways in
+  its own box.
   Thinking renders as a folded block only when **Show thinking** is enabled.
 - Block comments (`BlockComments.css`): every part of a final reply (paragraph, heading, list item,
   code block, table, display formula, a whole blockquote) takes a comment. Hovering a part for
