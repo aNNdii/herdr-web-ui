@@ -141,6 +141,9 @@ between releases do not reach them. Remote-PC runtime bundles are versioned sepa
   ([#462](https://github.com/devswha/herdr-web-ui/pull/462))
 
 ### Fixed
+- On a phone, the chat's message box keeps the keyboard's word suggestions, autocorrect and
+  spell checking, and starts a sentence with a capital. The box used to turn all of them off,
+  as the terminal does.
 - A draft in the message box keeps its full height when the window or the pane is resized, or
   the chat width changes: the box used to keep the height of its old line breaks until the next
   key press. ([#463](https://github.com/devswha/herdr-web-ui/pull/463))

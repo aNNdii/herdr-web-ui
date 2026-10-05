@@ -917,9 +917,9 @@ export function Composer({
           aria-controls={menuOpen ? menuId : undefined}
           aria-expanded={menuOpen}
           aria-activedescendant={menuOpen ? `${menuId}-${selectedIndex}` : undefined}
-          spellCheck={false}
-          autoCapitalize="off"
-          autoCorrect="off"
+          // a message is prose: a phone keyboard keeps its suggestions, autocorrect and spell
+          // checking, and starts sentences with a capital
+          autoCapitalize="sentences"
           // stays editable while the socket reconnects (sending waits for it): a phone's
           // dictation keyboard opens its own app and comes back, the socket may drop meanwhile,
           // and a disabled box would lose its focus and the dictated text with it
