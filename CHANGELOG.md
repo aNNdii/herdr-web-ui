@@ -14,6 +14,7 @@ between releases do not reach them. Remote-PC runtime bundles are versioned sepa
   warning sign there marks it, or one too long to color, with the reason as its tooltip. Code
   blocks in the chat are highlighted too. **Settings → File viewer** sets line wrapping, the width
   of a Markdown preview, how much of a text file is loaded and up to what size it is highlighted.
+  A Markdown preview has the chat's font size and font, and by default the chat's width.
   ([#429](https://github.com/devswha/herdr-web-ui/pull/429) by @aNNdii)
 - A task list (`- [x] done`, `- [ ] open`) in the chat and in a Markdown preview shows a checked or
   empty box instead of the brackets.

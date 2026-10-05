@@ -189,13 +189,13 @@ blue there instead of `--accent`, and Latte's colors are darkened to stay readab
 - Terminal and chat font families are comma-separated lists, default empty. They go in front of the
   terminal's built-in fonts (after the bundled Symbols Nerd Font Mono, which only draws icons) and of
   `--font-ui` in the chat's prose (as `--font-chat`), never in place of them; code in the chat keeps
-  `--font-mono`. At most 200 characters, with `;`, `{`, `}`, `<`,
+  `--font-mono`. A file viewer's Markdown preview takes the chat font size and family too. At most 200 characters, with `;`, `{`, `}`, `<`,
   `>`, `\` and control characters stripped and names with spaces quoted.
 - Composer Enter behavior and folded thinking visibility are preferences, not typography tokens.
 - File viewer: `wrapCode` (wrap long lines instead of scrolling sideways; default off),
   `textLoadLimit` (bytes of a text file loaded) and `highlightLimit` (characters highlighted), each
-  256 KB or 1 MB with defaults 1 MB and 256 KB, and `markdownWidth`: `readable` (about 120
-  characters, centered; default) or `full`.
+  256 KB or 1 MB with defaults 1 MB and 256 KB, and `markdownWidth`: `readable` (the chat
+  lane, `--chat-w`, centered; default) or `full`.
 - All settings share one sanitized `localStorage["herdr-web-ui:settings"]` record.
 
 ## 4. Spacing & Layout

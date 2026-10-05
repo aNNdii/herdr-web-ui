@@ -101,7 +101,7 @@ export interface Settings {
   highlightLimit: number;
   /** how much of a text file the file viewer loads, in bytes; one of SIZE_LIMIT_CHOICES */
   textLoadLimit: number;
-  /** the line length of a Markdown preview: about 120 characters, centered, or the viewer's width */
+  /** the width of a Markdown preview: the chat's lane (--chat-w), centered, or the viewer's width */
   markdownWidth: MarkdownWidth;
 }
 
@@ -335,9 +335,9 @@ function applyToDocument(settings: Settings, resolved: ResolvedTheme, language: 
   root.dataset["density"] = settings.density;
   root.dataset["palette"] = settings.palette;
   root.dataset["chatWidth"] = settings.chatWidth;
-  // ChatView.css scales its type tokens by this: the chosen size over the density's
+  // ChatView.css scales its type tokens by this (the chat's and a Markdown preview's): the chosen size over the density's
   root.style.setProperty("--chat-scale", String(chatFontSize(settings) / CHAT_BASE_FONT[settings.density]));
-  // ChatView.css sets the transcript's prose in this, and falls back to --font-ui without it
+  // ChatView.css sets the transcript's and a Markdown preview's prose in this, and falls back to --font-ui without it
   const chatFont = chatFontStack(settings.chatFontFamily);
   if (chatFont === null) root.style.removeProperty("--font-chat");
   else root.style.setProperty("--font-chat", chatFont);

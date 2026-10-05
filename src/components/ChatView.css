@@ -9,7 +9,31 @@
 
 /* The chat's text has its own size (Settings → Chat font size): the view scales the type
    tokens by --chat-scale (lib/settings.ts) and the transcript uses the scaled ones under
-   the same names, so every message, code block and prompt card grows together */
+   the same names, so every message, code block and prompt card grows together. A file
+   viewer's Markdown preview is the same rendering, so it takes the chat's size and font too */
+.chat-view,
+.file-viewer-content {
+  --chat-fs-2xs: calc(var(--fs-2xs) * var(--chat-scale, 1));
+  --chat-fs-xs: calc(var(--fs-xs) * var(--chat-scale, 1));
+  --chat-fs-sm: calc(var(--fs-sm) * var(--chat-scale, 1));
+  --chat-fs-md: calc(var(--fs-md) * var(--chat-scale, 1));
+  --chat-fs-lg: calc(var(--fs-lg) * var(--chat-scale, 1));
+  --chat-fs-xl: calc(var(--fs-xl) * var(--chat-scale, 1));
+}
+
+.chat-transcript,
+.file-viewer-markdown {
+  --fs-2xs: var(--chat-fs-2xs);
+  --fs-xs: var(--chat-fs-xs);
+  --fs-sm: var(--chat-fs-sm);
+  --fs-md: var(--chat-fs-md);
+  --fs-lg: var(--chat-fs-lg);
+  --fs-xl: var(--chat-fs-xl);
+  /* Settings -> Chat font (lib/settings.ts): the prose only; code, work rows and paths keep --font-mono */
+  font-family: var(--font-chat, var(--font-ui));
+  font-size: var(--fs-md);
+}
+
 .chat-view {
   position: absolute;
   inset: 0;
@@ -22,12 +46,6 @@
   background: var(--bg);
   /* blocks of a reply place their comment "+" by the room beside the column (BlockComments.css) */
   container: chat / inline-size;
-  --chat-fs-2xs: calc(var(--fs-2xs) * var(--chat-scale, 1));
-  --chat-fs-xs: calc(var(--fs-xs) * var(--chat-scale, 1));
-  --chat-fs-sm: calc(var(--fs-sm) * var(--chat-scale, 1));
-  --chat-fs-md: calc(var(--fs-md) * var(--chat-scale, 1));
-  --chat-fs-lg: calc(var(--fs-lg) * var(--chat-scale, 1));
-  --chat-fs-xl: calc(var(--fs-xl) * var(--chat-scale, 1));
 }
 
 /* From 769px the header over the chat has no bar and no rule (styles.css): the transcript
@@ -47,12 +65,6 @@
 }
 
 .chat-transcript {
-  --fs-2xs: var(--chat-fs-2xs);
-  --fs-xs: var(--chat-fs-xs);
-  --fs-sm: var(--chat-fs-sm);
-  --fs-md: var(--chat-fs-md);
-  --fs-lg: var(--chat-fs-lg);
-  --fs-xl: var(--chat-fs-xl);
   width: min(100%, var(--chat-w));
   min-height: 100%;
   margin-inline: auto;
@@ -60,9 +72,6 @@
   flex-direction: column;
   /* an answer sits close under its prompt; the larger space falls between exchanges */
   gap: var(--space-3);
-  /* Settings -> Chat font (lib/settings.ts): the prose only; code, work rows and paths keep --font-mono */
-  font-family: var(--font-chat, var(--font-ui));
-  font-size: var(--fs-md);
 }
 
 .chat-turn {
