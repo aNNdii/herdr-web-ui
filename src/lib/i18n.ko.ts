@@ -870,8 +870,6 @@ export const KO: Record<string, string> = {
   "{count} comment waiting": "댓글 {count}개 대기 중",
   "{count} comments waiting": "댓글 {count}개 대기 중",
   "Remove all comments": "댓글 모두 제거",
-  "Undo": "실행 취소",
-  "Comments removed: {count}": "댓글 {count}개를 제거했습니다",
   "Comments only": "댓글만",
   "Comments with this message: {count}": "이 메시지의 댓글: {count}",
   "Go to the next comment": "다음 댓글로 이동",

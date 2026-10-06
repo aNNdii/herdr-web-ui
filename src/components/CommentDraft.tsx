@@ -104,7 +104,7 @@ export function useCommentDraft(
       }
       // chosen after the commit: a deleted comment's card is still in the document here, and
       // React removes it right after, which would leave the focus on the body
-      // (a touch screen lets it go instead of raising the keyboard in the composer, as the composer's undo does)
+      // (a touch screen lets it go instead of raising the keyboard in the composer, as the bar's X does)
       queueMicrotask(() => restoreFocusTarget(opener(), back, nonModal.current, window.matchMedia("(pointer: coarse)").matches)?.focus({ preventScroll: true }));
     };
   }, []);

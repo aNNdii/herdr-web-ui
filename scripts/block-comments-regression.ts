@@ -81,8 +81,6 @@ const barOf = (page: Page): Locator => page.locator(".composer-surface > .compos
 const walkOf = (page: Page): Locator => barOf(page).locator("button.composer-comments-walk");
 /** The bar's X, which takes every comment at once. */
 const removeOf = (page: Page): Locator => barOf(page).locator("button.composer-comments-remove");
-/** The undo that takes the bar's place after the X. */
-const undoOf = (page: Page): Locator => barOf(page).locator("button.composer-comments-undo");
 /** What the walk button's name says ("3 comments on the reply"; waiting, "3 comments waiting. <why>"). */
 const labelOf = (page: Page): Promise<string | null> => walkOf(page).getAttribute("aria-label");
 /** The Comment button floating over a selection in the chat. */
@@ -1156,34 +1154,6 @@ try {
     assert.equal(await page.evaluate(() => document.activeElement?.classList.contains("composer-text")), true, "deleting a comment from its popover leaves the focus on the message (the bubble is gone), not on the page");
     console.log("PASS desktop: edit and delete from the popover under a bubble");
 
-    // the X takes every comment, and an undo stands in the bar's own place: same row, the focus on it, the notes and their highlight gone
-    // from the chat; a click on it brings every note and the count back, and the focus goes back to the walk button
-    const placeOf = (): Promise<{ x: number; y: number; width: number; height: number }> => bar.evaluate((node) => { const box = node.getBoundingClientRect(); return { x: box.x, y: box.y, width: box.width, height: box.height }; });
-    const barBefore = await placeOf();
-    const textsBefore = await noteTexts(page);
-    assert.equal(textsBefore.length, 4);
-    await removeOf(page).click();
-    await eventually("the bar to turn into the undo", () => bar.evaluate((node) => node.classList.contains("is-undo")));
-    await eventually("every note to leave the chat", async () => (await notesOf(page).count()) === 0 && (await page.locator(".is-commented, .is-current").count()) === 0);
-    await eventually("the highlight to go with the notes", async () => (await highlighted(page)) === 0);
-    const barAfter = await placeOf();
-    for (const key of ["x", "y", "width", "height"] as const) assert.ok(Math.abs(barAfter[key] - barBefore[key]) <= 1, `the undo bar is in the bar's place (${key}: ${barBefore[key]} → ${barAfter[key]})`);
-    assert.equal(await bar.locator(".composer-comments-text").innerText(), "Comments removed: 4");
-    assert.equal(await undoOf(page).innerText(), "Undo");
-    assert.equal(await removeOf(page).count(), 0, "the undo bar has no X");
-    assert.equal(await walkOf(page).count(), 0, "the undo bar has no walk button");
-    assert.equal(await undoOf(page).evaluate((node) => node.getAttribute("aria-describedby") === node.parentElement!.querySelector(".composer-comments-text")!.id), true, "the focus on Undo reads what was removed");
-    await eventually("the focus to move to Undo", () => undoOf(page).evaluate((node) => node === document.activeElement));
-    await undoOf(page).click();
-    await eventually("every note to come back", async () => (await notesOf(page).count()) === 4);
-    assert.deepEqual(await noteTexts(page), textsBefore, "the same notes, in the same order");
-    assert.equal(await highlightMatchesNotes(page, "after the undo"), 4);
-    assert.equal(await labelOf(page), "4 comments on the reply");
-    assert.equal(await bar.evaluate((node) => node.classList.contains("is-undo")), false, "the walking bar is back");
-    await assertMessageLayout(page, messageFree, "with the undo bar and the walking bar alike");
-    await eventually("the focus to return to the walk button", () => walk.evaluate((node) => node === document.activeElement));
-    console.log("PASS desktop: the bar's X turns it into an undo in the same place, and Undo brings every note and the highlight back");
-
     // the agent starts again while a comment is being written: the popover and the draft stay, and
     // the code block is not rebuilt as the reply turns live and final again
     await page.locator(".markdown-code").evaluate((node) => { (node as HTMLElement).dataset.kept = "yes"; });
@@ -1235,18 +1205,20 @@ try {
     assert.ok(sent.some((text) => text === "> Intro paragraph\nFirst thought, briefly\n\n> the state\nSecond thought\n\n> check the logs\nAlso the exit code\n\n> const a = 1\nUse let\n\nThanks"), `sent: ${JSON.stringify(sent)}`);
     console.log("PASS desktop: send carries each comment's selected text quoted, in reading order, then clears them");
 
-    // an undo left alone expires (10 s, a bounded poll with a longer deadline): the comments stay gone, and the box has the focus
+    // the X takes every comment at once: no undo, no question; the bar goes with them and the message box has the focus
     await comment(page, intro, "Intro paragraph", "One more");
     await comment(page, long, "longer paragraph", "And another");
     await eventually("both comments to be counted", async () => (await labelOf(page)) === "2 comments on the reply");
     await removeOf(page).click();
-    await eventually("the undo", () => bar.evaluate((node) => node.classList.contains("is-undo")));
-    await eventually("the undo to expire", async () => (await bar.count()) === 0, 15000);
-    assert.equal(await notesOf(page).count(), 0, "the comments stay gone after the undo expired");
+    await bar.waitFor({ state: "detached" });
+    assert.equal(await page.locator(".composer-comments-undo, .composer-comments-bar.is-undo").count(), 0, "no undo takes the bar's place");
+    await eventually("every note to leave the chat", async () => (await notesOf(page).count()) === 0 && (await page.locator(".is-commented, .is-current").count()) === 0);
+    await eventually("the highlight to go with the notes", async () => (await highlighted(page)) === 0);
     assert.equal(await page.locator(".composer-attachments").count(), 0, "no strip is left behind");
-    assert.equal(await page.evaluate(() => document.activeElement?.classList.contains("composer-text")), true, "the undo had the focus: the message box takes it when it expires");
+    assert.equal(await page.evaluate(() => document.activeElement?.classList.contains("composer-text")), true, "the X had the focus: the message box takes it");
+    assert.equal(await page.evaluate((key) => localStorage.getItem(key), storeKey), null, "the stored comments are gone too");
     await assertMessageLayout(page, messageFree, "after the bar is gone");
-    console.log("PASS desktop: an unused undo expires after 10 s and the comments stay gone");
+    console.log("PASS desktop: the bar's X removes every comment and the bar at once, with no undo, and the message box takes the focus");
     await page.context().close();
   }
 
@@ -1645,18 +1617,6 @@ try {
     await floatOf(page).waitFor({ state: "detached" });
     console.log("PASS phone: notes, highlights and the Comment button cause no horizontal overflow");
 
-    // the X takes all the comments at once: the notes leave the chat and the bar turns into the undo, the same height
-    const heightOf = async (): Promise<number> => (await bar.boundingBox())!.height;
-    const walkingHeight = await heightOf();
-    await removeOf(page).tap();
-    await eventually("every note to leave the chat", async () => (await notesOf(page).count()) === 0 && (await page.locator(".is-commented, .is-current").count()) === 0);
-    await eventually("the undo", () => bar.evaluate((node) => node.classList.contains("is-undo")));
-    assert.ok(Math.abs((await heightOf()) - walkingHeight) <= 1, "the undo bar is as tall as the walk bar on a phone");
-    assert.equal(await bar.locator(".composer-comments-text").innerText(), "Comments removed: 2");
-    await undoOf(page).tap();
-    await eventually("both notes to come back", async () => (await notesOf(page).count()) === 2);
-    assert.equal(await labelOf(page), "2 comments on the reply");
-    assert.equal(await highlightMatchesNotes(page, "after the undo on the phone"), 2);
     // Delete in the sheet takes the bubble that opened it with it: on a touch screen the focus is let go, not given to the composer (no keyboard unasked)
     await notesOf(page).first().tap();
     await editor.waitFor();
@@ -1666,14 +1626,15 @@ try {
     assert.equal(await page.evaluate(() => document.activeElement?.classList.contains("composer-text")), false, "on a touch screen Delete in the sheet does not move the focus to the message box (no keyboard)");
     await eventually("the deleted comment's bubble to be gone", async () => (await notesOf(page).count()) === 1);
     assert.equal(await labelOf(page), "1 comment on the reply");
-    // the second X, and the bar goes once the undo is gone (it expires, or a message is sent)
+    // the X takes the rest at once, and the bar with it: no undo, and no keyboard raised unasked
     await removeOf(page).tap();
-    await eventually("every note to leave the chat again", async () => (await notesOf(page).count()) === 0);
-    await eventually("the undo to expire", async () => (await bar.count()) === 0, 15000);
+    await bar.waitFor({ state: "detached" });
+    await eventually("every note to leave the chat", async () => (await notesOf(page).count()) === 0 && (await page.locator(".is-commented, .is-current").count()) === 0);
+    assert.equal(await page.locator(".composer-comments-undo, .composer-comments-bar.is-undo").count(), 0, "no undo takes the bar's place");
     assert.equal(await page.locator(".composer-attachments").count(), 0, "no strip is left behind");
-    assert.equal(await page.evaluate(() => document.activeElement?.classList.contains("composer-text")), false, "on a touch screen the expiry does not move the focus to the message box (no keyboard)");
+    assert.equal(await page.evaluate(() => document.activeElement?.classList.contains("composer-text")), false, "on a touch screen the X does not move the focus to the message box (no keyboard)");
     await assertMessageLayout(page, messageFree, "after the bar is gone");
-    console.log("PASS phone: the bar's X removes every comment into an undo of the same height, Undo brings them back, and the bar goes when it expires");
+    console.log("PASS phone: Delete in the sheet takes one comment, and the bar's X removes the rest and the bar at once, with no undo");
     assert.deepEqual(errors, []);
     await page.context().close();
   }
