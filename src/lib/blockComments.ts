@@ -261,6 +261,23 @@ export function notesOnPart(comments: readonly BlockComment[], part: CommentTarg
 }
 
 /**
+ * Whether a comment form holds something the user typed: its field differs from how it opened (empty for a
+ * new comment, the comment for an edit). Such a form is not thrown away by Escape, nor replaced by another
+ * comment; an untouched one is.
+ */
+export function commentTyped(value: string, initialComment: string): boolean {
+  return value !== initialComment;
+}
+
+/**
+ * Whether a comment form's Save (its button and Cmd/Ctrl+Enter) does anything: a new comment with nothing
+ * but blanks has nothing to save; an edit may be saved blank, which deletes the comment.
+ */
+export function commentCanSave(value: string, initialComment: string): boolean {
+  return initialComment !== "" || value.trim() !== "";
+}
+
+/**
  * Where the inline form for writing or editing a comment on `target` goes, among the rendered
  * `parts`: in the host its card has, or will have once saved (`noteHost`), in place of the card of
  * the comment it edits (`replaces`, its id) or after that host's cards for a new one. A comment
