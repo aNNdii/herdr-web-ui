@@ -1,0 +1,117 @@
+/* The palette as four tiles, each a small picture of the app in that palette. The tile's frame
+   uses the tokens around it; its preview carries data-theme / data-palette, so the same tokens
+   resolve to the palette it shows (src/styles.css). */
+.palette-tiles {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: var(--space-3);
+}
+
+.palette-tile {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+  padding: var(--space-2);
+  background: var(--bg-input);
+  border: var(--hairline) solid var(--border);
+  border-radius: var(--radius-lg);
+  cursor: pointer;
+  transition: border-color var(--dur-fast) var(--ease-out);
+}
+
+@media (hover: hover) {
+  .palette-tile:hover {
+    border-color: var(--border-strong);
+  }
+}
+
+.palette-tile:has(input:checked) {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 var(--hairline) var(--accent);
+}
+
+.palette-tile:has(input:focus-visible) {
+  outline: var(--ring);
+  outline-offset: var(--ring-offset);
+}
+
+.palette-tile-preview {
+  display: grid;
+  grid-template-columns: 30% 1fr;
+  height: 56px;
+  overflow: hidden;
+  border: var(--hairline) solid var(--border);
+  border-radius: var(--radius-md);
+}
+
+.palette-tile-side {
+  background: var(--bg-panel);
+  border-right: var(--hairline) solid var(--border);
+}
+
+.palette-tile-main {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 6px;
+  padding: 0 var(--space-2);
+  background: var(--bg);
+}
+
+.palette-tile-bar {
+  display: block;
+  height: 6px;
+  border-radius: var(--radius-pill);
+}
+
+.palette-tile-bar.is-accent {
+  width: 80%;
+  background: var(--accent);
+}
+
+.palette-tile-bar.is-text {
+  width: 60%;
+  background: var(--text-dim);
+}
+
+.palette-tile-bar.is-edge {
+  width: 45%;
+  background: var(--border-strong);
+}
+
+.palette-tile-name {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-1);
+  min-width: 0;
+  padding: 0 var(--space-1);
+  color: var(--text-strong);
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-medium);
+}
+
+.palette-tile-name svg {
+  flex: 0 0 auto;
+  width: 14px;
+  height: 14px;
+  color: var(--accent);
+  visibility: hidden;
+}
+
+.palette-tile:has(input:checked) .palette-tile-name svg {
+  visibility: visible;
+}
+
+@media (max-width: 640px) {
+  .palette-tiles {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .palette-tile {
+    transition: none;
+  }
+}

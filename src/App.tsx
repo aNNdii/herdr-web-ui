@@ -20,6 +20,7 @@ import { focusWorkspaceListToggle } from "./lib/focus.ts";
 import { headerCrumb, showsChat } from "./lib/headerCrumb.ts";
 import { paneStorageId, type Machine, type MachineEvent } from "../shared/machines.ts";
 import { takeAuthTokenFromUrl } from "./lib/authLink.ts";
+import { parseSettingsHash, type SettingsPageId } from "./lib/settingsSearch.ts";
 import { applyPaneStatus } from "./lib/snapshot.ts";
 import { rosterPanes } from "./lib/dagPane.ts";
 import { SnapshotRequests } from "./lib/snapshotRequests.ts";
@@ -213,8 +214,15 @@ export function App() {
   const viewFile = useCallback((path: string) => {
     openFile({ path, paneId: selectedPaneId, machineId: selectedMachineId });
   }, [openFile, selectedPaneId, selectedMachineId]);
-  const [settingsOpen, setSettingsOpen] = useState(false);
+  // an address ending in #settings/<page> opens Settings on that page (the dialog reads the page)
+  const [settingsOpen, setSettingsOpen] = useState(() => parseSettingsHash(window.location.hash) !== null);
+  // the page Settings opens on when App knows better than the address: the update line's Details
+  const [settingsPage, setSettingsPage] = useState<SettingsPageId | null>(null);
   const closeSettings = useCallback(() => setSettingsOpen(false), []);
+  const openSettingsAt = useCallback((page: SettingsPageId | null) => {
+    setSettingsPage(page);
+    setSettingsOpen(true);
+  }, []);
   const [newSessionOpen, setNewSessionOpen] = useState(false);
   // the dialog makes a tab in this workspace instead of a workspace, while set
   const [newTab, setNewTab] = useState<NewTabTarget | null>(null);
@@ -465,6 +473,12 @@ export function App() {
   // of the fragment instead; a wrong token just leaves the gate as it is.
   useEffect(() => {
     const onHashChange = (): void => {
+      // a Settings link typed into an open tab (#settings/terminal) opens it there
+      const settingsLink = parseSettingsHash(window.location.hash);
+      if (settingsLink !== null) {
+        openSettingsAt(settingsLink.page);
+        return;
+      }
       const linkToken = takeAuthTokenFromUrl();
       if (linkToken === null) return;
       void authenticate(linkToken)
@@ -473,7 +487,7 @@ export function App() {
     };
     window.addEventListener("hashchange", onHashChange);
     return () => window.removeEventListener("hashchange", onHashChange);
-  }, [unlock]);
+  }, [unlock, openSettingsAt]);
 
   const lock = useCallback(async () => {
     setDrawerOpen(false);
@@ -533,7 +547,8 @@ export function App() {
 
   // the ?pane= a notification opened us with has done its job once it selected the pane
   useEffect(() => {
-    if (paneFromUrl() !== null) window.history.replaceState(window.history.state, "", window.location.pathname);
+    // the hash stays: it may be a Settings link (#settings/<page>)
+    if (paneFromUrl() !== null) window.history.replaceState(window.history.state, "", window.location.pathname + window.location.hash);
   }, []);
 
   const selectedPane = snapshot?.panes.find((pane) => pane.pane_id === selectedPaneId) ?? null;
@@ -649,7 +664,7 @@ export function App() {
       openPalette: () => setPaletteOpen(true),
       openSettings: () => {
         setDrawerOpen(false);
-        setSettingsOpen(true);
+        openSettingsAt(null);
       },
       openAddPc: () => {
         // the new PC reports its progress in the sidebar: nothing should sit over it
@@ -845,7 +860,7 @@ export function App() {
         <OpenFileContext.Provider value={selectedPaneId !== null ? viewFile : null}>
         <div className={`pane-column${chatShown ? " is-chat" : ""}`}>
         {/* over the pane only: a bar across the window would cut the sidebar off from its top row in the header */}
-        <UpdateNotice updates={updates} onOpen={() => setSettingsOpen(true)} />
+        <UpdateNotice updates={updates} onOpen={() => openSettingsAt("about")} />
         <MachineActionBanner machines={machines} onSetup={(machine, update = false) => { setDrawerOpen(false); setUpdateRemote(update); setMachineDialog(machine); }} />
         {snapshot && selectedPane && selectedWorkspace && (
           <TabStrip snapshot={snapshot} workspace={selectedWorkspace} selectedPane={selectedPane} onSelectPane={selectPane} onNewTab={() => actions.openNewTab()} />
@@ -898,7 +913,16 @@ export function App() {
         setFilesOpen(false);
         selectTargetRef.current(machineId, paneId);
       }} />
-      <SettingsDialog auth={auth} herdrVersion={health?.herdr?.version ?? null} open={settingsOpen} onClose={closeSettings} actions={actions} updates={updates} onEnableNotifications={enableNotifications} />
+      <SettingsDialog auth={auth} herdrVersion={health?.herdr?.version ?? null} open={settingsOpen} page={settingsPage} onClose={closeSettings} actions={actions} updates={updates} onEnableNotifications={enableNotifications}
+        machines={machines}
+        onSetupMachine={(machine, update = false) => {
+          // as Add PC: the PC's dialog reports its progress, and nothing should sit over it
+          setSettingsOpen(false);
+          setUpdateRemote(update);
+          addPcFocusReturn.current = true;
+          setMachineDialog(machine);
+        }}
+        onMachineRemoved={(machineId) => { if (selectionRef.current.machineId === machineId) selectTarget("local", null); }} />
       {filesOpen && selectedPane && (
         <FilesDialog start={selectedPane.foreground_cwd ?? selectedPane.cwd ?? ""} viewing={viewing !== null} onOpenFile={viewFile} onClose={() => setFilesOpen(false)} />
       )}

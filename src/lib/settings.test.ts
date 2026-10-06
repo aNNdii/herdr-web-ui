@@ -70,10 +70,11 @@ describe("chat width", () => {
     expect(css("components/PaneTerminal.tsx")).toContain(`setProperty("--chat-w", chatLaneLength(`);
     // the root font size is not read in JS: the ceiling is 60rem in the length itself
     expect(css("components/PaneTerminal.tsx")).not.toContain("chatLaneWidth(");
-    // Settings and New workspace stay on --content-w. That the chat columns share the lane is
-    // measured in the browser (scripts/ui-regression.ts), not read from the stylesheets
-    for (const file of ["components/SettingsDialog.css", "components/NewSessionDialog.css"]) {
-      expect(css(file)).toContain("var(--content-w)");
+    // New workspace stays on --content-w and Settings on its own fixed --settings-w. That the chat
+    // columns share the lane is measured in the browser (scripts/ui-regression.ts), not read from
+    // the stylesheets
+    for (const [file, width] of [["components/SettingsDialog.css", "var(--settings-w)"], ["components/NewSessionDialog.css", "var(--content-w)"]] as const) {
+      expect(css(file)).toContain(width);
       expect(css(file)).not.toContain("var(--chat-w)");
     }
   });
@@ -316,16 +317,18 @@ describe("palette", () => {
     return css.slice(start, css.indexOf("}", start));
   };
   const paper = '[data-theme="light"]:is([data-palette="report"], [data-palette="charcoal"])';
+  // the amber dark colors: :root, and any element that carries data-theme="dark" itself
+  const base = ':root,\n[data-theme="dark"]';
   // each case lists its blocks from the most specific to the base; the first one naming a token wins
   const cases = [
-    { theme: "dark", palette: "amber", layers: [":root"] },
-    { theme: "light", palette: "amber", layers: ['[data-theme="light"]', ":root"] },
-    { theme: "dark", palette: "report", layers: ['[data-theme="dark"][data-palette="report"]', ":root"] },
-    { theme: "light", palette: "report", layers: [paper, '[data-theme="light"]', ":root"] },
-    { theme: "dark", palette: "charcoal", layers: ['[data-theme="dark"][data-palette="charcoal"]', ":root"] },
-    { theme: "light", palette: "charcoal", layers: ['[data-theme="light"][data-palette="charcoal"]', paper, '[data-theme="light"]', ":root"] },
-    { theme: "dark", palette: "catppuccin", layers: ['[data-theme="dark"][data-palette="catppuccin"]', ":root"] },
-    { theme: "light", palette: "catppuccin", layers: ['[data-theme="light"][data-palette="catppuccin"]', '[data-theme="light"]', ":root"] },
+    { theme: "dark", palette: "amber", layers: [base] },
+    { theme: "light", palette: "amber", layers: ['[data-theme="light"]', base] },
+    { theme: "dark", palette: "report", layers: ['[data-theme="dark"][data-palette="report"]', base] },
+    { theme: "light", palette: "report", layers: [paper, '[data-theme="light"]', base] },
+    { theme: "dark", palette: "charcoal", layers: ['[data-theme="dark"][data-palette="charcoal"]', base] },
+    { theme: "light", palette: "charcoal", layers: ['[data-theme="light"][data-palette="charcoal"]', paper, '[data-theme="light"]', base] },
+    { theme: "dark", palette: "catppuccin", layers: ['[data-theme="dark"][data-palette="catppuccin"]', base] },
+    { theme: "light", palette: "catppuccin", layers: ['[data-theme="light"][data-palette="catppuccin"]', '[data-theme="light"]', base] },
   ] as const;
   const tokens = (layers: readonly string[]) => (name: string): string =>
     layers.map((selector) => block(selector).match(new RegExp(`--${name}: ([^;]+);`))?.[1]).find((value) => value !== undefined)!;
@@ -377,7 +380,9 @@ describe("palette", () => {
 
   it("paints amber before settings load: the base blocks are the default palette's", () => {
     const css = readFileSync(join(import.meta.dir, "..", "styles.css"), "utf8");
-    const root = css.slice(css.indexOf(":root {"), css.indexOf("}", css.indexOf(":root {")));
+    const start = css.indexOf(':root,\n[data-theme="dark"] {');
+    expect(start).toBeGreaterThanOrEqual(0);
+    const root = css.slice(start, css.indexOf("}", start));
     expect(root).toContain(`--term-bg: ${terminalTheme("dark").background};`);
     expect(root).toContain(`--term-cursor: ${terminalTheme("dark").cursor};`);
     expect(terminalTheme("dark")).toEqual(terminalTheme("dark", "amber"));

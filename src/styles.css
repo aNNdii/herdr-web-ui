@@ -15,7 +15,11 @@
  * that more than one component uses.
  */
 
-:root {
+/* The amber dark colors. Also keyed on [data-theme="dark"] so that an element carrying its own
+   data-theme / data-palette (Settings → Appearance's palette previews) takes a whole palette:
+   the opt-in palettes' blocks below outweigh this one, and the light block follows it. */
+:root,
+[data-theme="dark"] {
   color-scheme: dark;
 
   /* surfaces (tonal steps, darkest to lightest): lamp-lit graphite, warm not tinted */
@@ -81,7 +85,9 @@
   --syntax-type: #6cb8d6;
   --syntax-variable: #e0c08f;
   --syntax-meta: #b49dd6;
+}
 
+:root {
   /* type (comfortable density; compact overrides below) */
   --font-ui: "Pretendard Variable", Pretendard, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Noto Sans KR", "Malgun Gothic", sans-serif;
   /* "JetBrains Mono Web" is the bundled face (fonts/fonts.css): after the icon font, which draws
@@ -142,6 +148,12 @@
   --rail-w: 3px;
   --hairline: 1px;
   --content-w: 820px;
+  /* Settings (components/SettingsDialog.css): a fixed window, so switching pages never resizes
+     it; its navigation column; the measure of a page's groups */
+  --settings-w: 1040px;
+  --settings-h: 760px;
+  --settings-nav-w: 248px;
+  --settings-content-w: 640px;
   /* the chat lane: transcript, composer column, held list (Settings → Chat width, lib/settings.ts).
      At the Default step PaneTerminal writes the pane's own lane on the document, as one
      length (chatLaneLength: 71.43% of the pane in px, min 820px, max 60rem); this is that rule's floor, for a
@@ -1029,6 +1041,39 @@ button {
 @media (hover: hover) {
   .btn-ghost:hover:not(:disabled) {
     border-color: transparent;
+  }
+}
+
+/* The three weights of a page's actions (Settings): .btn-primary for its one main action,
+   .btn-secondary, an accent outline, for the others, and .btn-tertiary, an underlined text
+   link, for the least used (Restore defaults, links out) */
+.btn-secondary {
+  background: transparent;
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+@media (hover: hover) {
+  .btn-secondary:hover:not(:disabled) {
+    background: var(--accent-tint);
+    border-color: var(--accent);
+  }
+}
+
+.btn-tertiary {
+  padding: 0 var(--space-2);
+  background: transparent;
+  border-color: transparent;
+  color: var(--text-dim);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+@media (hover: hover) {
+  .btn-tertiary:hover:not(:disabled) {
+    background: transparent;
+    border-color: transparent;
+    color: var(--text-strong);
   }
 }
 

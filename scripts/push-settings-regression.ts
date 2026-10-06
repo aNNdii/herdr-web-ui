@@ -4,6 +4,7 @@ import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import type { Browser } from "playwright-core";
 import { alertsState, runMoreItem } from "./header-more.ts";
+import { openSettingsPage } from "./settings-nav.ts";
 
 export async function checkPushSettings(browser: Browser, origin: string): Promise<void> {
   const context = await browser.newContext({ viewport: { width: 1280, height: 800 }, permissions: ["notifications"] });
@@ -52,7 +53,7 @@ export async function checkPushSettings(browser: Browser, origin: string): Promi
       assert.ok(Date.now() < deadline, "alerts are pushed to this device");
       await page.waitForTimeout(100);
     }
-    await page.keyboard.press("ControlOrMeta+Shift+Comma");
+    await openSettingsPage(page, "notifications");
     const send = page.getByRole("button", { name: "Send test", exact: true });
     hold = new Promise<void>((resolve) => { release = resolve; });
     await send.click();
@@ -64,7 +65,7 @@ export async function checkPushSettings(browser: Browser, origin: string): Promi
     assert.equal(registrations, 1, "Send test must not repair the registration first");
     if (process.env.UI_EVIDENCE_DIR) {
       mkdirSync(process.env.UI_EVIDENCE_DIR, { recursive: true });
-      await page.getByRole("heading", { name: "Alerts", exact: true }).evaluate((el) => el.scrollIntoView({ block: "start" }));
+      await page.getByRole("heading", { name: "Notifications", exact: true }).evaluate((el) => el.scrollIntoView({ block: "start" }));
       await page.screenshot({ path: join(process.env.UI_EVIDENCE_DIR, "push-test-desktop.png") });
     }
 
@@ -94,7 +95,7 @@ export async function checkPushSettings(browser: Browser, origin: string): Promi
 
     await page.getByRole("button", { name: "Close settings", exact: true }).click();
     await runMoreItem(page, "Alerts");
-    await page.keyboard.press("ControlOrMeta+Shift+Comma");
+    await openSettingsPage(page, "notifications");
     assert.equal(await send.isDisabled(), true, "testing must not turn alerts on implicitly");
     await page.getByRole("button", { name: "Turn alerts on again", exact: true }).waitFor();
     assert.deepEqual(errors, []);

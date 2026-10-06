@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { settingsPage } from "./settings-nav.ts";
 import type { Browser, Page } from "playwright-core";
 import { herdrRpc, workspaceClose, workspaceCreate } from "../server/herdr/client.ts";
 
@@ -118,6 +119,7 @@ export async function checkAlertSound(browser: Browser, origin: string): Promise
     console.log("PASS a pane that waits chimes, the one in front does not");
 
     await page.getByRole("button", { name: "Settings", exact: true }).click();
+    await settingsPage(page, "notifications");
     const sound = page.getByRole("switch", { name: "Sound", exact: true });
     await sound.click();
     assert.equal(await sound.getAttribute("aria-checked"), "false");
