@@ -3,6 +3,7 @@ import { blockTarget, composeWithComments, replyPart, selectionTarget, type Bloc
 import { MAX_COMPOSER_CHARS } from "./compose.ts";
 import { heldAgentOnly, heldMessageText, MessageQueueStore } from "./messageQueue.ts";
 import { parseMarkdown } from "./markdown.ts";
+import { fileAnchor, type FileComment } from "./fileComments.ts";
 
 function fixture() {
   const data = new Map<string, string>();
@@ -180,4 +181,15 @@ it("drops a held comment whose quote or range is malformed and keeps the rest", 
   const bad = [{ ...c1, id: "b1", quote: "" }, { ...c1, id: "b2", quote: "q", range: [3, 1] }];
   data.set("herdr-web-ui:queue:a", JSON.stringify({ version: 1, messages: [{ id: "x", text: "t", comments: [...bad, { ...c1, id: "g", quote: "q", range: [0, 1] }] }] }));
   expect(new MessageQueueStore(() => storage).read("a")[0]!.comments!.map((c) => c.id)).toEqual(["g"]);
+});
+
+it("keeps file comments with a held message and composes them when sent", () => {
+  const { queue, storage } = fixture();
+  const lines = { path: "/repo/src/sync.ts", label: "src/sync.ts", view: "code" as const, lines: [8, 8] as [number, number], source: ["if (a < b) {"], quoteLines: ["if (a < b) {"] };
+  const file: FileComment = { ...lines, kind: "file", id: "f1", anchor: fileAnchor(lines), created: 1, comment: "Compare with <=." };
+  queue.add("a", "hi", { comments: [c1, file] });
+  const [held] = new MessageQueueStore(() => storage).read("a");
+  expect(held!.comments).toEqual([c1, file]);
+  expect(heldAgentOnly(held!)).toBe(true);
+  expect(heldMessageText(held!)).toBe("> Quoted\nnote\n\n> src/sync.ts:8\n> if (a < b) {\nCompare with <=.\n\nhi");
 });

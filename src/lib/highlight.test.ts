@@ -7,6 +7,7 @@ import {
   tooLongToHighlight,
   type HighlightResult,
 } from "./highlight.ts";
+import { fileLines } from "./fileComments.ts";
 
 describe("languageForFence", () => {
   it("knows aliases and the first word only", () => {
@@ -80,6 +81,16 @@ describe("highlightLines", () => {
   it("splits CRLF without keeping the carriage return", () => {
     expect(text(highlightLines("a\r\nb", "typescript", CHAT_HIGHLIGHT_LIMIT))).toEqual(["a", "b"]);
     expect(text(highlightLines("a\r\nb", null, CHAT_HIGHLIGHT_LIMIT))).toEqual(["a", "b"]);
+  });
+  it("ends a line at a lone carriage return too", () => {
+    expect(text(highlightLines("a\rb\nc", "typescript", CHAT_HIGHLIGHT_LIMIT))).toEqual(["a", "b", "c"]);
+    expect(text(highlightLines("a\rb\nc", null, CHAT_HIGHLIGHT_LIMIT))).toEqual(["a", "b", "c"]);
+  });
+  it("numbers lines as fileLines does, so a comment quotes the line the code view shows", () => {
+    for (const code of ["a\r\nb\r\nc", "a\rb\rc", "a\rb\nc\r\nd\r\re", "x\r\n\ry\n\rz"]) {
+      expect(text(highlightLines(code, null, CHAT_HIGHLIGHT_LIMIT))).toEqual(fileLines(code));
+      expect(highlightLines(code, "typescript", CHAT_HIGHLIGHT_LIMIT).lines.length).toBe(fileLines(code).length);
+    }
   });
   it("is plain without a language", () => {
     const result = highlightLines("const x", null, CHAT_HIGHLIGHT_LIMIT);

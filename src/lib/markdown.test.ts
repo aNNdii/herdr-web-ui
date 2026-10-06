@@ -2,8 +2,9 @@ import { describe, expect, it } from "bun:test";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { loadKatex, Markdown } from "../components/Markdown.tsx";
+import { FileCommentsContext, type FileCommentsApi } from "../components/FileCommentsContext.ts";
 import { SettingsProvider } from "./settings.ts";
-import { FOLD_CODE_AFTER_LINES, FOLDED_CODE_LINES, foldCode, MAX_QUOTE_DEPTH, parseInline, parseMarkdown, safeMarkdownHref, type InlineNode, type ListBlock, type MarkdownBlock } from "./markdown.ts";
+import { FOLD_CODE_AFTER_LINES, FOLDED_CODE_LINES, foldCode, MAX_QUOTE_DEPTH, parseInline, parseMarkdown, parseMarkdownWithLines, previewHosts, safeMarkdownHref, type InlineNode, type ListBlock, type MarkdownBlock } from "./markdown.ts";
 
 describe("parseMarkdown", () => {
   it("renders inline and display math while leaving fenced code untouched", async () => {
@@ -359,5 +360,116 @@ describe("numbered lists as agents write them", () => {
     expect(html).not.toContain("<script");
     expect(html).not.toContain("<img");
     expect(html).not.toContain("<b>");
+  });
+});
+
+describe("parseMarkdownWithLines", () => {
+  it("leaves parseMarkdown without source lines", () => {
+    expect(parseMarkdown("# A\n\ntext")).toEqual([{ type: "heading", level: 1, content: [{ type: "text", value: "A" }] }, { type: "paragraph", lines: [[{ type: "text", value: "text" }]] }]);
+  });
+
+  it("numbers headings, paragraph lines and rules", () => {
+    const [h, p, hr] = parseMarkdownWithLines("# A\n\none\ntwo\n\n---");
+    expect(h!.source).toEqual([1, 1]);
+    expect(p!.source).toEqual([3, 4]);
+    expect((p as { lineNumbers?: number[] }).lineNumbers).toEqual([3, 4]);
+    expect(hr!.source).toEqual([6, 6]);
+  });
+
+  it("numbers a fenced block from its fence, an indented one too", () => {
+    expect(parseMarkdownWithLines("x\n\n```ts\na\nb\n```")[1]!.source).toEqual([3, 6]);
+    expect(parseMarkdownWithLines("- item\n  ```\n  a\n  ```")[1]!.source).toEqual([2, 4]);
+  });
+
+  it("numbers list items by their own text, continuation lines included", () => {
+    const list = parseMarkdownWithLines("- one\n  more\n- two\n  - nested")[0] as ListBlock;
+    expect(list.items[0]!.source).toEqual([1, 2]);
+    expect(list.items[1]!.source).toEqual([3, 3]);
+    expect((list.items[1]!.blocks![0] as ListBlock).items[0]!.source).toEqual([4, 4]);
+  });
+
+  it("numbers table rows without the delimiter row", () => {
+    const table = parseMarkdownWithLines("text\n\n| a | b |\n|---|---|\n| 1 | 2 |\n| 3 | 4 |")[1]!;
+    expect(table.source).toEqual([3, 6]);
+    expect((table as { rowLines?: number[] }).rowLines).toEqual([3, 5, 6]);
+  });
+
+  it("numbers a quote's contents by the file's lines", () => {
+    const quote = parseMarkdownWithLines("x\n\n> a\n>\n> b")[1] as Extract<MarkdownBlock, { type: "blockquote" }>;
+    expect(quote.source).toEqual([3, 5]);
+    expect(quote.blocks.map((b) => b.source)).toEqual([[3, 3], [5, 5]]);
+  });
+
+  it("numbers CRLF sources like LF ones", () => {
+    expect(parseMarkdownWithLines("# A\r\n\r\ntext")[1]!.source).toEqual([3, 3]);
+  });
+
+  it("lists the card hosts in document order", () => {
+    expect(previewHosts(parseMarkdownWithLines("# A\n\n- one\n  - two\n\n> q\n> r\n\n---\n\ntext"))).toEqual([[1, 1], [3, 3], [4, 4], [6, 7], [11, 11]]);
+  });
+
+  // every kind of block: heading 1, paragraph 3–4, table 6–8, item 10–11 with a nested item 12, quote 14–15, code 17–19, math 21–23
+  const sample = "# A\n\none\ntwo\n\n| a | b |\n|---|---|\n| 1 | 2 |\n\n- item\n  more\n  - nested\n\n> q\n> r\n\n```ts\nx\n```\n\n\\[\ny\n\\]";
+  /**
+   * `sample` drawn as the app draws it (the settings read the browser's languages, as in the first
+   * test). A code block's fold uses a layout effect, which a static render warns about: that warning
+   * alone is left out.
+   */
+  const render = (sourceLines: boolean, comments: FileCommentsApi | null = null): string => {
+    const languages = Object.getOwnPropertyDescriptor(navigator, "languages");
+    Object.defineProperty(navigator, "languages", { configurable: true, value: ["en"] });
+    const error = console.error;
+    console.error = (...args: unknown[]) => { if (!String(args[0]).includes("useLayoutEffect does nothing on the server")) error(...args); };
+    try {
+      return renderToStaticMarkup(createElement(SettingsProvider, {
+        children: createElement(FileCommentsContext.Provider, { value: comments }, createElement(Markdown, { sourceLines, children: sample })),
+      }));
+    } finally {
+      console.error = error;
+      if (languages) Object.defineProperty(navigator, "languages", languages);
+      else Reflect.deleteProperty(navigator, "languages");
+    }
+  };
+
+  it("lists the hosts of every kind of block, as the preview draws them", () => {
+    expect(previewHosts(parseMarkdownWithLines(sample))).toEqual([[1, 1], [3, 4], [6, 8], [10, 11], [12, 12], [14, 15], [17, 19], [21, 23]]);
+  });
+
+  it("draws the chat's Markdown without source lines or file notes", () => {
+    const hosts = previewHosts(parseMarkdownWithLines(sample)).map(([first]) => first);
+    const comments: FileCommentsApi = { notesFor: () => "note", openSelection: () => {}, editing: false, noted: hosts };
+    const html = render(false, comments);
+    expect(html).not.toContain("data-source");
+    expect(html).not.toContain("file-comment-notes");
+    expect(html).toBe(render(false));
+  });
+
+  it("writes a preview's source lines on its line elements", () => {
+    const html = render(true);
+    expect(html).toContain('<h1 data-source-line="1">');
+    expect(html).toContain('<span data-source-line="3">');
+    expect(html).toContain('<span data-source-line="4">');
+    expect(html).toContain('<tr data-source-line="6">');
+    expect(html).toContain('<tr data-source-line="8">');
+    expect(html).toContain('<div class="markdown-item" data-source-line="10" data-source-end="11">');
+    expect(html).toContain('<div class="markdown-item" data-source-line="12">');
+    // the quote's contents, by the file's lines; the fence's body from the line after the fence
+    expect(html).toContain('<span data-source-line="14">');
+    expect(html).toContain('<span class="hl-line" data-source-line="18">');
+    expect(html).toContain('<div class="markdown-block" data-source-line="21" data-source-end="23">');
+    expect(html).not.toContain("file-comment-notes");
+  });
+
+  it("hangs a preview's notes after exactly the hosts previewHosts lists, in its order", () => {
+    const hosts = previewHosts(parseMarkdownWithLines(sample)).map(([first]) => first);
+    const comments: FileCommentsApi = {
+      notesFor: (line) => createElement("i", { "data-host": line }),
+      openSelection: () => {}, editing: false,
+      noted: [...hosts, 2, 7, 18],
+    };
+    const html = render(true, comments);
+    expect([...html.matchAll(/data-host="(\d+)"/g)].map((match) => Number(match[1]))).toEqual(hosts);
+    // nothing is drawn inside a line element: a list item's notes follow its own text, before its nested list
+    expect(html).toContain('</span></div><div class="file-comment-notes block-comment-notes"><i data-host="10"></i></div><ul');
   });
 });

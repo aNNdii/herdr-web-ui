@@ -41,6 +41,20 @@ between releases do not reach them. Remote-PC runtime bundles are versioned sepa
   refused and stays in the queue rather than being typed into the pane, and so it is when a Codex
   is busy with its own queued questions. Comments are kept per pane on this device.
   ([#409](https://github.com/devswha/herdr-web-ui/pull/409) by @aNNdii)
+- Comment on a file in the file viewer, in its Markdown preview and in its code view, when it was
+  opened from a pane. Select text and press **Comment**, as in the chat, on a phone too. The form and
+  the card show the file and lines (`sync.ts · Line 8`). In the header a comment icon carries the
+  file's count, and each tap walks to the next one. The composer's bar counts them with the reply
+  comments, and its walk opens the file at each. The next message sends them after the reply comments, each as a
+  `> path:lines` quote of the commented lines (a line cut at 200 characters, a quote at 20 lines)
+  over the comment. A comment follows its lines when the file changes, and is marked outdated, but
+  still sent, when they are gone.
+- A comment's card is laid out as the form that edits it: the comment on top, then the **Pending**
+  badge (and a file's name and lines) with Edit and Delete in a row below it, where the form has
+  Cancel and Save, and both share one corner radius, so nothing moves when you edit.
+- A comment form on a phone raises the keyboard as it opens and stays in view above it, in the chat
+  and in the file viewer. **Send** while a comment is half written in the chat sends nothing and
+  shows that comment's form instead.
 - New workspace's **Browse** filters the loaded folders in the current directory as you type.
   Navigation clears the filter, and a truncated listing says when search covers only the first
   500 folders. ([#430](https://github.com/devswha/herdr-web-ui/pull/430) by @suho-han)

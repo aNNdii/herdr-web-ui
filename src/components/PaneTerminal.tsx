@@ -9,7 +9,7 @@ import "./PaneTerminal.css";
 import { HerdrSocket } from "../lib/ws.ts";
 import { altSequence, controlCode, ctrlEnterSequence, isPrintable, keySequence, modifyOtherKeysLevel, type KeyBarKey } from "../lib/keys.ts";
 import { EMPTY_DRAFT, applyToDraft, draftIsEmpty, type InputDraft } from "../lib/draft.ts";
-import { composeWithComments, type BlockComment } from "../lib/blockComments.ts";
+import { composeWithComments, type PaneComment } from "../lib/blockComments.ts";
 import { heldAgentOnly, heldMessageText, messageQueues } from "../lib/messageQueue.ts";
 import { heldCountShown, heldOpenAtFold, heldOpenOnFocus, heldRefocusDue, heldRowError, heldRowsFold, heldRowsHidden, heldToggleShown, SHORT_PHONE_QUERY } from "../lib/heldRows.ts";
 import { MAX_COMPOSER_CHARS, QUEUE_READY_STATUS, agentDisplayLabel, composerMessage, composerPayload, submitNote, submitNotTyped } from "../lib/compose.ts";
@@ -1428,7 +1428,7 @@ export function PaneTerminal({
   }, [greetingDue, paneId]);
 
   const composerSend = useCallback(
-    (text: string, { comments = [] }: { comments?: readonly BlockComment[] } = {}): boolean | string | Promise<boolean | string> => {
+    (text: string, { comments = [] }: { comments?: readonly PaneComment[] } = {}): boolean | string | Promise<boolean | string> => {
       const pane = paneRef.current;
       // Codex's queue open in the terminal holds the input: a message would become the answer
       if (pane !== null && heldByOpenQueue) {

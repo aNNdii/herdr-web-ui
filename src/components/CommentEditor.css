@@ -64,3 +64,21 @@
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
+
+/* a file's lines, as the viewer shows them: in the code font, their indentation kept */
+pre.comment-editor-plain {
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+}
+
+/* the file and lines a comment is on (CommentCard.tsx `FileReferenceLabel`), then why it is shown
+   here, over the quote: small and quiet, context like the quote */
+.comment-editor-reference,
+.comment-editor-note {
+  margin: 0 0 var(--space-2);
+}
+
+.comment-editor-note {
+  color: var(--text-dim);
+  font-size: var(--fs-xs);
+}

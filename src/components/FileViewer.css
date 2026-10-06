@@ -114,13 +114,41 @@
 
 .file-viewer-group { gap: var(--space-1); }
 
+/* The counter of this file's comments: an icon button as the header's others, each tap a step of
+   the walk through them (FileComments.tsx `useFileCommentWalk`), with the count as a bubble on the
+   icon's top right, as an app's unread count. The words ("2 comments · 1 outdated") are its name and
+   tooltip. Placed from the button's middle, so the bubble sits on the icon at every button size */
+.file-viewer-comments {
+  position: relative;
+}
+
+.file-viewer-comments-count {
+  position: absolute;
+  top: calc(50% - var(--space-4));
+  left: calc(50% + var(--space-1));
+  min-width: var(--space-4);
+  height: var(--space-4);
+  padding: 0 var(--space-1);
+  border-radius: var(--radius-pill);
+  background: var(--primary);
+  color: var(--primary-text);
+  font-size: var(--fs-2xs);
+  font-weight: var(--fw-semibold);
+  font-variant-numeric: tabular-nums;
+  line-height: var(--space-4);
+  text-align: center;
+  pointer-events: none;
+}
+
 /* an "on" toggle (Show source) carries the accent on its glyph */
 .file-viewer-action[aria-pressed="true"] {
   background: var(--bg-hover);
   color: var(--accent);
 }
 
+/* positioned: with comments, the Comment button is placed in its scrolled content */
 .file-viewer-body {
+  position: relative;
   flex: 1 1 auto;
   min-width: 0;
   min-height: 0;
@@ -166,6 +194,33 @@
   font-family: var(--font-mono);
   font-size: var(--fs-xs);
   line-height: var(--lh-base);
+}
+
+/* Comments on the code (FileComments.tsx): the cards and the form hang between its lines, in the
+   code's flow, read as the chat's do (BlockComments.css): wrapped, in the app's own font */
+.file-viewer-text .file-comment-notes {
+  white-space: normal;
+  font-family: var(--font-ui);
+}
+
+/* In the preview a block's cards follow it (Markdown.tsx `FileNotes`); a list item's follow its own
+   text, before its nested blocks, set close to it as the chat's are inside the item */
+.markdown-item + .file-comment-notes {
+  margin: var(--space-2) 0 0 0;
+}
+
+/* Focus mode in the viewer, as in the chat (BlockComments.css): while a card's comment is up, the
+   other comments' marks fade to a hint */
+.file-viewer-body[data-comment-focus] ::highlight(block-comment) {
+  background-color: color-mix(in srgb, var(--accent) 6%, transparent);
+  text-decoration-color: color-mix(in srgb, var(--accent) 40%, transparent);
+}
+
+.file-viewer-body[data-comment-focus] ::highlight(block-comment-pending) {
+  background-color: color-mix(in srgb, var(--accent) 30%, transparent);
+  text-decoration-line: underline;
+  text-decoration-color: var(--accent);
+  text-decoration-thickness: 2px;
 }
 
 /* wrapping follows the Wrap setting (data-wrap in HighlightedCode.css); the gutter sits in the code's own padding, inside this one */

@@ -6,7 +6,9 @@
  * on a whole block the block, without controls. Saving a blank comment deletes it, so Delete is
  * `onSave("")`; Save with the text unchanged only closes, so a comment sent while its editor was
  * open does not come back. Escape and the scrim cancel; Tab stays inside; the focus goes back to
- * what opened it. The field and the keys are the inline form's too (`useCommentDraft`).
+ * what opened it. The field and the keys are the inline form's too (`useCommentDraft`). A comment
+ * on lines of a file names them above the quote (`reference`), its quote kept as the lines are
+ * (preformatted), and may say why it is shown here (`note`).
  */
 import { useId } from "react";
 import { createPortal } from "react-dom";
@@ -16,14 +18,16 @@ import "./CommentEditor.css";
 import { blockContent } from "../lib/blockComments.ts";
 import { useT } from "../lib/i18n.ts";
 import type { MarkdownBlock } from "../lib/markdown.ts";
+import { FileReferenceLabel, type FileReference } from "./CommentCard.tsx";
 import { CommentField, useCommentDraft } from "./CommentDraft.tsx";
 import { MarkdownBlocks } from "./Markdown.tsx";
 import { RenderBoundary } from "./RenderBoundary.tsx";
 
-export interface CommentEditorProps {
-  block: MarkdownBlock;
-  /** the selected text a selection comment is on; without it the block shows */
-  quote?: string;
+interface CommentEditorBase {
+  /** a comment on lines of a file: which, above the quote */
+  reference?: FileReference;
+  /** a line under the reference: why the comment is shown here and not in its place */
+  note?: string;
   /** "" when creating; otherwise the modal also offers Delete */
   initialComment: string;
   /** "" deletes */
@@ -35,8 +39,14 @@ export interface CommentEditorProps {
   startValue?: string;
 }
 
+/**
+ * What the comment is on: the selected text or a file's lines (`quote`), else the block. A comment
+ * with a quote needs no block.
+ */
+export type CommentEditorProps = CommentEditorBase & ({ block: MarkdownBlock; quote?: string } | { block?: MarkdownBlock; quote: string });
+
 /** The modal editor for one block comment, portalled to `document.body` (see the file comment). */
-export function CommentEditor({ block, quote, initialComment, onSave, onClose, fallback, startValue }: CommentEditorProps) {
+export function CommentEditor({ block, quote, reference, note, initialComment, onSave, onClose, fallback, startValue }: CommentEditorProps) {
   const t = useT();
   const id = useId();
   const draft = useCommentDraft(initialComment, onSave, onClose, { fallback, startValue });
@@ -46,12 +56,14 @@ export function CommentEditor({ block, quote, initialComment, onSave, onClose, f
       <div ref={draft.surface} className="modal comment-editor" role="dialog" aria-modal="true" aria-labelledby={`${id}-title`} onKeyDown={draft.onKeyDown}>
         <header className="modal-header"><h2 className="modal-title" id={`${id}-title`}>{t("Comment")}</h2></header>
         <div className="modal-body">
+          {reference !== undefined && <p className="comment-editor-reference"><FileReferenceLabel reference={reference} /></p>}
+          {note !== undefined && <p className="comment-editor-note">{note}</p>}
           {/* a stored block comes from localStorage, maybe from another version: one it cannot draw
               shows as text, and the comment stays editable (this editor has no boundary above it) */}
           <div className="comment-editor-block">
             {quote !== undefined
-              ? <p className="comment-editor-plain">{quote}</p>
-              : <RenderBoundary resetKey={block} fallback={() => <p className="comment-editor-plain">{blockContent(block)}</p>}>
+              ? reference !== undefined ? <pre className="comment-editor-plain">{quote}</pre> : <p className="comment-editor-plain">{quote}</p>
+              : block !== undefined && <RenderBoundary resetKey={block} fallback={() => <p className="comment-editor-plain">{blockContent(block)}</p>}>
                 <MarkdownBlocks blocks={[block]} quoted />
               </RenderBoundary>}
           </div>

@@ -7,6 +7,11 @@
  * stylesheet fades the other comments' marks so the active one stands out. The selection a comment is being written on in the inline form
  * (`block-comment-pending`) looks the same: the field took the browser's selection away. Where the
  * browser lacks the API there is no highlight. Needs a DOM.
+ *
+ * The chat is one comment surface; the file viewer is another. An element carrying
+ * `data-comment-surface` (`COMMENT_SURFACE`) registers how its cards bring their text up
+ * (`registerCommentSurface`): a card's pointer and focus (`activateComment`) and the composer's walk
+ * (`markCurrentComment`, `showWalkStop`) reach the surface the card is in, whichever it is.
  */
 import { blockComments, draftComment, partSegments, textRange, type BlockComment, type CommentTarget, type PartSegment } from "./blockComments.ts";
 import { commentPartOf, outsideMath, partTextNodes } from "./commentSelection.ts";
@@ -15,8 +20,38 @@ export const COMMENT_HIGHLIGHT = "block-comment";
 export const ACTIVE_COMMENT_HIGHLIGHT = "block-comment-active";
 export const CURRENT_COMMENT_HIGHLIGHT = "block-comment-current";
 export const PENDING_COMMENT_HIGHLIGHT = "block-comment-pending";
-/** Set on a chat view while a card's comment is up (pointer, keyboard focus or the walk): BlockComments.css fades the others. */
-const FOCUS_ATTRIBUTE = "data-comment-focus";
+/** Set on a comment surface while a card's comment is up (pointer, keyboard focus or the walk): the stylesheet fades the others. */
+export const FOCUS_ATTRIBUTE = "data-comment-focus";
+/** Marks an element whose comment cards bring their text up through a registered `CommentSurface`. */
+export const COMMENT_SURFACE = "data-comment-surface";
+
+/** How a comment surface shows a card's text: what the walk, the pointer and the focus ask of it. */
+export interface CommentSurface {
+  /** the walk stands on `note` (a `.block-comment-card`), or on nothing */
+  mark(note: HTMLElement | null): void;
+  /** the pointer is over the card `note`, or the focus in it (`on`), or no longer */
+  activate(note: HTMLElement, by: "pointer" | "focus", on: boolean): void;
+  /** the box around the text of the comment `note` shows, if it has some */
+  boxOf(note: HTMLElement): DOMRect | null;
+}
+
+const surfaces = new WeakMap<Element, CommentSurface>();
+
+/**
+ * `view` (which carries `COMMENT_SURFACE`) shows its cards' text through `surface` until the
+ * returned cleanup runs. A later registration for the same view takes over; an earlier cleanup then
+ * leaves it alone.
+ */
+export function registerCommentSurface(view: Element, surface: CommentSurface): () => void {
+  surfaces.set(view, surface);
+  return () => { if (surfaces.get(view) === surface) surfaces.delete(view); };
+}
+
+/** The surface `element` lies in (itself included); undefined outside one. */
+function surfaceOf(element: Element): CommentSurface | undefined {
+  const view = element.closest(`[${COMMENT_SURFACE}]`);
+  return view === null ? undefined : surfaces.get(view);
+}
 
 /** Which highlight paints over which where they overlap: the walk's over a card's or the one being written over the rest. */
 const PRIORITY: Record<string, number> = { [COMMENT_HIGHLIGHT]: 0, [ACTIVE_COMMENT_HIGHLIGHT]: 1, [PENDING_COMMENT_HIGHLIGHT]: 1, [CURRENT_COMMENT_HIGHLIGHT]: 2 };
@@ -40,8 +75,11 @@ function shared(name: string): Highlight | null {
 
 const NO_RANGES: readonly Range[] = [];
 
-/** A view's ranges in one shared highlight: a change adds and deletes only the ranges that came or went. */
-class Shown {
+/**
+ * A view's ranges in one shared highlight (`name`, made on first use with its `PRIORITY`): a change
+ * adds and deletes only the ranges that came or went, so several views can share it.
+ */
+export class SharedRanges {
   private ranges: readonly Range[] = NO_RANGES;
 
   constructor(private name: string) {}
@@ -105,15 +143,15 @@ function addRanges(part: Element, segments: readonly PartSegment[], held: Readon
 }
 
 /** One chat view's ranges, by comment id, and the cards the walk, the pointer and the focus are on. */
-class ViewHighlights {
+class ViewHighlights implements CommentSurface {
   /** each comment's ranges, one per part it covers, in document order */
   private ranges = new Map<string, Range[]>();
   /** the parts those ranges lie in: a change in one of them, or its removal, can move or end a range */
   private parts = new Set<Element>();
-  private all = new Shown(COMMENT_HIGHLIGHT);
-  private active = new Shown(ACTIVE_COMMENT_HIGHLIGHT);
-  private currentShown = new Shown(CURRENT_COMMENT_HIGHLIGHT);
-  private pendingShown = new Shown(PENDING_COMMENT_HIGHLIGHT);
+  private all = new SharedRanges(COMMENT_HIGHLIGHT);
+  private active = new SharedRanges(ACTIVE_COMMENT_HIGHLIGHT);
+  private currentShown = new SharedRanges(CURRENT_COMMENT_HIGHLIGHT);
+  private pendingShown = new SharedRanges(PENDING_COMMENT_HIGHLIGHT);
   /** the comment being written in the inline form, not saved yet (ChatView), and its ranges */
   private pending: { owner: string; comment: BlockComment } | null = null;
   private pendingRanges = new Map<string, Range[]>();
@@ -259,6 +297,7 @@ const views = new WeakMap<Element, ViewHighlights>();
 export function watchCommentHighlights(view: Element, transcript: Element): () => void {
   const highlights = new ViewHighlights(view, transcript);
   views.set(view, highlights);
+  const unregister = registerCommentSurface(view, highlights);
   let frame = 0;
   const schedule = (): void => {
     if (frame === 0) frame = window.requestAnimationFrame(() => { frame = 0; highlights.rebuild(); });
@@ -271,20 +310,43 @@ export function watchCommentHighlights(view: Element, transcript: Element): () =
     window.cancelAnimationFrame(frame);
     observer.disconnect();
     unsubscribe();
+    unregister();
     highlights.dispose();
     if (views.get(view) === highlights) views.delete(view);
   };
 }
 
 /**
- * The composer's walk stands on `note` in `view` (null: on nothing): its comment's text takes the
- * current highlight. Returns the box around that text, for scrolling to it; null without one.
+ * The composer's walk stands on `note` in `view` (null: on nothing), whose surface is the one
+ * `view` lies in: its comment's text takes the current highlight. Returns the box around that text,
+ * for scrolling to it; null without one.
  */
 export function markCurrentComment(view: Element, note: HTMLElement | null): DOMRect | null {
-  const highlights = views.get(view);
-  if (highlights === undefined) return null;
-  highlights.mark(note);
-  return note === null ? null : highlights.boxOf(note);
+  const surface = surfaceOf(view);
+  if (surface === undefined) return null;
+  surface.mark(note);
+  return note === null ? null : surface.boxOf(note);
+}
+
+/**
+ * The walk's stop on `note` in the scrolling `view`, once the caller has marked it as its own: its
+ * text takes the current highlight, and the view scrolls the text and its card into the middle, or,
+ * taller than the view, the text's end and the card at its bottom: the focused card is always on
+ * screen (`walkScroll`). The card alone where its text could not be found. Then the focus goes to
+ * the note.
+ */
+export function showWalkStop(view: Element, note: HTMLElement): void {
+  const marked = markCurrentComment(view, note);
+  const behavior = window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth";
+  if (marked === null || marked.height === 0) note.scrollIntoView({ block: "center", behavior });
+  else {
+    const top = view.getBoundingClientRect().top + view.clientTop;
+    view.scrollBy({ top: walkScroll(marked, note.getBoundingClientRect(), { top, height: view.clientHeight }), behavior });
+  }
+  // the note is a group with its own name: with the focus on it a screen reader reads the comment, and Tab reaches its buttons.
+  // An open edit form is a stop too: its field takes the focus, so Escape there is the form's own (it gives up while
+  // nothing was typed; either way the focus goes back to the walk control, as from any note)
+  (note.querySelector<HTMLElement>("textarea") ?? note).focus({ preventScroll: true });
 }
 
 /**
@@ -298,6 +360,5 @@ export function showPendingComment(view: Element, pending: { owner: string; targ
 
 /** The pointer entered or left the card `note`, or the focus came into or left it (`on`): its comment's text comes up meanwhile. */
 export function activateComment(note: HTMLElement, by: "pointer" | "focus", on: boolean): void {
-  const view = note.closest(".chat-view");
-  if (view !== null) views.get(view)?.activate(note, by, on);
+  surfaceOf(note)?.activate(note, by, on);
 }

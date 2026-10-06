@@ -29,16 +29,21 @@ const NOT_TEXT = ".block-comment-notes, .block-comment-card, .markdown-code-head
  * its formula twice, as MathML and as glyphs (aria-hidden): of a formula only its TeX source counts.
  */
 const SKIPPED = `${NOT_TEXT}, [aria-hidden='true']`;
-/** Elements that start a new line in the quote; a table cell is set off by a space. */
+/** Elements that start a new line in the quote; a table cell is set off by the caller's separator (`textUnits`). */
 const BLOCK = /^(?:P|DIV|LI|UL|OL|TR|TABLE|PRE|BLOCKQUOTE|H[1-6])$/;
 
 /** A break between two pieces of text: it is not a character of the part's text, only of its quote. */
 export interface Separator { sep: string }
 
-/** The part's own text nodes in document order, with the breaks between its lines, rows and cells. */
-function partUnits(part: Element): (Text | Separator)[] {
+/**
+ * An element's own text nodes in document order (`SKIPPED` left out), with the breaks between its
+ * lines, rows and cells: a line break for a block or a `<br>`, `cellSeparator` before a table cell.
+ * A reply part's cells are set off by a space; a surface whose quote keeps a table's columns apart
+ * (the file viewer's preview) passes its own.
+ */
+export function textUnits(element: Element, cellSeparator: string): (Text | Separator)[] {
   const units: (Text | Separator)[] = [];
-  const walker = document.createTreeWalker(part, NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT, {
+  const walker = document.createTreeWalker(element, NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT, {
     acceptNode: (node) => {
       if (node instanceof Element) return node.matches(SKIPPED) ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT;
       const parent = node.parentElement;
@@ -48,10 +53,15 @@ function partUnits(part: Element): (Text | Separator)[] {
   for (let node = walker.nextNode(); node !== null; node = walker.nextNode()) {
     if (node instanceof Text) units.push(node);
     else if (node.nodeName === "BR") units.push({ sep: "\n" });
-    else if (node.nodeName === "TD" || node.nodeName === "TH") units.push({ sep: " " });
+    else if (node.nodeName === "TD" || node.nodeName === "TH") units.push({ sep: cellSeparator });
     else if (BLOCK.test(node.nodeName)) units.push({ sep: "\n" });
   }
   return units;
+}
+
+/** A reply part's own text units (`textUnits`), a table cell set off by a space. */
+function partUnits(part: Element): (Text | Separator)[] {
+  return textUnits(part, " ");
 }
 
 /**
@@ -224,7 +234,7 @@ const UNSEEN = `${NOT_TEXT}, .katex-mathml`;
  * element's box: a part selected whole would be one tall rect around its lines, and the gap
  * between two parts no line.
  */
-function textRects(range: Range): DOMRect[] {
+export function textRects(range: Range): DOMRect[] {
   const container = range.commonAncestorContainer;
   const nodes: Text[] = [];
   if (container instanceof Text) nodes.push(container);
@@ -328,6 +338,14 @@ export function focusAfter(anchors: readonly string[], removed: string): string[
 /** The composer's field of the pane a chat view is in; null without one. */
 export function paneComposer(view: Element | null): HTMLElement | null {
   return view?.closest(".terminal-stack")?.querySelector<HTMLElement>(".composer-text") ?? null;
+}
+
+/**
+ * The field of a comment form in the pane of `view` (an element in its `.terminal-stack`) that has text typed in
+ * it and not yet saved; null for none. A message sent meanwhile would go without that comment.
+ */
+export function typedCommentField(view: Element | null): HTMLTextAreaElement | null {
+  return view?.closest(".terminal-stack")?.querySelector<HTMLTextAreaElement>(".block-comment-card.is-editing[data-comment-typed] textarea") ?? null;
 }
 
 /** The first of the cards at `anchors` (in order of preference) in the chat `view` that has an Edit button, which is that button; null for none. */

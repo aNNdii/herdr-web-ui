@@ -1,7 +1,7 @@
-import { createContext, memo, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ComponentType, type RefObject } from "react";
+import { createContext, memo, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ComponentType } from "react";
 import { createPortal } from "react-dom";
 import {
-  ArrowDown, BookOpen, Check, ChevronDown, ChevronRight, Circle, CircleAlert, CircleCheck, CircleDot, CircleSlash, CircleX, Copy, Layers, MessageSquarePlus, Target,
+  ArrowDown, BookOpen, Check, ChevronDown, ChevronRight, Circle, CircleAlert, CircleCheck, CircleDot, CircleSlash, CircleX, Copy, Layers, Target,
   type LucideProps,
 } from "lucide-react";
 
@@ -10,7 +10,9 @@ import "./ChatView.css";
 import { AgentMark } from "./AgentMark.tsx";
 import { Markdown, OpenCommentContext } from "./Markdown.tsx";
 import { CommentEditor } from "./CommentEditor.tsx";
-import { CommentEditContext, type CommentEdit } from "./CommentCard.tsx";
+import { CommentEditContext } from "./CommentCard.tsx";
+import { SelectionCommentButton } from "./SelectionCommentButton.tsx";
+import { useCommentForm } from "./useCommentForm.ts";
 import { PromptCard } from "./PromptCard.tsx";
 import { RenderBoundary } from "./RenderBoundary.tsx";
 import { turnRevision } from "../lib/turnRevision.ts";
@@ -32,8 +34,8 @@ import { OpenFileContext } from "../lib/filePaths.ts";
 import { patchText } from "../../shared/patch.ts";
 import { toolVerb } from "../lib/toolVerbs.ts";
 import { machinePath, paneStorageId } from "../../shared/machines.ts";
-import { BlockCommentContext, blockComments, commentTyped, replyPart, selectionTarget, type CommentTarget, type ReplyPart } from "../lib/blockComments.ts";
-import { floatingPlace, onLine, paneComposer, placeAtPointer, selectionComment, type SelectionComment } from "../lib/commentSelection.ts";
+import { BlockCommentContext, blockComments, replyPart, selectionTarget, type CommentTarget, type ReplyPart } from "../lib/blockComments.ts";
+import { paneComposer, selectionComment, type SelectionComment } from "../lib/commentSelection.ts";
 import { showPendingComment, watchCommentHighlights } from "../lib/commentHighlight.ts";
 import { fileUrl } from "../lib/api.ts";
 import { useMachineId } from "../lib/machineContext.tsx";
@@ -895,61 +897,14 @@ export const ChatView = memo(function ChatView({ paneId, refreshKey, sentKey = 0
   // Markdown.tsx), on a phone as on a desktop. Where no part draws it (its reply left the chat,
   // turned live again) the modal takes over with what was typed. The agent may start again while a
   // comment is written, and the reply turn live: the form and what is typed in it stay until it is
-  // saved or closed
-  const [editing, setEditing] = useState<Editing | null>(null);
-  // what the form's field holds: with something typed, another comment does not take its place
-  // (the form stays open while the chat is used, so a card or the Comment button can be pressed meanwhile)
-  const typed = useRef("");
-  const opened = useRef(0);
-  const editingRef = useRef(editing);
-  editingRef.current = editing;
-  /** the forms drawn, by opening: none for the opening that is current means the chat has no place for it */
-  const drawn = useRef(new Set<number>());
-  const closeComment = useCallback(() => setEditing(null), []);
+  // saved or closed (`useCommentForm`)
+  const { editing, open: openForm, save: saveComment, close: closeComment, edit, typed } = useCommentForm<CommentTarget>({ view: scroller, persist: blockComments.save.bind(blockComments) });
   const openComment = useCallback((owner: string, target: CommentTarget, fromSelection = false) => {
-    const open = editingRef.current;
-    if (open !== null && !open.modal && commentTyped(typed.current, open.initialComment)) {
-      scroller.current?.querySelector<HTMLTextAreaElement>(".block-comment-card.is-editing textarea")?.focus({ preventScroll: true });
-      return;
-    }
-    const initialComment = blockComments.get(owner, target)?.comment ?? "";
-    typed.current = initialComment;
-    setEditing({ id: ++opened.current, owner, target, initialComment, selection: fromSelection, modal: false });
-  }, []);
-  const saveComment = useCallback((comment: string): void => {
-    const open = editingRef.current;
-    if (open === null) return;
-    blockComments.save(open.owner, open.target, comment);
-    // the selection was for this comment: it is made. An edit leaves whatever is selected meanwhile
-    if (open.selection) window.getSelection()?.removeAllRanges();
-    closeComment();
-  }, [closeComment]);
-  const attachForm = useCallback((id: number): (() => void) => {
-    drawn.current.add(id);
-    return () => {
-      drawn.current.delete(id);
-      // gone while it is the open one, and not drawn again meanwhile (a development remount does that): no place for it
-      queueMicrotask(() => {
-        const open = editingRef.current;
-        if (open !== null && open.id === id && !open.modal && !drawn.current.has(id)) setEditing({ ...open, modal: true });
-      });
-    };
-  }, []);
-  const edit = useMemo<CommentEdit | null>(() => editing === null || editing.modal ? null : {
-    id: editing.id,
-    owner: editing.owner,
-    target: editing.target,
-    initialComment: editing.initialComment,
-    draft: () => typed.current,
-    text: (value) => { typed.current = value; },
-    save: saveComment,
-    close: closeComment,
-    attach: attachForm,
-  }, [editing, saveComment, closeComment, attachForm]);
-  // children first: the form is drawn by now if the chat has a place for it
-  useLayoutEffect(() => {
-    if (editing !== null && !editing.modal && !drawn.current.has(editing.id)) setEditing({ ...editing, modal: true });
-  }, [editing]);
+    openForm(owner, target, blockComments.get(owner, target)?.comment ?? "", fromSelection);
+  }, [openForm]);
+  const commentSelection = useCallback((found: ChatSelection) => {
+    openComment(found.owner, selectionTarget(found.target, found.text, found.start, found.end, found.until), true);
+  }, [openComment]);
   // a new comment in the form: the field took the browser's selection, so the selected text
   // shows as a highlight until the comment is saved or given up (lib/commentHighlight.ts)
   const pending = editing !== null && !editing.modal && editing.selection && editing.target.quote !== undefined ? editing : null;
@@ -960,7 +915,7 @@ export const ChatView = memo(function ChatView({ paneId, refreshKey, sentKey = 0
     return () => showPendingComment(node, null);
   }, [pending]);
 
-  return <ChatPaneContext.Provider value={paneId}><ChatHistoryContext.Provider value={historyId ?? ""}><OpenCommentContext.Provider value={openComment}><CommentEditContext.Provider value={edit}><div className="chat-view" ref={scroller} onScroll={onScroll} role="log" aria-live="polite" aria-label={t("conversation of {pane}", { pane: paneId })}>
+  return <ChatPaneContext.Provider value={paneId}><ChatHistoryContext.Provider value={historyId ?? ""}><OpenCommentContext.Provider value={openComment}><CommentEditContext.Provider value={edit}><div className="chat-view" data-comment-surface="" ref={scroller} onScroll={onScroll} role="log" aria-live="polite" aria-label={t("conversation of {pane}", { pane: paneId })}>
     <div className="chat-transcript">
       {/* the conversation below is not all the file holds: a /tree left these behind, and pi moved
           its leaf without writing anything, so nothing here could say they were ever there. First
@@ -1000,7 +955,7 @@ export const ChatView = memo(function ChatView({ paneId, refreshKey, sentKey = 0
       {loaded && empty && error === null && prompt === null && !(greeted && blank) && <div className="chat-empty"><AgentMark agent={agent ?? "agent"} size={32} /><p>{t("No conversation yet — say something below")}</p></div>}
       {ended && <p className="chat-endcap">{t("terminal ended")}</p>}
     </div>
-    <SelectionCommentButton view={scroller} onComment={openComment} />
+    <SelectionCommentButton view={scroller} measure={measureSelection} onComment={commentSelection} />
     {newMessages ? <button type="button" className="btn chat-new-messages" onClick={scrollToBottom}>{t("New messages")} <ArrowDown aria-hidden="true" /></button>
       : away && <button type="button" className="btn chat-new-messages is-icon" aria-label={t("Jump to latest")} title={t("Jump to latest")} onClick={scrollToBottom}><ArrowDown aria-hidden="true" /></button>}
   </div>
@@ -1008,7 +963,7 @@ export const ChatView = memo(function ChatView({ paneId, refreshKey, sentKey = 0
     block={editing.target.block}
     quote={editing.target.quote?.text}
     initialComment={editing.initialComment}
-    startValue={typed.current}
+    startValue={typed()}
     onSave={saveComment}
     onClose={closeComment}
     fallback={() => paneComposer(scroller.current)}
@@ -1028,161 +983,16 @@ export const ChatView = memo(function ChatView({ paneId, refreshKey, sentKey = 0
   </CommentEditContext.Provider></OpenCommentContext.Provider></ChatHistoryContext.Provider></ChatPaneContext.Provider>;
 });
 
-/** The comment being written: kept as it was opened, so it outlives its block turning live or leaving. */
-interface Editing {
-  /** one per opening: another comment opened is another form */
-  id: number;
-  owner: string;
-  target: CommentTarget;
-  initialComment: string;
-  /** opened by the Comment button, for the text selected (not by a comment's Edit button) */
-  selection: boolean;
-  /** no part of the chat draws the form: the modal editor does */
-  modal: boolean;
-}
-
-/** Room between a selection's line and its Comment button; below it a touch screen's selection handle hangs, so more. */
-const SELECTION_GAP_PX = 8;
-const SELECTION_GAP_TOUCH_PX = 28;
-/** The least room between the button and the view's sides. */
-const SELECTION_MARGIN_PX = 8;
-
-/** Where a pointer let go (client coordinates) and what it was: a mouse or pen's release is where the user looks. */
-interface Release { x: number; y: number; type: string }
-
-/** The same text selected: whatever else moved (a reflow), the user's release may still stand for it (on one of its lines). */
-function sameText(a: SelectionComment, b: SelectionComment): boolean {
-  return a.target === b.target && a.start === b.start && a.end === b.end && a.text === b.text && a.until?.target === b.until?.target && a.until?.end === b.until?.end;
-}
-
-/** Same selection, same place: no re-render for a `selectionchange` that changed nothing of it. */
-function sameSelection(a: SelectionComment, b: SelectionComment): boolean {
-  return sameText(a, b) && a.placeRect.top === b.placeRect.top && a.placeRect.bottom === b.placeRect.bottom && a.placeRect.right === b.placeRect.right;
-}
+/** A selection the chat can comment on, keyed by its text (`SelectionCommentButton`). */
+type ChatSelection = SelectionComment & { key: string };
 
 /**
- * The Comment button for text selected in a final reply of this chat (lib/commentSelection.ts). It
- * sits in the scrolling `view`, so it scrolls with the text. A mouse or pen puts it where its
- * release was: centred on the pointer, above the line under it. A touch screen puts it below the
- * last line, where its own menu does not reach; a selection made with the keyboard, above that line.
- * Lines are those of the whole selection, also where it runs over several paragraphs or list items
- * (one comment on all of it). It shows once a mouse lets go, stays put while the selection does not
- * change, and goes when the selection collapses or leaves the reply. A press on it keeps the selection.
- * It opens the comment's inline form (Markdown.tsx) and hides: the field takes the selection away.
- * A selection inside a comment's field is none: the form is in the reply, but it is not its text.
+ * The comment the current selection makes in the chat `view` (`selectionComment`), with the key
+ * that names the same text selected: its part, offsets and text, and where it ends when it runs on.
  */
-function SelectionCommentButton({ view, onComment }: { view: RefObject<HTMLDivElement>; onComment: (owner: string, target: CommentTarget, fromSelection: boolean) => void }) {
-  const t = useT();
-  const [found, setFound] = useState<{ comment: SelectionComment; release: Release | null } | null>(null);
-  const button = useRef<HTMLButtonElement>(null);
-  // the last release not yet matched to a selection it made; a selection that changes without one (the keyboard) has none
-  const released = useRef<Release | null>(null);
-  // pressed, not yet clicked: a touch screen may drop the selection in between, and the button
-  // stays for the click. Never outlives the press: a release elsewhere, a cancel or any click ends it
-  const pressing = useRef(false);
-
-  useEffect(() => {
-    let frame = 0;
-    // a mouse button held down: the selection is still being drawn
-    let dragging = false;
-    const update = (): void => {
-      frame = 0;
-      if (pressing.current) return;
-      const node = view.current;
-      const field = document.activeElement;
-      const writing = field instanceof HTMLTextAreaElement && node?.contains(field) === true;
-      const next = dragging || writing || node === null ? null : selectionComment(window.getSelection(), node);
-      const release = released.current;
-      released.current = null;
-      setFound((current) => {
-        if (next === null) return null;
-        if (current !== null && sameSelection(current.comment, next)) return current;
-        // the same text, moved (a reflow) or reached otherwise (the keyboard over a blank or a rule):
-        // a mouse's release stands while it is still on one of its lines; a touch's stands for being one
-        const held = current !== null && sameText(current.comment, next) ? current.release : null;
-        const stands = held !== null && (held.type === "touch" || onLine(next.placeLines, held.y));
-        return { comment: next, release: release ?? (stands ? held : null) };
-      });
-    };
-    // once per frame, however many events a drag or a handle fires
-    const schedule = (): void => { if (frame === 0) frame = window.requestAnimationFrame(update); };
-    const onButton = (event: Event): boolean => event.target instanceof Node && button.current?.contains(event.target) === true;
-    const onPointerDown = (event: PointerEvent): void => {
-      if (onButton(event)) return;
-      pressing.current = false;
-      if (event.pointerType === "mouse" && event.button === 0) { dragging = true; schedule(); }
-    };
-    // released on the button, the click follows and ends the press; released anywhere else, no click will
-    const onPointerUp = (event: PointerEvent): void => {
-      dragging = false;
-      if (!onButton(event)) { pressing.current = false; released.current = { x: event.clientX, y: event.clientY, type: event.pointerType }; }
-      schedule();
-    };
-    const onPointerCancel = (): void => { dragging = false; pressing.current = false; schedule(); };
-    const onClick = (): void => { if (pressing.current) { pressing.current = false; schedule(); } };
-    // the view or its column resized (a window, the composer, a chat width setting): the text rewrapped under the button
-    const resized = new ResizeObserver(schedule);
-    const node = view.current;
-    if (node !== null) {
-      resized.observe(node);
-      if (node.firstElementChild !== null) resized.observe(node.firstElementChild);
-    }
-    document.addEventListener("selectionchange", schedule);
-    document.addEventListener("pointerdown", onPointerDown, true);
-    document.addEventListener("pointerup", onPointerUp, true);
-    document.addEventListener("pointercancel", onPointerCancel, true);
-    document.addEventListener("click", onClick, true);
-    document.addEventListener("keyup", schedule, true);
-    window.addEventListener("resize", schedule);
-    return () => {
-      window.cancelAnimationFrame(frame);
-      resized.disconnect();
-      document.removeEventListener("selectionchange", schedule);
-      document.removeEventListener("pointerdown", onPointerDown, true);
-      document.removeEventListener("pointerup", onPointerUp, true);
-      document.removeEventListener("pointercancel", onPointerCancel, true);
-      document.removeEventListener("click", onClick, true);
-      document.removeEventListener("keyup", schedule, true);
-      window.removeEventListener("resize", schedule);
-    };
-  }, [view]);
-
-  // placed before paint, in the view's scrolled content: measured against its visible box, then shifted by its scroll
-  useLayoutEffect(() => {
-    const node = button.current;
-    const scroller = view.current;
-    if (node === null || scroller === null || found === null) return;
-    const box = scroller.getBoundingClientRect();
-    const left = box.left + scroller.clientLeft;
-    const top = box.top + scroller.clientTop;
-    const { comment, release } = found;
-    // a release by touch, or none at all (the keyboard): the selection's last line; else the line under the pointer
-    const at = release !== null && release.type !== "touch" ? { x: release.x - left, y: release.y - top } : null;
-    const below = release !== null ? release.type === "touch" : window.matchMedia("(pointer: coarse)").matches;
-    const options = { below, gap: below ? SELECTION_GAP_TOUCH_PX : SELECTION_GAP_PX, margin: SELECTION_MARGIN_PX };
-    const viewSize = { width: scroller.clientWidth, height: scroller.clientHeight };
-    const size = { width: node.offsetWidth, height: node.offsetHeight };
-    const place = at !== null
-      ? placeAtPointer(comment.placeLines.map((line) => ({ top: line.top - top, bottom: line.bottom - top })), at, viewSize, size, options)
-      : floatingPlace({ top: comment.placeRect.top - top, bottom: comment.placeRect.bottom - top, right: comment.placeRect.right - left }, viewSize, size, options);
-    node.style.left = `${place.left + scroller.scrollLeft}px`;
-    node.style.top = `${place.top + scroller.scrollTop}px`;
-  }, [found, view]);
-
+function measureSelection(selection: Selection | null, view: Element): ChatSelection | null {
+  const found = selectionComment(selection, view);
   if (found === null) return null;
-  return <button
-    ref={button}
-    type="button"
-    className="btn comment-selection"
-    onPointerDown={(event) => { event.preventDefault(); pressing.current = true; }}
-    onMouseDown={(event) => event.preventDefault()}
-    onClick={(event) => {
-      pressing.current = false;
-      setFound(null);
-      const { comment } = found;
-      onComment(comment.owner, selectionTarget(comment.target, comment.text, comment.start, comment.end, comment.until), true);
-    }}
-  >
-    <MessageSquarePlus aria-hidden="true" />{t("Comment")}
-  </button>;
+  const key = JSON.stringify([found.target.anchor, found.start, found.end, found.text, found.until?.target.anchor ?? null, found.until?.end ?? null]);
+  return { ...found, key };
 }

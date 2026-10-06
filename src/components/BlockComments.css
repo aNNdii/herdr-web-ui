@@ -105,29 +105,24 @@
 }
 
 /* A comment's card, GitLab's pending draft note: a surface tinted with the accent and an edge of
-   it, so it reads as a comment of the reader's, not as part of the reply; a header row (the
-   "Pending" badge, Edit and Delete on the right) and the comment in full below it. No author: the
-   comment is the reader's own. The text it is on shows as the highlight (lib/commentHighlight.ts).
-   A group, not a button: its two buttons are the controls. The form that writes or edits a comment
-   (CommentCard.tsx) is not a card but the message box's own surface (below) */
+   it, so it reads as a comment of the reader's, not as part of the reply. Laid out as the form that
+   writes it (below), so an Edit swaps one for the other with nothing moving: the same radius, the
+   comment where the form's field has its text, then the same footer row, with the "Pending" badge
+   (and a file comment's reference) on the left and Edit and Delete where the form has Cancel and
+   Save. No author: the comment is the reader's own. The text it is on shows as the highlight
+   (lib/commentHighlight.ts). A group, not a button: its two buttons are the controls.
+   --radius-xl, not the composer's --radius-2xl: the box is a line or two tall and 24px would round
+   it into a pill */
 .block-comment-card {
   display: flex;
   flex-direction: column;
-  gap: var(--space-1);
-  padding: var(--space-2) var(--space-3);
   border: var(--hairline) solid color-mix(in srgb, var(--accent) 35%, var(--border));
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-xl);
   background: color-mix(in srgb, var(--accent) 8%, var(--bg-elevated));
   color: var(--text);
   font-size: var(--fs-sm);
   line-height: var(--lh-base);
   transition: border-color var(--dur-fast) var(--ease-out);
-}
-
-.block-comment-head {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
 }
 
 /* the comment waits for the next message: the accent, as other things that are yours and unsent;
@@ -137,17 +132,13 @@
   background: color-mix(in srgb, var(--accent) 22%, transparent);
 }
 
-/* the buttons sit on the right, a little smaller than the app's icon buttons, which would make the
-   header taller than its text; a finger gets the full touch target. After .icon-button (styles.css):
-   same specificity, so the order decides */
+/* Edit and Delete sit on the right of the footer, at the control height of the form's Save, so the
+   row keeps its height when the form takes the card's place; a finger gets the full touch target.
+   After .icon-button (styles.css): same specificity, so the order decides */
 .block-comment-action {
-  width: calc(var(--control-h) - var(--space-2));
-  height: calc(var(--control-h) - var(--space-2));
+  width: var(--control-h);
+  height: var(--control-h);
   color: var(--text-dim);
-}
-
-.block-comment-edit {
-  margin-left: auto;
 }
 
 @media (hover: hover) {
@@ -156,10 +147,21 @@
   }
 }
 
-/* the comment, as written: its lines and long words kept, plain text */
+/* the comment, as written: its lines and long words kept, plain text; set as the form's field sets
+   it (below), its padding, size and leading, so the text stays where it is when Edit opens the form */
 .block-comment-text {
+  padding: var(--space-3) var(--space-4) var(--space-1);
+  font-size: var(--fs-input);
+  line-height: var(--lh-base);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .block-comment-text {
+    font-size: var(--fs-chat);
+    line-height: var(--lh-code);
+  }
 }
 
 /* The card that is up (the pointer over it, the keyboard's focus in it; its comment's text comes up
@@ -192,13 +194,10 @@
 
 /* The form is the chat's message box in the column's scale (Composer.css `.composer-surface`): one
    surface, its fill, hairline, shadow and focus edge, with the field borderless inside it and the
-   controls in a row under the text, on the right. Not yet a comment, so untinted. --radius-xl, not the
-   composer's --radius-2xl: the box is a line or two tall and 24px would round it into a pill */
+   controls in a row under the text, on the right. Not yet a comment, so untinted; its shape is the
+   card's (above) */
 .block-comment-card.is-editing {
-  gap: 0;
-  padding: 0;
   border-color: var(--border);
-  border-radius: var(--radius-xl);
   background: var(--bg-elevated);
   box-shadow: var(--shadow-card);
   transition:
@@ -236,13 +235,47 @@
   color: var(--text-dim);
 }
 
-/* the controls' row, as the composer's: Cancel as text, then Save as the round accent button */
+/* the footer, the card's and the form's: what the comment is (the badge, the file and lines) on the
+   left; on the right the card's Edit and Delete, the form's Cancel as text and Save as the round
+   accent button, as the composer's */
 .block-comment-actions {
   display: flex;
   align-items: center;
   justify-content: flex-end;
   gap: var(--space-2);
   padding: var(--space-1) var(--space-2) var(--space-2);
+}
+
+/* The file and lines a comment is on (CommentCard.tsx `FileReferenceLabel`): quiet, small, one line.
+   In the footer's left side (`.block-comment-meta`), after the card's badge; the buttons stay right.
+   A long name is cut inside its stem, as the file viewer's title (FileViewer.css `.file-viewer-stem`):
+   the extension and the lines never give way */
+.comment-file-reference {
+  display: flex;
+  min-width: 0;
+  color: var(--text-dim);
+  font-size: var(--fs-xs);
+  white-space: nowrap;
+}
+
+.comment-file-stem {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.comment-file-rest {
+  flex: none;
+}
+
+/* the footer's left side: lined up with the text above it (the text is inset by --space-4, the row by --space-2) */
+.block-comment-meta {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  margin-inline-end: auto;
+  padding-inline-start: var(--space-2);
 }
 
 /* Save: the composer's send button by its tokens (Composer.css `.composer-send`), at the control height */

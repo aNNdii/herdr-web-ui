@@ -16,6 +16,9 @@ import { t } from "./i18n.ts";
 /** This cap keeps one composer message inside a single WS frame. */
 export const MAX_COMPOSER_CHARS = 20_000;
 
+/** Most characters one quote keeps (a reply selection, a file quote), the cut's "…" included. */
+export const SELECTION_QUOTE_MAX = 2000;
+
 const PASTE_START = "\u001b[200~";
 const PASTE_END = "\u001b[201~";
 
