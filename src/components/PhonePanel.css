@@ -1,24 +1,28 @@
-.phone-address {
-  display: flex;
-  align-items: flex-start;
-  gap: var(--space-4);
-}
-
-.phone-address .settings-label {
-  display: block;
-}
-
-.phone-url {
-  margin: var(--space-1) 0 0;
-  font-family: var(--font-mono);
-  font-size: var(--fs-sm);
-  overflow-wrap: anywhere;
-}
-
-.phone-panel {
+.phone-plan {
   display: flex;
   flex-direction: column;
   gap: var(--space-3);
+}
+
+.phone-address {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+}
+
+.phone-address-text {
+  min-width: 0;
+}
+
+.phone-address p {
+  margin: 0;
+}
+
+.phone-url {
+  margin-top: var(--space-1);
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+  overflow-wrap: anywhere;
 }
 
 .phone-panel a {
@@ -51,13 +55,9 @@
   display: none;
 }
 
-.phone-actions {
-  display: flex;
-  gap: var(--space-2);
-}
-
 @media (max-width: 640px) {
   .phone-address {
     flex-direction: column;
+    align-items: flex-start;
   }
 }

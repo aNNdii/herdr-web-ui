@@ -56,10 +56,23 @@ between releases do not reach them. Remote-PC runtime bundles are versioned sepa
   a new tab, where it can be saved. A text file loads up to 1 MB by default (was 256 KB), and a size
   under 10 MB shows one decimal (`1.3 MB`), in the viewer and in a bridge update's progress.
   ([#429](https://github.com/devswha/herdr-web-ui/pull/429) by @aNNdii)
+- Settings is a larger window of its own pages: a navigation column (This device, Server &
+  connections, herdr web ui) beside the page, each page in titled groups of rows with shorter
+  descriptions, and a search that shows every matching setting at once, in the language shown or
+  in English (`/` to search, Escape clears it first). The window keeps its size between pages, and
+  the app stays in view behind it. A link ending in `#settings/<page>` opens it on that page. On a
+  phone it fills the screen: a list of the pages with their current values, then the page. The
+  palettes are tiles with a preview, the terminal's typing modes are explained, quick replies move
+  with arrows, and paired devices and remote PCs keep their actions in a `⋯` menu.
 - The website says what it is for in its title and description (Claude Code and Codex from your
   phone), answers seven common questions in a new FAQ section, and gives search engines a sitemap
   and structured data for the app and the FAQ.
   ([#497](https://github.com/devswha/herdr-web-ui/pull/497))
+- The website's headline is "Run herdr from anywhere.", and the page catches up with the app:
+  the Windows install command, pi among the native transcripts, the Alt key and a card for voice
+  input. Its figures now show the contributor count and the plugin's place by stars among herdr
+  plugin repositories, and the comparison with other phone clients was read again in October 2026.
+  ([#494](https://github.com/devswha/herdr-web-ui/pull/494))
 - On macOS a Codex pane's chat costs the server about a sixth of what it did on each poll (a
   median of 16 ms instead of 103 ms, measured on two live Codex panes). The store a Codex process
   writes to is remembered for its pid and arguments instead of being read with `ps` every 2 s,
@@ -72,6 +85,14 @@ between releases do not reach them. Remote-PC runtime bundles are versioned sepa
   ([#493](https://github.com/devswha/herdr-web-ui/pull/493) by @kilhyeonjun)
 
 ### Fixed
+- A Claude Code pane started with its own `CLAUDE_CONFIG_DIR` (a launcher such as cac keeps one
+  store per environment) shows its chat. Before, only `~/.claude` was searched, so the chat was
+  unavailable and only the terminal worked. The store is read from the pane's Claude process, as
+  for Codex's `CODEX_HOME`, else from the server's own `CLAUDE_CONFIG_DIR`, else `~/.claude`.
+  On macOS the pane's session is also found from Claude's own process record when herdr's hook
+  has not reported one, as it already was on Linux. Node-based Claude processes reported by
+  their `argv0` title are recognized too.
+  ([#504](https://github.com/devswha/herdr-web-ui/pull/504) by @leo1oel)
 - With Language set to **System**, English stays selected when it is the browser's first
   supported language, even if Japanese, Korean or Chinese appears later in its preferences.
   Before, English was skipped in favor of a later supported language.
@@ -92,6 +113,13 @@ between releases do not reach them. Remote-PC runtime bundles are versioned sepa
   Claude do in …?"), as an OmO pane already did. Before, until the first message the chat
   showed the terminal's text or an empty line instead, so a new workspace or worktree never
   greeted you. ([#500](https://github.com/devswha/herdr-web-ui/pull/500))
+- `/model` sent from a Claude Code pane's chat shows Claude's model list as a card: tap a model,
+  or type its number, and that pane's session switches to it. Before, the chat showed nothing
+  while the terminal waited on the list, so a model could only be picked there. The card picks
+  for this session only (Claude's `s` key). Saving a model as the default for new sessions stays
+  in the terminal, where Enter on the list does it. The card offers the rows Claude draws (ten of
+  a longer list, fewer in a short pane) and says how many more the terminal lists.
+  ([#501](https://github.com/devswha/herdr-web-ui/pull/501))
 
 ## [0.3.51] - 2026-10-06
 

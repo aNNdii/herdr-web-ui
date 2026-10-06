@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import type { Browser, BrowserContext } from "playwright-core";
+import { settingsPage } from "./settings-nav.ts";
 import type { UsageReport } from "../shared/protocol.ts";
 
 const at = (hours: number): string => new Date(Date.now() + hours * 3600_000).toISOString();
@@ -53,6 +54,7 @@ export async function checkUsageMeters(browser: Browser, origin: string): Promis
     assert.equal(await strip.count(), 0);
     assert.deepEqual(asked, [], "no usage request before the user turns it on");
     await settingsButton.click();
+    await settingsPage(page, "usage");
     assert.equal(await toggle.getAttribute("aria-checked"), "false");
     await toggle.click();
     await page.keyboard.press("Escape");
@@ -90,6 +92,7 @@ export async function checkUsageMeters(browser: Browser, origin: string): Promis
     // Settings: what is left instead, an account hidden from the strip, another moved up
     const names = () => page.locator(".usage-popover .usage-provider").evaluateAll((sections) => sections.map((section) => section.getAttribute("aria-label")));
     await settingsButton.click();
+    await settingsPage(page, "usage");
     await page.getByRole("button", { name: "Remaining", exact: true }).click();
     await page.getByRole("switch", { name: "Show Codex · me@work.example", exact: true }).click();
     await page.getByRole("button", { name: "Move Cursor up", exact: true }).click();
@@ -104,11 +107,12 @@ export async function checkUsageMeters(browser: Browser, origin: string): Promis
     if (process.env.UI_EVIDENCE_DIR) await page.locator(".sidebar-shell").screenshot({ path: join(process.env.UI_EVIDENCE_DIR, "usage-popover-left.png") });
     await page.keyboard.press("Escape");
     await settingsButton.click();
+    await settingsPage(page, "usage");
     if (process.env.UI_EVIDENCE_DIR) {
-      await page.locator(".settings-section", { has: page.getByRole("heading", { name: "Subscription usage", exact: true }) }).screenshot({ path: join(process.env.UI_EVIDENCE_DIR, "usage-settings.png") });
+      await page.locator(".settings-results").screenshot({ path: join(process.env.UI_EVIDENCE_DIR, "usage-settings.png") });
     }
     // the session instead of the week: an account without one keeps the limit it has
-    await page.locator('.segmented[aria-label="Limit shown"]').getByRole("button", { name: "Session", exact: true }).click();
+    await page.getByRole("group", { name: "Limit shown", exact: true }).getByRole("button", { name: "Session", exact: true }).click();
     await page.keyboard.press("Escape");
     assert.match(await strip.getAttribute("aria-label") ?? "", /^Subscription usage: Claude · me@example.com 58% left, Cursor 80% left, Codex · me@example.com 70% left,/);
     const stored = await page.evaluate(() => JSON.parse(localStorage.getItem("herdr-web-ui:settings") ?? "{}") as { usageHidden?: string[]; usageCount?: string; usageGlance?: string });
@@ -116,6 +120,7 @@ export async function checkUsageMeters(browser: Browser, origin: string): Promis
 
     // turned off in Settings: gone, and no longer asked for
     await settingsButton.click();
+    await settingsPage(page, "usage");
     await toggle.click();
     await strip.waitFor({ state: "detached" });
     const before = asked.length;
@@ -146,12 +151,13 @@ export async function checkUsageMeters(browser: Browser, origin: string): Promis
     // Settings on the phone: every account row fits its card, controls included
     await page.keyboard.press("Escape");
     await page.locator(".sidebar-footer-row .sidebar-footer-action").click();
+    await settingsPage(page, "usage");
     const accounts = page.locator(".usage-accounts");
     await accounts.scrollIntoViewIfNeeded();
     assert.equal(await accounts.locator(".usage-accounts-row").count(), 7);
     assert.equal(await accounts.evaluate((card) => [...card.querySelectorAll(".usage-accounts-row")].every((row) => row.scrollWidth <= row.clientWidth)), true, "each account row fits the phone");
     if (process.env.UI_EVIDENCE_DIR) {
-      await page.locator(".settings-section", { has: page.getByRole("heading", { name: "Subscription usage", exact: true }) }).screenshot({ path: join(process.env.UI_EVIDENCE_DIR, "usage-settings-phone.png") });
+      await page.locator(".settings-results").screenshot({ path: join(process.env.UI_EVIDENCE_DIR, "usage-settings-phone.png") });
     }
   } finally {
     await phone.close();

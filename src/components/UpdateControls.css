@@ -6,11 +6,6 @@
   gap: var(--space-2);
 }
 
-.settings-updates .settings-hint,
-.settings-herdr-update .settings-hint {
-  overflow-wrap: anywhere;
-}
-
 .update-notice {
   flex: 0 0 auto;
   justify-content: space-between;
