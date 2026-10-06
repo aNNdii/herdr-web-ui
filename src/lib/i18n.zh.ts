@@ -882,4 +882,10 @@ export const ZH: Record<string, string> = {
   "Comments could not be saved. They are lost on reload.": "评论无法保存，重新加载后会丢失。",
   "Comments stay here: they are not sent with an answer.": "评论会留在这里：不会随回答一起发送。",
   "Comments stay here: they are only sent to an agent.": "评论会留在这里：只会发送给代理。",
+  "Line {line}": "第 {line} 行",
+  "Lines {first}–{last}": "第 {first}–{last} 行",
+  "{count} comment": "{count} 条评论",
+  "{count} comments": "{count} 条评论",
+  "{count} outdated": "{count} 条已过时",
+  "This part of the file has changed since.": "文件的这一部分此后已更改。",
 };

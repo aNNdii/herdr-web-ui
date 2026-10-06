@@ -180,13 +180,14 @@ export function tooLongToHighlight(code: string, language: string | null, limit:
 /**
  * Tokenize `code` per line. `limit` counts characters (`code.length`, the raw text with any "\r"),
  * not bytes. Never throws: a null, unknown or unregistered language, code above `limit` (`tooLong`)
- * and any highlighter error all give plain lines. "\r\n" is treated as "\n".
+ * and any highlighter error all give plain lines. "\r\n" and a lone "\r" end a line like "\n" (as
+ * `parseMarkdown` reads them), so the file viewer numbers lines as `fileLines` and an editor do.
  *
  * The last call is remembered (`memoizeLast`): a file toggled from its Preview to the source and
  * back mounts its code view anew, and tokenizing a megabyte again would cost a quarter second.
  */
 export const highlightLines = memoizeLast(function highlightLines(code: string, language: string | null, limit: number): HighlightResult {
-  const source = code.replace(/\r\n/g, "\n").replace(/\n$/, "");
+  const source = code.replace(/\r\n?/g, "\n").replace(/\n$/, "");
   if (language === null || !lowlight.registered(language)) return { lines: plainLines(source), tooLong: false };
   if (tooLongToHighlight(code, language, limit)) return { lines: plainLines(source), tooLong: true };
   try {

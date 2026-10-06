@@ -8,6 +8,7 @@ import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent as Rea
 import "./CommentEditor.css";
 
 import { commentCanSave, commentTyped } from "../lib/blockComments.ts";
+import { COMMENT_SURFACE } from "../lib/commentHighlight.ts";
 import { restoreFocusTarget } from "../lib/commentSelection.ts";
 import { useT } from "../lib/i18n.ts";
 
@@ -22,6 +23,8 @@ export interface CommentDraft {
   value: string;
   /** Save does something (`commentCanSave`): a new comment with only blanks has nothing to save */
   canSave: boolean;
+  /** something was typed (`commentTyped`): the form is not given up by a key, nor passed over by the composer's Send */
+  typed: boolean;
   setValue: (value: string) => void;
   /** saves the text, or only closes when it is unchanged */
   save: () => void;
@@ -34,7 +37,8 @@ export interface CommentDraftOptions {
    * What gets the focus back on close. An element or null for none; by default what had the focus
    * as the editor opened. A function is asked after the commit that closes the editor, so it can
    * find an element the same commit drew again (the card of the comment that was edited): it gets
-   * the chat view the editor was in (`scope`, null for the modal, which sits outside it).
+   * the comment surface the editor was in (`scope`: the chat view, the file viewer; null for the
+   * modal, which sits outside it).
    */
   opener?: HTMLElement | null | ((scope: Element | null) => HTMLElement | null);
   /** where the focus goes when its opener is gone (the composer of the pane): asked once, as the editor opens */
@@ -88,7 +92,7 @@ export function useCommentDraft(
   const openedBy = useRef(given);
   const nonModal = useRef(inline);
   useLayoutEffect(() => {
-    const scope = surface.current?.closest(".chat-view") ?? null;
+    const scope = surface.current?.closest(`[${COMMENT_SURFACE}]`) ?? null;
     const active = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     const opener = (): HTMLElement | null => {
       const by = openedBy.current;
@@ -108,14 +112,13 @@ export function useCommentDraft(
       queueMicrotask(() => restoreFocusTarget(opener(), back, nonModal.current, window.matchMedia("(pointer: coarse)").matches)?.focus({ preventScroll: true }));
     };
   }, []);
-  useEffect(() => {
-    const frame = window.requestAnimationFrame(() => {
-      const node = field.current;
-      if (!node) return;
-      node.focus({ preventScroll: true });
-      node.setSelectionRange(node.value.length, node.value.length);
-    });
-    return () => window.cancelAnimationFrame(frame);
+  // in the commit, so inside the tap or click that opened the editor: iOS raises its keyboard only for a
+  // focus given while that event is handled (not a frame later), and a phone's user would else tap the field
+  useLayoutEffect(() => {
+    const node = field.current;
+    if (!node) return;
+    node.focus({ preventScroll: true });
+    node.setSelectionRange(node.value.length, node.value.length);
   }, []);
   // A modal's Escape is its own, not the composer's or the chat's underneath: anywhere, from the window in the capture
   // phase. An inline form's is handled by its surface's `onKeyDown` below, so only from inside it
@@ -164,7 +167,7 @@ export function useCommentDraft(
     }
   };
 
-  return { surface, field, value, canSave, setValue, save, onKeyDown };
+  return { surface, field, value, canSave, typed, setValue, save, onKeyDown };
 }
 
 /** The comment's field in either editor. */

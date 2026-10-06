@@ -1,6 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import { parseMarkdown, type ListBlock, type MarkdownBlock } from "./markdown.ts";
-import { BLOCK_COMMENTS_PREFIX, BlockCommentStore, blockContent, blockTarget, commentCanSave, commentTarget, commentTyped, composeWithComments, draftComment, formPlace, isBlockComment, isMarkdownBlock, noteHost, notesOnPart, outgoingMessage, partSegments, quoteExcerpt, quoteFor, replyPart, replyParts, SELECTION_QUOTE_MAX, selectionTarget, textRange, type BlockComment, type CommentTarget } from "./blockComments.ts";
+import { BLOCK_COMMENTS_PREFIX, BlockCommentStore, blockContent, blockTarget, commentCanSave, commentTarget, commentTyped, composeWithComments, draftComment, formPlace, isBlockComment, isMarkdownBlock, isPaneComment, isReplyComment, noteHost, notesOnPart, outgoingMessage, partSegments, quoteExcerpt, quoteFor, replyPart, replyParts, SELECTION_QUOTE_MAX, selectionTarget, textRange, type BlockComment, type CommentTarget } from "./blockComments.ts";
+import { fileAnchor, type FileComment, type FileTarget } from "./fileComments.ts";
 
 const TS = "2026-10-03T10:12:00Z";
 const TIME = Date.parse(TS);
@@ -152,6 +153,8 @@ function fixture() {
   return { data, storage, store: new BlockCommentStore(() => storage) };
 }
 const KEY = `${BLOCK_COMMENTS_PREFIX}o`;
+/** the reply comments a store holds for pane "o" (what the chat tests read) */
+const replies = (store: BlockCommentStore): BlockComment[] => store.list("o").filter(isReplyComment);
 /** the target for the block `text` parses to, at `path` in `reply` */
 const at = (path: number[], text: string) => blockTarget(reply, path, first(text));
 
@@ -275,8 +278,8 @@ describe("commentTarget", () => {
   it("edits a stored comment in place, where its block is not rendered", () => {
     const { store } = fixture();
     store.save("o", at([0], "first"), "one");
-    store.save("o", commentTarget(store.list("o")[0]!), "two");
-    expect(store.list("o").map((c) => [c.comment, c.order])).toEqual([["two", [TIME, 0, 0]]]);
+    store.save("o", commentTarget(replies(store)[0]!), "two");
+    expect(replies(store).map((c) => [c.comment, c.order])).toEqual([["two", [TIME, 0, 0]]]);
   });
 });
 
@@ -363,7 +366,7 @@ describe("selection comments in the store", () => {
     store.save("o", selectionTarget(part, "gamma", 11, 16), "third");
     store.save("o", selectionTarget(part, "beta", 6, 10), "second");
     store.save("o", selectionTarget(part, "Alpha", 0, 5), "edited");
-    const list = new BlockCommentStore(() => storage).list("o");
+    const list = new BlockCommentStore(() => storage).list("o").filter(isReplyComment);
     expect(list.map((c) => [c.comment, c.quote, c.range])).toEqual([["edited", "Alpha", [0, 5]], ["second", "beta", [6, 10]], ["third", "gamma", [11, 16]]]);
     expect(list.map((c) => c.order.slice(1))).toEqual([[0, 2, -1, 0], [0, 2, -1, 6], [0, 2, -1, 11]]);
   });
@@ -395,8 +398,8 @@ describe("selection comments in the store", () => {
   it("edits again from the stored comment without losing the quote", () => {
     const { store } = fixture();
     store.save("o", selectionTarget(part, "beta", 6, 10), "note");
-    store.save("o", commentTarget(store.list("o")[0]!), "edited");
-    expect(store.list("o").map((c) => [c.comment, c.quote, c.range])).toEqual([["edited", "beta", [6, 10]]]);
+    store.save("o", commentTarget(replies(store)[0]!), "edited");
+    expect(replies(store).map((c) => [c.comment, c.quote, c.range])).toEqual([["edited", "beta", [6, 10]]]);
   });
 
   it("moves a selection comment off its anchor when the part was replaced, like a block comment", () => {
@@ -563,9 +566,9 @@ describe("selections across parts", () => {
   it("edits it again from the stored comment, its last part kept", () => {
     const { store } = fixture();
     store.save("o", spanning, "across");
-    expect(commentTarget(store.list("o")[0]!)).toEqual(spanning);
-    store.save("o", commentTarget(store.list("o")[0]!), "edited");
-    const edited = store.list("o");
+    expect(commentTarget(replies(store)[0]!)).toEqual(spanning);
+    store.save("o", commentTarget(replies(store)[0]!), "edited");
+    const edited = replies(store);
     expect(edited.map((c) => [c.comment, c.anchor, c.until?.end])).toEqual([["edited", spanning.anchor, 5]]);
   });
 
@@ -690,7 +693,7 @@ describe("selections across parts", () => {
       // what the store would keep, but for its id and its text
       const { store } = fixture();
       store.save("o", spanning, "across");
-      const { id: _id, comment: _text, ...saved } = store.list("o")[0]!;
+      const { id: _id, comment: _text, ...saved } = replies(store)[0]!;
       const { id: _draftId, comment: _draftText, ...drafted } = draft;
       expect(drafted).toEqual(saved);
     });
@@ -778,5 +781,191 @@ describe("commentCanSave", () => {
   it("saves an edit, also emptied: a blank edit deletes the comment", () => {
     expect(commentCanSave("Fix that", "Fix this")).toBe(true);
     expect(commentCanSave("", "Fix this")).toBe(true);
+  });
+});
+
+const fileTarget: FileTarget = { path: "/repo/src/sync.ts", label: "src/sync.ts", view: "code", lines: [8, 8], source: ["if (a < b) {"], quoteLines: ["if (a < b) {"] };
+/** a file comment as the store keeps it */
+const fileComment = (target: FileTarget, note: string, created: number): FileComment => ({ ...target, kind: "file", id: `f${created}`, anchor: fileAnchor(target), created, comment: note });
+const fileA = fileComment({ path: "/repo/docs/spec.md", label: "docs/spec.md", view: "preview", lines: [42, 43], source: ["| Older revision | 409 |", "| Newer revision | 200 |"], quoteLines: ["Older revision | 409", "Newer revision | 200"] }, "Also return the revision.", 1);
+const fileB = fileComment(fileTarget, "Compare with <=.", 2);
+const reply1: BlockComment = { ...stored("r1", "Backfill in batches.", selectionTarget(blockTarget(reply, [0], first("backfill it from updated_at")), "backfill it from updated_at", 0, 27)), kind: "reply" };
+/** a store on one in-memory storage whose clock is `now` */
+function storeAt(now: () => number = () => 0) {
+  const { data, storage } = fixture();
+  return { data, storage, store: new BlockCommentStore(() => storage, now) };
+}
+
+describe("file comments in the store", () => {
+  it("reads an old entry without kind as a reply comment", () => {
+    const { data, storage } = fixture();
+    const old = comment("old", [0], "first", "kept");
+    expect("kind" in old).toBe(false);
+    data.set(KEY, JSON.stringify({ version: 1, comments: [old, reply1] }));
+    const list = new BlockCommentStore(() => storage).list("o");
+    expect(list).toEqual([old, reply1]);
+    expect(list.every(isReplyComment)).toBe(true);
+  });
+
+  it("keeps one file comment per place and removes it when saved blank", () => {
+    const { store } = storeAt(() => 42);
+    store.saveFile("o", fileTarget, "Compare with <=.");
+    const firstId = store.list("o")[0]!.id;
+    store.saveFile("o", fileTarget, "Compare with <=, a replay reuses it.");
+    expect(store.list("o")).toHaveLength(1);
+    expect(store.list("o")[0]).toMatchObject({ kind: "file", created: 42, comment: "Compare with <=, a replay reuses it." });
+    expect(store.list("o")[0]!.id).not.toBe(firstId);
+    store.saveFile("o", fileTarget, "  ");
+    expect(store.list("o")).toHaveLength(0);
+  });
+
+  it("keeps the creation time of an edit, and stamps a new comment with the time it is written", () => {
+    let time = 10;
+    const { store } = storeAt(() => time);
+    store.saveFile("o", fileTarget, "one");
+    time = 20;
+    store.saveFile("o", fileTarget, "two");
+    store.saveFile("o", { ...fileTarget, lines: [9, 9], source: ["x"], quoteLines: ["x"] }, "other");
+    expect(store.list("o").map((c) => [c.comment, (c as FileComment).created])).toEqual([["two", 10], ["other", 20]]);
+  });
+
+  it("leaves a reply comment alone: get answers for replies only, a blank file save removes no reply", () => {
+    const { store } = storeAt();
+    store.save("o", at([0], "first"), "reply");
+    store.saveFile("o", fileTarget, "file");
+    expect(store.get("o", at([0], "first"))?.comment).toBe("reply");
+    store.saveFile("o", fileTarget, "");
+    expect(store.list("o").map((c) => c.comment)).toEqual(["reply"]);
+  });
+
+  it("moves a comment to its new lines", () => {
+    const { store } = storeAt();
+    store.saveFile("o", fileTarget, "x");
+    store.moveFile("o", store.list("o")[0]!.id, [10, 10]);
+    expect(store.list("o")[0]).toMatchObject({ lines: [10, 10], anchor: fileAnchor({ ...fileTarget, lines: [10, 10] }) });
+  });
+
+  it("keeps the old anchor when another comment holds the new one, and writes nothing for an unknown id or the same lines", () => {
+    const { store, data } = storeAt();
+    store.saveFile("o", fileTarget, "x");
+    store.saveFile("o", { ...fileTarget, lines: [10, 10] }, "y");
+    const [moved, holder] = store.list("o") as FileComment[];
+    const before = data.get(KEY);
+    store.moveFile("o", moved!.id, moved!.lines);
+    store.moveFile("o", "nope", [3, 3]);
+    expect(data.get(KEY)).toBe(before);
+    store.moveFile("o", moved!.id, [10, 10]);
+    expect(store.list("o").find((c) => c.id === moved!.id)).toMatchObject({ lines: [10, 10], anchor: moved!.anchor });
+    expect(store.list("o").find((c) => c.id === holder!.id)).toEqual(holder);
+  });
+
+  it("edits a comment that moved but kept its old anchor in its place: no duplicate, no other comment touched, a blank edit deletes it", () => {
+    let time = 1;
+    const { store } = storeAt(() => time++);
+    const line9: FileTarget = { ...fileTarget, lines: [9, 9], source: ["return b;"], quoteLines: ["return b;"] };
+    store.saveFile("o", fileTarget, "A");
+    store.saveFile("o", line9, "B");
+    const byText = (text: string): FileComment => store.list("o").find((c) => c.comment === text) as FileComment;
+    // one line inserted above line 8: A moves first, while B still holds line 9's anchor, so A keeps its old one
+    store.moveFile("o", byText("A").id, [9, 9]);
+    const a = byText("A");
+    const b = byText("B");
+    expect(a).toMatchObject({ lines: [9, 9], anchor: fileAnchor(fileTarget) });
+    expect(b.anchor).toBe(fileAnchor(line9));
+    // an edit is keyed by the stored anchor (what `targetOf` carries), not by the lines it is on now:
+    // B, which holds the anchor of A's lines, is not touched
+    const { path, label, view, lines, source, quoteLines } = a;
+    const id = store.saveFile("o", { path, label, view, lines, source, quoteLines, anchor: a.anchor }, "A edited");
+    expect(store.list("o").map((x) => x.comment).sort()).toEqual(["A edited", "B"]);
+    const edited = byText("A edited");
+    expect(id).toBe(edited.id);
+    expect(edited).toMatchObject({ anchor: a.anchor, lines: [9, 9], created: a.created });
+    expect(edited.id).not.toBe(a.id);
+    expect(byText("B")).toEqual(b);
+    // B moves on to line 10; a blank edit of A deletes A alone
+    store.moveFile("o", b.id, [10, 10]);
+    store.saveFile("o", { path, label, view, lines, source, quoteLines, anchor: a.anchor }, "  ");
+    expect(store.list("o").map((x) => x.comment)).toEqual(["B"]);
+  });
+
+  it("saves a new comment on a line whose anchor a moved comment kept as a comment of its own, with a distinct anchor", () => {
+    let time = 1;
+    const { store } = storeAt(() => time++);
+    const line9: FileTarget = { ...fileTarget, lines: [9, 9], source: ["return b;"], quoteLines: ["return b;"] };
+    store.saveFile("o", fileTarget, "A");
+    store.saveFile("o", line9, "B");
+    const byText = (text: string): FileComment => store.list("o").find((c) => c.comment === text) as FileComment;
+    // one line inserted above line 8: A moves to line 9 and keeps the anchor of line 8, B moves to line 10
+    store.moveFile("o", byText("A").id, [9, 9]);
+    store.moveFile("o", byText("B").id, [10, 10]);
+    const a = byText("A");
+    expect(a).toMatchObject({ lines: [9, 9], anchor: fileAnchor(fileTarget) });
+    // a new comment on the inserted line 8: its place reads as A's stored anchor, but A is not there
+    const inserted: FileTarget = { ...fileTarget, source: ["// inserted"], quoteLines: ["// inserted"] };
+    const id = store.saveFile("o", inserted, "N");
+    expect(store.list("o").map((x) => x.comment).sort()).toEqual(["A", "B", "N"]);
+    const n = byText("N");
+    expect(n.id).toBe(id!);
+    expect(n).toMatchObject({ lines: [8, 8], source: ["// inserted"], anchor: `${fileAnchor(inserted)}~${n.id}` });
+    expect(byText("A")).toEqual(a);
+    // editing the new one later finds it by its stored anchor
+    const edited = store.saveFile("o", { ...inserted, anchor: n.anchor }, "N edited");
+    expect(store.list("o").map((x) => x.comment).sort()).toEqual(["A", "B", "N edited"]);
+    expect(byText("N edited")).toMatchObject({ id: edited!, anchor: n.anchor, created: n.created });
+    // and a comment written on line 8 again is that comment, found at its place
+    store.saveFile("o", inserted, "N again");
+    expect(store.list("o").map((x) => x.comment).sort()).toEqual(["A", "B", "N again"]);
+    expect(byText("A")).toEqual(a);
+  });
+
+  it("saves a new comment beside an outdated one stored on the same line, leaving the outdated one alone", () => {
+    let time = 1;
+    const { store } = storeAt(() => time++);
+    store.saveFile("o", fileTarget, "old");
+    const outdated = store.list("o")[0] as FileComment;
+    // line 8 was rewritten: the old comment's lines are nowhere, and a comment is written on the line now there
+    const rewritten: FileTarget = { ...fileTarget, source: ["if (a <= b) {"], quoteLines: ["if (a <= b) {"] };
+    const id = store.saveFile("o", rewritten, "new");
+    expect(store.list("o").map((c) => c.comment).sort()).toEqual(["new", "old"]);
+    expect(store.list("o").find((c) => c.comment === "old")).toEqual(outdated);
+    expect(store.list("o").find((c) => c.comment === "new")).toMatchObject({ id: id!, source: ["if (a <= b) {"], anchor: `${fileAnchor(rewritten)}~${id}` });
+  });
+
+  it("stores both kinds and reads them back in sending order", () => {
+    const { store, storage } = storeAt();
+    store.saveFile("o", fileTarget, "file");
+    store.save("o", at([0], "first"), "reply");
+    expect(store.list("o").map((c) => c.kind ?? "reply")).toEqual(["reply", "file"]);
+    expect(new BlockCommentStore(() => storage).list("o")).toEqual(store.list("o"));
+  });
+
+  it("drops a stored file comment that does not validate", () => {
+    const { data, storage } = fixture();
+    const broken = { ...fileB, id: "bad", anchor: "x", lines: [3, 2] };
+    const unknownKind = { ...comment("k", [0], "first", "n"), id: "k", anchor: "y", kind: "other" };
+    data.set(KEY, JSON.stringify({ version: 1, comments: [broken, unknownKind, fileA] }));
+    expect(new BlockCommentStore(() => storage).list("o")).toEqual([fileA]);
+    expect(isPaneComment(fileB)).toBe(true);
+    expect(isPaneComment(broken)).toBe(false);
+    expect(isPaneComment(unknownKind)).toBe(false);
+  });
+});
+
+describe("composeWithComments with file comments", () => {
+  it("sends reply comments first, then file comments grouped by file, then the text", () => {
+    const message = composeWithComments([fileB, reply1, fileA], "Thanks");
+    expect(message).toBe("> backfill it from updated_at\nBackfill in batches.\n\n> docs/spec.md:42-43\n> Older revision | 409\n> Newer revision | 200\nAlso return the revision.\n\n> src/sync.ts:8\n> if (a < b) {\nCompare with <=.\n\nThanks");
+  });
+
+  it("carries file comments in outgoingMessage and holds them back like replies", () => {
+    const sent = outgoingMessage([fileB, reply1, fileA], "Thanks");
+    expect(sent.sent).toEqual([reply1, fileA, fileB]);
+    expect(sent.sentIds).toEqual(["r1", "f1", "f2"]);
+    const held = outgoingMessage([fileB], "Thanks", { agent: false });
+    expect(held).toMatchObject({ sent: [], commentsHeld: "no-agent", message: "Thanks" });
+  });
+
+  it("lets a file comment alone make a message", () => {
+    expect(outgoingMessage([fileB], "").sendable).toBe(true);
   });
 });

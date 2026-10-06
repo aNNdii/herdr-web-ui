@@ -43,6 +43,8 @@ import { UpdateNotice } from "./components/UpdateControls.tsx";
 import { FilesDialog } from "./components/FilesDialog.tsx";
 import { FileViewer } from "./components/FileViewer.tsx";
 import { OpenFileContext } from "./lib/filePaths.ts";
+import { FileCommentNavContext } from "./lib/fileCommentNav.ts";
+import type { FileComment } from "./lib/fileComments.ts";
 import { useFileViewer } from "./lib/useFileViewer.ts";
 import { useT } from "./lib/i18n.ts";
 import { useScreenWakeLock } from "./lib/wakeLock.ts";
@@ -214,6 +216,10 @@ export function App() {
   const viewFile = useCallback((path: string) => {
     openFile({ path, paneId: selectedPaneId, machineId: selectedMachineId });
   }, [openFile, selectedPaneId, selectedMachineId]);
+  // the composer's walk stops at a file comment: its file opens in the viewer, at that comment
+  const viewFileComment = useCallback((paneId: string, machineId: string, comment: FileComment) => {
+    openFile({ path: comment.path, paneId, machineId, comment: comment.id });
+  }, [openFile]);
   // an address ending in #settings/<page> opens Settings on that page (the dialog reads the page)
   const [settingsOpen, setSettingsOpen] = useState(() => parseSettingsHash(window.location.hash) !== null);
   // the page Settings opens on when App knows better than the address: the update line's Details
@@ -858,6 +864,7 @@ export function App() {
 
         {/* a file path in the chat opens in the viewer, relative to the selected pane's folder */}
         <OpenFileContext.Provider value={selectedPaneId !== null ? viewFile : null}>
+        <FileCommentNavContext.Provider value={viewFileComment}>
         <div className={`pane-column${chatShown ? " is-chat" : ""}`}>
         {/* over the pane only: a bar across the window would cut the sidebar off from its top row in the header */}
         <UpdateNotice updates={updates} onOpen={() => openSettingsAt("about")} />
@@ -889,6 +896,7 @@ export function App() {
           />
         </main>
         </div>
+        </FileCommentNavContext.Provider>
         </OpenFileContext.Provider>
       </div>
 
@@ -927,7 +935,14 @@ export function App() {
         <FilesDialog start={selectedPane.foreground_cwd ?? selectedPane.cwd ?? ""} viewing={viewing !== null} onOpenFile={viewFile} onClose={() => setFilesOpen(false)} />
       )}
       {viewing !== null && <MachineContext.Provider value={viewing.machineId}>
-        <FileViewer key={viewing.path} path={viewing.path} paneId={viewing.paneId} onClose={closeFile} onOpen={(path) => openFile({ ...viewing, path })} />
+        <FileViewer key={viewing.path} path={viewing.path} paneId={viewing.paneId} machineId={viewing.machineId} commentId={viewing.comment ?? null}
+          paneFolder={(() => {
+            // the pane's folder is known only for the PC whose panes are listed
+            if (viewing.machineId !== selectedMachineId) return null;
+            const pane = snapshot?.panes.find((p) => p.pane_id === viewing.paneId);
+            return pane === undefined ? null : pane.foreground_cwd ?? pane.cwd ?? null;
+          })()}
+          onClose={closeFile} onOpen={(path) => openFile({ path, paneId: viewing.paneId, machineId: viewing.machineId })} />
       </MachineContext.Provider>}
       <CommandPalette key={selectedMachineId} open={paletteOpen} onClose={() => setPaletteOpen(false)} snapshot={snapshot} selectedPaneId={selectedPaneId} view={view} actions={actions} />
     </div></MachineContext.Provider>

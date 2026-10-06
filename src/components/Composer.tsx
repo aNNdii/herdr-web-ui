@@ -1,5 +1,6 @@
 import {
   useCallback,
+  useContext,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -43,8 +44,12 @@ import { AgentMark } from "./AgentMark.tsx";
 import { BackgroundTasks } from "./BackgroundTasks.tsx";
 import { MicButton, VoiceRecordingPill, useDictation } from "./VoiceInput.tsx";
 import { useT } from "../lib/i18n.ts";
-import { blockComments, commentTarget, outgoingMessage, useBlockComments, type BlockComment } from "../lib/blockComments.ts";
-import { markCurrentComment, walkScroll } from "../lib/commentHighlight.ts";
+import { blockComments, commentTarget, isReplyComment, outgoingMessage, useBlockComments, type BlockComment, type PaneComment } from "../lib/blockComments.ts";
+import { markCurrentComment, showWalkStop } from "../lib/commentHighlight.ts";
+import { typedCommentField } from "../lib/commentSelection.ts";
+import { lastFileStop } from "../lib/commentWalk.ts";
+import { FileCommentNavContext } from "../lib/fileCommentNav.ts";
+import { sortFileComments, type FileComment } from "../lib/fileComments.ts";
 import { CommentEditor } from "./CommentEditor.tsx";
 
 export interface ComposerProps {
@@ -65,10 +70,11 @@ export interface ComposerProps {
   /** an empty chat's greeting: it stands over the composer's column and takes no row of its own */
   greeting?: ReactNode;
   /** true: sent, clear the box; a string: keep the text and say why; a promise settles to either.
-   * `text` is only what was typed. `comments` are the block comments this send takes: they quote
-   * the agent's reply, so with them it goes to an agent only, queued or not, never typed into a
-   * shell. The receiver composes them with the text (composeWithComments) */
-  onSend: (text: string, options?: { comments?: readonly BlockComment[] }) => boolean | string | Promise<boolean | string>;
+   * `text` is only what was typed. `comments` are the pane's comments this send takes: reply
+   * comments quoting the agent's reply and file comments quoting lines of a file the viewer showed,
+   * so with them it goes to an agent only, queued or not, never typed into a shell. The receiver
+   * composes them with the text (composeWithComments) */
+  onSend: (text: string, options?: { comments?: readonly PaneComment[] }) => boolean | string | Promise<boolean | string>;
   onAbort: () => void;
   onUploadImage: (file: File) => Promise<string>;
 }
@@ -241,8 +247,10 @@ export function Composer({
   const outgoing = outgoingMessage(comments, text, { answering: answerHint !== null, agent: agent !== null });
   // the comment as it was opened: a send acknowledged meanwhile must not close the editor on what is being typed
   const [editedComment, setEditedComment] = useState<BlockComment | null>(null);
-  // the context bar at the top of the box walks the comments of the chat, one note per tap
+  // the context bar at the top of the box walks the comments of the chat, one note per tap, and then
+  // the pane's file comments, each opened in the file viewer
   const nextComment = useRef(0);
+  const openFileComment = useContext(FileCommentNavContext);
   /** the walk control (the bar's text): Escape from the note the walk stands on hands the focus back to it */
   const walkRef = useRef<HTMLButtonElement | null>(null);
   /**
@@ -310,32 +318,29 @@ export function Composer({
     // a comment whose part is not in the chat (older history not loaded, a reply that changed)
     // is a stop of its own that opens its editor, so the bar reaches every comment it counts
     const shown = new Set(notes.map((note) => note.dataset.commentId));
-    const missing = comments.filter((comment) => !shown.has(comment.id));
-    const stops = notes.length + missing.length;
+    // (a file comment has no place in the chat: the viewer shows it)
+    const missing = comments.filter(isReplyComment).filter((comment) => !shown.has(comment.id));
+    // then the file comments, in the order they are sent, each a stop that opens the viewer at it
+    const files = sortFileComments(comments.filter((comment): comment is FileComment => !isReplyComment(comment)));
+    const inChat = notes.length + missing.length;
+    const stops = inChat + files.length;
     if (stops === 0) return;
-    const stop = nextComment.current % stops;
+    // the viewer walked its file's comments since (its counter, or a stop of this walk): this walk goes on after the one it showed last
+    const last = lastFileStop.get(commentOwner);
+    lastFileStop.delete(commentOwner);
+    const shownLast = last === undefined ? -1 : files.findIndex((comment) => comment.id === last);
+    const stop = (shownLast >= 0 ? inChat + shownLast + 1 : nextComment.current) % stops;
     nextComment.current = (stop + 1) % stops;
     clearCurrent();
+    if (stop >= inChat) { openFileComment?.(paneId, machineId, files[stop - inChat]!); return; }
     if (stop >= notes.length) { setEditedComment(missing[stop - notes.length]!); return; }
     const note = notes[stop]!;
     const chat = note.closest(".chat-view");
     if (chat === null) return;
     note.classList.add("is-current");
     currentNote.current = { note, view: chat };
-    // the commented text and its card in the middle, or, taller than the view, the text's end and
-    // the card at its bottom: the focused card is always on screen (`walkScroll`). The card
-    // alone where its text could not be found
-    const marked = markCurrentComment(chat, note);
-    const behavior = window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth";
-    if (marked === null || marked.height === 0) note.scrollIntoView({ block: "center", behavior });
-    else {
-      const top = chat.getBoundingClientRect().top + chat.clientTop;
-      chat.scrollBy({ top: walkScroll(marked, note.getBoundingClientRect(), { top, height: chat.clientHeight }), behavior });
-    }
-    // the note is a group with its own name: with the focus on it a screen reader reads the comment, and Tab reaches its buttons.
-    // An open edit form is a stop too: its field takes the focus, so Escape there is the form's own (it gives up while
-    // nothing was typed; either way the focus goes back to this control, as from any note)
-    (note.querySelector<HTMLElement>("textarea") ?? note).focus({ preventScroll: true });
+    // its text highlighted, it and its card scrolled into view, the focus on it (`showWalkStop`)
+    showWalkStop(chat, note);
   };
   const mounted = useRef(true);
   const [caret, setCaret] = useState(text.length);
@@ -752,6 +757,14 @@ export function Composer({
   const send = useCallback(() => {
     if (composingRef.current) return;
     if (!connected || uploading || sending || !outgoing.sendable) return;
+    // a comment still being written in this pane's chat would not go with the message: its form is
+    // shown and takes the focus instead (inside the press, so a phone raises its keyboard there)
+    const unsaved = typedCommentField(surfaceRef.current);
+    if (unsaved !== null) {
+      unsaved.focus({ preventScroll: true });
+      unsaved.closest(".block-comment-card")?.scrollIntoView({ block: "nearest" });
+      return;
+    }
     const sent = text;
     const sentAttachments = attachments;
     const { sent: sentComments, sentIds, commentsHeld } = outgoing;
@@ -1019,8 +1032,10 @@ export function Composer({
           const held = outgoing.commentsHeld;
           const waiting = held !== null;
           const count = comments.length;
+          // all on the reply, the bar says so; with a comment on a file among them, they are just comments
           const label = waiting ? t(count === 1 ? "{count} comment waiting" : "{count} comments waiting", { count })
-            : t(count === 1 ? "{count} comment on the reply" : "{count} comments on the reply", { count });
+            : comments.every(isReplyComment) ? t(count === 1 ? "{count} comment on the reply" : "{count} comments on the reply", { count })
+            : t(count === 1 ? "{count} comment" : "{count} comments", { count });
           const why = held !== null ? commentsStayNote(held) : "";
           return (
             <div className={`composer-comments-bar ${waiting ? "is-waiting" : "is-going"}`}>

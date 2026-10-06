@@ -880,4 +880,10 @@ export const JA: Record<string, string> = {
   "Comments could not be saved. They are lost on reload.": "コメントを保存できませんでした。再読み込みすると失われます。",
   "Comments stay here: they are not sent with an answer.": "コメントはここに残ります。回答と一緒には送信されません。",
   "Comments stay here: they are only sent to an agent.": "コメントはここに残ります。エージェントにのみ送信されます。",
+  "Line {line}": "{line} 行目",
+  "Lines {first}–{last}": "{first}–{last} 行目",
+  "{count} comment": "コメント {count} 件",
+  "{count} comments": "コメント {count} 件",
+  "{count} outdated": "古いコメント {count} 件",
+  "This part of the file has changed since.": "ファイルのこの部分はその後変更されています。",
 };

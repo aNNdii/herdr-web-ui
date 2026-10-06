@@ -1,9 +1,9 @@
-import { createContext, memo, useCallback, useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { createContext, forwardRef, memo, useCallback, useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Check, Copy } from "lucide-react";
 
 import "./BlockComments.css";
 
-import { foldCode, parseMarkdown, type InlineNode, type ListBlock, type MarkdownBlock } from "../lib/markdown.ts";
+import { foldCode, parseMarkdown, parseMarkdownWithLines, type InlineNode, type ListBlock, type MarkdownBlock, type SourceLines } from "../lib/markdown.ts";
 import { codeIsFilePath, OpenFileContext, splitFilePaths } from "../lib/filePaths.ts";
 import { fileUriPath } from "../lib/terminalFileLinks.ts";
 import { CHAT_HIGHLIGHT_LIMIT, languageForFence } from "../lib/highlight.ts";
@@ -12,6 +12,7 @@ import { useT } from "../lib/i18n.ts";
 import { BlockCommentContext, blockComments, commentTarget, formPlace, partAnchor, replyParts, usePartComments, type CommentTarget, type PartLookup } from "../lib/blockComments.ts";
 import { forgetCommentPart, rememberCommentPart } from "../lib/commentSelection.ts";
 import { CommentCard, CommentEditContext, CommentForm } from "./CommentCard.tsx";
+import { FileCommentsContext } from "./FileCommentsContext.ts";
 
 /**
  * Opens the chat's one comment form (ChatView) on `target`, with the comment it holds if any: a
@@ -114,6 +115,23 @@ function Inline({ nodes, interactive = true }: { nodes: InlineNode[]; interactiv
   })}</>;
 }
 
+/** The source lines an element was drawn from, for the file viewer's comments (lib/fileCommentDom.ts); none for the chat's blocks, which carry no `source`. */
+function sourceAttributes(source: SourceLines | undefined): { "data-source-line"?: number; "data-source-end"?: number } {
+  if (source === undefined) return {};
+  return source[1] > source[0] ? { "data-source-line": source[0], "data-source-end": source[1] } : { "data-source-line": source[0] };
+}
+
+/**
+ * In the file viewer's preview (`FileCommentsContext`), the comment cards and the open form that hang
+ * under the host starting at `line` (`previewHosts`). It alone reads the comments, so a card coming or
+ * going re-renders it and not the blocks.
+ */
+function FileNotes({ line }: { line: number }) {
+  const comments = useContext(FileCommentsContext);
+  const notes = comments !== null && comments.noted.includes(line) ? comments.notesFor(line) : null;
+  return notes === null ? null : <div className="file-comment-notes block-comment-notes">{notes}</div>;
+}
+
 /** A list; each item is commentable on its own (`ItemView`), the list as a whole is not. A task
  * item's box stands in for its bullet. */
 function List({ block, path, commentable }: { block: ListBlock; path: number[]; commentable: boolean }) {
@@ -138,19 +156,21 @@ function ItemView({ list, index, path, commentable }: { list: ListBlock; index: 
   // `list-style` only works on the <li>, so the task class stays there; the comment's classes go on the wrapper
   return (
     <li className={item.checked === undefined ? undefined : "markdown-task"}>
-      <div ref={comment.ref} className={comment.className === undefined ? "markdown-item" : `markdown-item ${comment.className}`}>
+      <div ref={comment.ref} className={comment.className === undefined ? "markdown-item" : `markdown-item ${comment.className}`} {...sourceAttributes(item.source)}>
         {/* a task's box shows its state; the agent's text owns it, so it cannot be ticked here. Drawn,
             not an <input>: a disabled checkbox is greyed by the browser and ignores the accent */}
         {item.checked !== undefined && <span className="markdown-task-box" role="checkbox" aria-checked={item.checked} aria-disabled="true" aria-labelledby={id}>{item.checked && <Check aria-hidden="true" />}</span>}
         {item.checked === undefined ? <Inline nodes={item.content} /> : <span id={id}><Inline nodes={item.content} /></span>}
         {comment.after}
       </div>
+      {commentable && item.source !== undefined && <FileNotes line={item.source[0]} />}
       {item.blocks !== undefined && <Blocks blocks={item.blocks} path={path} commentable={commentable} />}
     </li>
   );
 }
 
-function CodeBlock({ language, value }: { language: string; value: string }) {
+/** `firstLine`: the file line of the block's first line, in the file viewer's preview (its `.hl-line`s carry their lines). */
+function CodeBlock({ language, value, firstLine }: { language: string; value: string; firstLine?: number }) {
   const t = useT();
   const quoted = useContext(QuotedContext);
   const [copied, setCopied] = useState(false);
@@ -189,7 +209,7 @@ function CodeBlock({ language, value }: { language: string; value: string }) {
           {copied ? <Check aria-hidden="true" /> : <Copy aria-hidden="true" />}
         </button>
       </div>
-      <HighlightedCode code={fold !== null && !expanded ? fold.head : value} language={languageForFence(language)} limit={CHAT_HIGHLIGHT_LIMIT} />
+      <HighlightedCode code={fold !== null && !expanded ? fold.head : value} language={languageForFence(language)} limit={CHAT_HIGHLIGHT_LIMIT} firstLine={firstLine} />
       {fold !== null && (
         <button type="button" className="markdown-code-more" aria-expanded={expanded} onClick={toggle}>
           {expanded ? t("Show less") : t("Show all {n} lines", { n: fold.lines })}
@@ -212,33 +232,47 @@ function Blocks({ blocks, path = NO_PATH, commentable = true }: { blocks: Markdo
 
 /**
  * One block at `path`, with its comment cards where it is commentable. A rule carries no comment,
- * and a list carries them on its items.
+ * and a list carries them on its items. A block of the file viewer's preview (one with `source`)
+ * writes its source lines on the elements a selection maps to lines: a heading, each line of a
+ * paragraph, each table row, each code line, a formula; and its file comment cards follow it where
+ * it is commentable (`FileNotes`).
  */
 function BlockView({ block, path, commentable }: { block: MarkdownBlock; path: number[]; commentable: boolean }): ReactNode {
   const comment = useCommentable(path, commentable && block.type !== "hr" && block.type !== "list");
   const { className, ref } = comment;
+  const fileNotes = commentable && block.type !== "hr" && block.type !== "list" && block.source !== undefined && <FileNotes line={block.source[0]} />;
   switch (block.type) {
     case "heading": {
       const Tag = `h${block.level}` as "h1" | "h2" | "h3" | "h4" | "h5" | "h6";
-      return <><Tag ref={ref} className={className}><Inline nodes={block.content} /></Tag>{comment.after}</>;
+      return <><Tag ref={ref} className={className} {...sourceAttributes(block.source)}><Inline nodes={block.content} /></Tag>{comment.after}{fileNotes}</>;
     }
-    case "paragraph":
-      return <><p ref={ref} className={className}>{block.lines.map((line, lineIndex) => <span key={lineIndex}><Inline nodes={line} />{lineIndex < block.lines.length - 1 && <br />}</span>)}</p>{comment.after}</>;
+    case "paragraph": {
+      const lineNumbers = block.lineNumbers;
+      return <><p ref={ref} className={className}>{block.lines.map((line, lineIndex) => {
+        const fileLine = lineNumbers?.[lineIndex];
+        return <span key={lineIndex} {...sourceAttributes(fileLine === undefined ? undefined : [fileLine, fileLine])}><Inline nodes={line} />{lineIndex < block.lines.length - 1 && <br />}</span>;
+      })}</p>{comment.after}{fileNotes}</>;
+    }
     case "list": return <List block={block} path={path} commentable={commentable} />;
-    case "blockquote": return <><blockquote ref={ref} className={className}><Blocks blocks={block.blocks} path={path} commentable={false} /></blockquote>{comment.after}</>;
+    case "blockquote": return <><blockquote ref={ref} className={className}><Blocks blocks={block.blocks} path={path} commentable={false} /></blockquote>{comment.after}{fileNotes}</>;
     case "hr": return <hr />;
     default: {
-      const body = block.type === "code" ? <CodeBlock language={block.language} value={block.value} />
+      const rowLine = (row: number): { "data-source-line"?: number } => {
+        const line = block.type === "table" ? block.rowLines?.[row] : undefined;
+        return line === undefined ? {} : { "data-source-line": line };
+      };
+      const body = block.type === "code" ? <CodeBlock language={block.language} value={block.value} firstLine={block.source === undefined ? undefined : block.source[0] + 1} />
         : block.type === "math" ? <MathExpression value={block.value} displayMode />
         : <div className="markdown-table-wrap">
-          <table><thead><tr>{block.header.map((cell, cellIndex) => <th key={cellIndex}><Inline nodes={cell} /></th>)}</tr></thead>
-            <tbody>{block.rows.map((row, rowIndex) => <tr key={rowIndex}>{row.map((cell, cellIndex) => <td key={cellIndex}><Inline nodes={cell} /></td>)}</tr>)}</tbody>
+          <table><thead><tr {...rowLine(0)}>{block.header.map((cell, cellIndex) => <th key={cellIndex}><Inline nodes={cell} /></th>)}</tr></thead>
+            <tbody>{block.rows.map((row, rowIndex) => <tr key={rowIndex} {...rowLine(rowIndex + 1)}>{row.map((cell, cellIndex) => <td key={cellIndex}><Inline nodes={cell} /></td>)}</tr>)}</tbody>
           </table>
         </div>;
       // a code block, a table or a formula is commentable on a host around it, its notes after. The
       // host is there whether or not the block is commentable, so a reply turning final (or live
-      // again) keeps the same element, and a code block the reader unfolded stays unfolded
-      return <><div ref={ref} className={className === undefined ? "markdown-block" : `markdown-block ${className}`}>{body}</div>{comment.after}</>;
+      // again) keeps the same element, and a code block the reader unfolded stays unfolded. A
+      // formula's host is its line element too; a code block's and a table's lines are their own
+      return <><div ref={ref} className={className === undefined ? "markdown-block" : `markdown-block ${className}`} {...(block.type === "math" ? sourceAttributes(block.source) : {})}>{body}</div>{comment.after}{fileNotes}</>;
     }
   }
 }
@@ -312,17 +346,29 @@ export function MarkdownBlocks({ blocks, quoted = false }: { blocks: MarkdownBlo
   );
 }
 
+interface MarkdownProps {
+  children: string;
+  className?: string;
+  /**
+   * The file viewer's preview: the elements carry the source lines they come from (`BlockView`), and
+   * inside a `FileCommentsContext` the file's comment cards follow their blocks. The chat never sets
+   * it: its DOM stays as it was.
+   */
+  sourceLines?: boolean;
+}
+
 /**
- * Markdown rendered. Both props are strings, so `memo` skips a parent's re-render: a long plan in
- * the file viewer is not rendered again every time the app polls.
+ * Markdown rendered. Every prop is a string or a flag, so `memo` skips a parent's re-render: a long
+ * plan in the file viewer is not rendered again every time the app polls. The ref is the
+ * `.markdown` root: the file viewer's comments measure selections in it.
  */
-export const Markdown = memo(function Markdown({ children, className }: { children: string; className?: string }) {
-  const blocks = useMemo(() => parseMarkdown(children), [children]);
+export const Markdown = memo(forwardRef<HTMLDivElement, MarkdownProps>(function Markdown({ children, className, sourceLines = false }, ref) {
+  const blocks = useMemo(() => sourceLines ? parseMarkdownWithLines(children) : parseMarkdown(children), [children, sourceLines]);
   // a final reply part: a selection that comments stays inside one (lib/commentSelection.ts)
   const reply = useContext(BlockCommentContext);
   // the same targets across renders while the reply and its text stay: a part re-renders only for its own comments
   const parts = useMemo(() => reply === null ? null : replyParts(reply, blocks), [reply, blocks]);
   return <ReplyPartsContext.Provider value={parts}>
-    <div className={className === undefined ? "markdown" : `markdown ${className}`} data-comment-root={reply === null ? undefined : ""}><Blocks blocks={blocks} /></div>
+    <div ref={ref} className={className === undefined ? "markdown" : `markdown ${className}`} data-comment-root={reply === null ? undefined : ""}><Blocks blocks={blocks} /></div>
   </ReplyPartsContext.Provider>;
-});
+}));

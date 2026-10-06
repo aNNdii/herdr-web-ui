@@ -1,5 +1,6 @@
 import { createContext, useRef, useSyncExternalStore } from "react";
-import { isSlashCommand, MAX_COMPOSER_CHARS } from "./compose.ts";
+import { isSlashCommand, MAX_COMPOSER_CHARS, SELECTION_QUOTE_MAX } from "./compose.ts";
+import { fileAnchor, fileCommentAt, fileQuote, isFileComment, sortFileComments, type FileComment, type FileTarget, type LineRange } from "./fileComments.ts";
 import type { InlineNode, ListBlock, MarkdownBlock } from "./markdown.ts";
 
 /**
@@ -63,6 +64,8 @@ export interface SelectionEnd {
 }
 
 export interface BlockComment {
+  /** absent on entries stored before file comments existed: those are reply comments too */
+  kind?: "reply";
   id: string;
   anchor: string;
   /**
@@ -78,6 +81,14 @@ export interface BlockComment {
   range?: [number, number];
   /** a selection comment over several parts: the part it ends in (`CommentTarget.quote.until`) */
   until?: SelectionEnd;
+}
+
+/** What a pane keeps and sends: a comment on a block of an agent's reply, or on lines of a file. */
+export type PaneComment = BlockComment | FileComment;
+
+/** A reply comment (a stored entry without `kind` is one). */
+export function isReplyComment(comment: PaneComment): comment is BlockComment {
+  return comment.kind !== "file";
 }
 
 /** Most characters a quoted block takes in the outgoing message, the trailing "…" included. */
@@ -127,8 +138,8 @@ export function replyParts(reply: ReplyPart, blocks: readonly MarkdownBlock[]): 
   return parts;
 }
 
-/** Most characters a selection's quote keeps, the trailing "…" included. */
-export const SELECTION_QUOTE_MAX = 2000;
+// Defined in compose.ts so fileComments.ts can share it without importing this module (no cycle).
+export { SELECTION_QUOTE_MAX };
 
 /** `text` as quoted: trimmed, runs of spaces and tabs collapsed, line breaks kept, cut by code points at `SELECTION_QUOTE_MAX`. */
 function normalizeSelection(text: string): string {
@@ -214,9 +225,14 @@ function compareOrder(a: number[], b: number[]): number {
   return a.length - b.length;
 }
 
-/** A copy of `comments` in reading order: the order they are listed and sent in. */
+/** A copy of `comments` in reading order. */
 function sortComments(comments: readonly BlockComment[]): BlockComment[] {
   return [...comments].sort((a, b) => compareOrder(a.order, b.order));
+}
+
+/** A copy of `comments` in the order they are listed and sent in: reply comments in reading order, then file comments (`sortFileComments`). */
+function sortPaneComments(comments: readonly PaneComment[]): PaneComment[] {
+  return [...sortComments(comments.filter(isReplyComment)), ...sortFileComments(comments.filter((c): c is FileComment => !isReplyComment(c)))];
 }
 
 /** The anchor of the part a comment starts in; null for one moved off its anchor by a replaced part (`~id`). */
@@ -255,9 +271,9 @@ export function noteHost(comment: BlockComment, parts: PartLookup): CommentTarge
 }
 
 /** The notes that hang under the rendered `part` of the reply `parts` (see `noteHost`), in reading order. */
-export function notesOnPart(comments: readonly BlockComment[], part: CommentTarget, parts: PartLookup): BlockComment[] {
+export function notesOnPart(comments: readonly PaneComment[], part: CommentTarget, parts: PartLookup): BlockComment[] {
   if (parts.get(part.anchor) === undefined) return [];
-  return sortComments(comments.filter((c) => noteHost(c, parts)?.anchor === part.anchor));
+  return sortComments(comments.filter(isReplyComment).filter((c) => noteHost(c, parts)?.anchor === part.anchor));
 }
 
 /**
@@ -285,8 +301,8 @@ export function commentCanSave(value: string, initialComment: string): boolean {
  * anchor on save). Null when the target's first part is not rendered as written: the chat has no
  * place for the form, and the modal editor takes over.
  */
-export function formPlace(comments: readonly BlockComment[], target: CommentTarget, parts: PartLookup): { host: CommentTarget; replaces: string | null } | null {
-  const existing = comments.find((c) => c.anchor === target.anchor && isWrittenOn(c, target));
+export function formPlace(comments: readonly PaneComment[], target: CommentTarget, parts: PartLookup): { host: CommentTarget; replaces: string | null } | null {
+  const existing = comments.find((c): c is BlockComment => isReplyComment(c) && c.anchor === target.anchor && isWrittenOn(c, target));
   const host = noteHost(existing ?? draftComment(target), parts);
   return host === null ? null : { host, replaces: existing?.id ?? null };
 }
@@ -308,11 +324,11 @@ export interface PartSegment {
  * and up to its end in the last. Where its last part is not rendered as written, it is clamped to
  * its first part (see `coverage`).
  */
-export function partSegments(comments: readonly BlockComment[], part: CommentTarget, parts: PartLookup): PartSegment[] {
+export function partSegments(comments: readonly PaneComment[], part: CommentTarget, parts: PartLookup): PartSegment[] {
   const at = parts.get(part.anchor);
   if (at === undefined) return [];
   const segments: PartSegment[] = [];
-  for (const comment of sortComments(comments)) {
+  for (const comment of sortComments(comments.filter(isReplyComment))) {
     const covered = coverage(comment, parts);
     if (covered === null || at.index < covered.first.index || at.index > covered.last.index) continue;
     const spans = covered.last !== covered.first;
@@ -357,15 +373,16 @@ export function textRange(lengths: readonly number[], start: number, end: number
   return { startNode: first.node, startOffset: first.offset, endNode: last.node, endOffset: last.offset };
 }
 
-/** The quote a comment sends: its selection, every line prefixed (a blank line inside is a bare ">"), or its block cut to one line. */
-function quoteText(comment: BlockComment): string {
+/** The quote a comment sends: a file comment's lines (`fileQuote`), else its selection, every line prefixed (a blank line inside is a bare ">"), or its block cut to one line. */
+function quoteText(comment: PaneComment): string {
+  if (!isReplyComment(comment)) return fileQuote(comment);
   if (comment.quote === undefined) return `> ${quoteFor(blockContent(comment.block))}`;
   return comment.quote.split("\n").map((line) => line.trim() === "" ? ">" : `> ${line}`).join("\n");
 }
 
-/** The message for `comments` and `text`: each comment quotes its selection or block, in reading order, and the typed text, unless blank, comes last. */
-export function composeWithComments(comments: readonly BlockComment[], text: string): string {
-  const entries = sortComments(comments).map((c) => `${quoteText(c)}\n${c.comment.trim()}`);
+/** The message for `comments` and `text`: each comment quotes its selection, block or lines, replies first in reading order, then file comments, and the typed text, unless blank, comes last. */
+export function composeWithComments(comments: readonly PaneComment[], text: string): string {
+  const entries = sortPaneComments(comments).map((c) => `${quoteText(c)}\n${c.comment.trim()}`);
   if (text.trim() !== "") entries.push(text);
   return entries.join("\n\n");
 }
@@ -382,10 +399,10 @@ export type CommentsHeldBy = "no-agent" | "answer" | "command";
  * - it answers a question the agent has open (`answering`), read as an option or a reply;
  * - it is a slash command, which the agent would not read as one with comments in front.
  */
-export function outgoingMessage(comments: readonly BlockComment[], text: string, { answering = false, agent = true }: { answering?: boolean; agent?: boolean } = {}): {
+export function outgoingMessage(comments: readonly PaneComment[], text: string, { answering = false, agent = true }: { answering?: boolean; agent?: boolean } = {}): {
   message: string;
-  /** the comments `message` carries, in reading order */
-  sent: readonly BlockComment[];
+  /** the comments `message` carries, in the order they are composed in */
+  sent: readonly PaneComment[];
   /** their ids: the comments leave the composer once the send is acknowledged */
   sentIds: string[];
   /** why comments that exist stay out of `message`; null when they go, or there are none */
@@ -394,7 +411,7 @@ export function outgoingMessage(comments: readonly BlockComment[], text: string,
   sendable: boolean;
 } {
   const held: CommentsHeldBy | null = !agent ? "no-agent" : answering ? "answer" : isSlashCommand(text) ? "command" : null;
-  const sent = held !== null ? [] : sortComments(comments);
+  const sent = held !== null ? [] : sortPaneComments(comments);
   const message = composeWithComments(sent, text);
   const tooLong = message.length > MAX_COMPOSER_CHARS;
   return { message, sent, sentIds: sent.map((c) => c.id), commentsHeld: comments.length > 0 ? held : null, tooLong, sendable: message.trim() !== "" && !tooLong };
@@ -440,13 +457,21 @@ export function isBlockComment(value: unknown): value is BlockComment {
   try { return typeof blockContent(entry.block) === "string" && (entry.until === undefined || typeof blockContent(entry.until.block) === "string"); } catch { return false; }
 }
 
+/** A stored entry of either kind that reads without throwing; an entry without `kind` is a reply comment. */
+export function isPaneComment(value: unknown): value is PaneComment {
+  if (typeof value !== "object" || value === null) return false;
+  const { kind } = value as { kind?: unknown };
+  if (kind === "file") return isFileComment(value);
+  return (kind === undefined || kind === "reply") && isBlockComment(value);
+}
+
 /**
  * Comments per pane (`owner`), kept in localStorage like the held-message queue. Snapshots keep
  * their identity until their own data changes, so `useSyncExternalStore` readers re-render only
  * for the comments they show.
  */
 export class BlockCommentStore {
-  private lists = new Map<string, readonly BlockComment[]>();
+  private lists = new Map<string, readonly PaneComment[]>();
   /** the raw value last read or written, so `refresh` notices only real changes */
   private saved = new Map<string, string | null>();
   private unsaved = new Set<string>();
@@ -464,27 +489,27 @@ export class BlockCommentStore {
   isUnsaved(owner: string): boolean { return this.unsaved.has(owner); }
 
   /**
-   * The pane's comments in reading order, read from storage on first use and cached after. Entries
-   * that do not read as comments, and a second comment on an anchor, are dropped.
+   * The pane's comments in sending order (`sortPaneComments`), read from storage on first use and
+   * cached after. Entries that do not read as comments, and a second comment on an anchor, are dropped.
    */
-  list(owner: string): readonly BlockComment[] {
+  list(owner: string): readonly PaneComment[] {
     const cached = this.lists.get(owner);
     if (cached) return cached;
     let raw: string | null = null;
     try { raw = this.storage().getItem(BLOCK_COMMENTS_PREFIX + owner); } catch { /* private mode */ }
-    let comments: BlockComment[] = [];
+    let comments: PaneComment[] = [];
     try {
       const data = JSON.parse(raw ?? "null");
       if (data?.version === 1 && Array.isArray(data.comments)) {
         const anchors = new Set<string>();
-        comments = data.comments.filter((entry: unknown): entry is BlockComment => {
-          if (!isBlockComment(entry) || anchors.has(entry.anchor)) return false;
+        comments = data.comments.filter((entry: unknown): entry is PaneComment => {
+          if (!isPaneComment(entry) || anchors.has(entry.anchor)) return false;
           anchors.add(entry.anchor);
           return true;
         });
       }
     } catch { /* unreadable: start empty */ }
-    const sorted = sortComments(comments);
+    const sorted = sortPaneComments(comments);
     this.saved.set(owner, raw);
     this.lists.set(owner, sorted);
     return sorted;
@@ -492,7 +517,7 @@ export class BlockCommentStore {
 
   /** The comment on this very block (and end part): none when its anchor holds one on a block that was replaced. */
   get(owner: string, target: CommentTarget): BlockComment | undefined {
-    const comment = this.list(owner).find((c) => c.anchor === target.anchor);
+    const comment = this.list(owner).find((c): c is BlockComment => isReplyComment(c) && c.anchor === target.anchor);
     return comment !== undefined && isWrittenOn(comment, target) ? comment : undefined;
   }
 
@@ -508,7 +533,7 @@ export class BlockCommentStore {
     this.refresh(owner);
     const text = comment.trim();
     let comments = this.list(owner);
-    let existing = comments.find((c) => c.anchor === target.anchor);
+    let existing = comments.find((c): c is BlockComment => isReplyComment(c) && c.anchor === target.anchor);
     if (existing && !isWrittenOn(existing, target)) {
       const stale = existing;
       comments = comments.map((c) => c === stale ? { ...c, anchor: `${c.anchor}~${c.id}` } : c);
@@ -523,6 +548,48 @@ export class BlockCommentStore {
     // an edit keeps its place: a turn without a time placed it by when it was first written
     const next = commentOn(target, newId(), existing?.order ?? [target.turnTime ?? this.now(), ...target.position], text);
     this.write(owner, existing ? comments.map((c) => c === existing ? next : c) : [...comments, next]);
+  }
+
+  /**
+   * One file comment per place; a blank comment removes it. The comment written on `target` is
+   * found by `fileCommentAt`: an edit by its stored anchor, a new comment by the place it is on now,
+   * since a move may have left a comment's anchor on other lines. A new comment whose place reads as
+   * an anchor another comment kept that way takes `~id` after it, as the chat's moved comments do:
+   * stored anchors stay unique. A changed text gets a new id, for the reason `save` gives. A new
+   * comment is stamped with the time it is written, an edit keeps it: it decides which file's
+   * comments are sent first. Returns the id of the comment now kept there, null when there is none.
+   */
+  saveFile(owner: string, target: FileTarget, comment: string): string | null {
+    this.refresh(owner);
+    const text = comment.trim();
+    const comments = this.list(owner);
+    const existing = fileCommentAt(comments.filter((c): c is FileComment => !isReplyComment(c)), target);
+    if (text === "") {
+      if (existing) this.write(owner, comments.filter((c) => c !== existing));
+      return null;
+    }
+    if (existing?.comment === text) return existing.id;
+    const id = newId();
+    const wanted = existing?.anchor ?? target.anchor ?? fileAnchor(target);
+    const anchor = existing === undefined && comments.some((c) => c.anchor === wanted) ? `${wanted}~${id}` : wanted;
+    const next: FileComment = { ...target, kind: "file", id, anchor, created: existing?.created ?? this.now(), comment: text };
+    this.write(owner, existing ? comments.map((c) => c === existing ? next : c) : [...comments, next]);
+    return next.id;
+  }
+
+  /**
+   * Moves a file comment to `lines`, where its text was found again. It keeps its old anchor when
+   * another comment already holds the new one. An unknown id, or the lines it already has, is no change.
+   */
+  moveFile(owner: string, id: string, lines: LineRange): void {
+    this.refresh(owner);
+    const comments = this.list(owner);
+    const moved = comments.find((c): c is FileComment => !isReplyComment(c) && c.id === id);
+    if (moved === undefined || (moved.lines[0] === lines[0] && moved.lines[1] === lines[1])) return;
+    const anchor = fileAnchor({ ...moved, lines });
+    const taken = comments.some((c) => c.id !== id && c.anchor === anchor);
+    const next: FileComment = { ...moved, lines, anchor: taken ? moved.anchor : anchor };
+    this.write(owner, comments.map((c) => c === moved ? next : c));
   }
 
   /** Removes the comments with these ids, as a send acknowledges them; an id already gone is no change. */
@@ -546,8 +613,8 @@ export class BlockCommentStore {
   }
 
   /** Caches and stores `owner`'s comments, the key removed with the last one; a failed write marks them unsaved. */
-  private write(owner: string, comments: readonly BlockComment[]): void {
-    this.lists.set(owner, sortComments(comments));
+  private write(owner: string, comments: readonly PaneComment[]): void {
+    this.lists.set(owner, sortPaneComments(comments));
     try {
       const key = BLOCK_COMMENTS_PREFIX + owner;
       const raw = comments.length ? JSON.stringify({ version: 1, comments }) : null;
@@ -605,13 +672,14 @@ if (typeof window !== "undefined") {
   });
 }
 
-const NONE: readonly BlockComment[] = [];
+/** The empty list for both a pane's comments and a part's notes. */
+const NONE: readonly never[] = [];
 
 /**
- * The pane's comments in reading order, re-rendering when they change. The server snapshot is
+ * The pane's comments in sending order, re-rendering when they change. The server snapshot is
  * empty: a reply rendered to a string (tests) shows no comments.
  */
-export function useBlockComments(owner: string): readonly BlockComment[] {
+export function useBlockComments(owner: string): readonly PaneComment[] {
   return useSyncExternalStore(blockComments.subscribe, () => blockComments.list(owner), () => NONE);
 }
 

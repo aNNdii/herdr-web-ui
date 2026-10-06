@@ -743,6 +743,63 @@ One set for both themes: the card is island black wherever it shows.
     comment), a pointer that hovers gets this pane's composer, and on a touch screen
     (`(pointer: coarse)`) a deleted comment lets the focus go, so no keyboard rises unasked.
   - Saving a new comment lets the selection go; editing one leaves whatever is selected.
+- File comments (`FileComments.tsx`, `FileViewer.css`, `lib/fileComments.ts`): the file viewer is a
+  second comment surface, only where it knows its pane (a viewer opened without one has no
+  Comment button and no counter), and only on the loaded part of a text file. A comment is
+  made in the Markdown preview or in the code view and is sent with the next message like a reply
+  comment; the chat's marks, cards and form are reused, so only what differs is written here.
+  - Preview and code view alike: select text; the **Comment** button is the chat's, at every width
+    and on a touch screen too (a long press and its handles select, as in the chat). A triple click
+    selects one line. There is no button per line and no tap on a line number: a comment is on
+    selected text, as in the chat. The line numbers stay a CSS counter, so a copy of the code is the
+    code alone.
+  - The form and the card are the chat's inline ones, in the code's flow between its lines (under
+    the line, in the app's font and wrapped) or under the preview block where the selection ends
+    (a list item's own, before its nested blocks). The reference stands in the row of **Cancel** and
+    **Save**, bottom left, `--text-dim` at `--fs-xs`: the file name and lines, `sync.ts · Line 8`,
+    `spec.md · Lines 42–44` (en dash), the full path as its tooltip; a long name is cut inside its
+    stem, so the extension and the lines stay. A saved card is laid out as the form, in the chat
+    too: one `--radius-xl`, the comment on top in the field's padding, size and leading, then the
+    same footer row with the **Pending** badge and the reference on the left and Edit and Delete
+    (at `--control-h`) where the form has Cancel and Save, so Edit moves nothing.
+    Each comment shows only in the view it was written in: a preview comment is not drawn in the
+    code view and the other way round, but both count, and both are sent.
+  - Highlights are the chat's (`block-comment`, `-active`, `-current`, `-pending`; focus mode while a
+    card's comment is up). A stored comment on a whole line without a selection (written by an
+    earlier build) highlights the whole line and puts its number in `--accent` at `--fw-semibold`
+    (`.hl-line.is-commented`).
+  - The header's counter (`.file-viewer-comments`) is an icon button as the header's others, a
+    `MessageSquare` with the count as a bubble on its top right (`--primary` fill, `--primary-text`,
+    `--fs-2xs` at `--fw-semibold`, `--radius-pill`, 16px tall, `99+` above 99), at every width. Its
+    name and tooltip have the words: `3 comments` or `3 comments · 1 outdated`. Each tap walks
+    to the next comment of this file, in the order they are sent: it switches to the view the
+    comment was written in, unfolds a folded code block it is in, scrolls it to the middle, marks it
+    current and focuses its card. The header has no button to write the message: Close returns to
+    the chat, whose composer sends the comments. Escape closes an open form (or the editor of an
+    outdated comment) before the viewer.
+  - Outdated: when the file loads, a comment is placed where its lines still read as saved; else
+    where those exact lines occur once in the file (its stored line numbers follow it); else, with
+    no such place, more than one, or only beyond the loaded part, it is **outdated**. In a file cut
+    at the load limit a comment is never moved (a second copy may lie past the cut): it stays where
+    its lines still read as saved, else it is outdated. An outdated
+    comment is not drawn in the file, is counted in the header, is a stop of the walk that opens the
+    modal editor (the reference, why it is shown ("This part of the file has changed since.") and the
+    quote over the field), and is still sent, with its stored lines and quote. A file that is gone or
+    cannot be read makes all its comments outdated.
+  - The composer's bar counts chat and file comments together ("4 comments on the reply" reads "4
+    comments" once a file is among them). Its walk goes through the chat's comments, and then the
+    file comments in the order they are sent: a file comment's stop opens the viewer on that file, in
+    its view and at its place (the stop's comment is the current one), or the modal editor where the
+    file cannot show it. The viewer covers the bar, so the walk goes on by the counter there; once
+    the viewer is closed, the bar continues after the last file comment visited (kept in memory).
+  - Sent as a quote of whole source lines: `> src/sync.ts:8` or `> docs/spec.md:42-44` (ASCII
+    hyphen; the path relative to the pane's folder where inside it), then the lines, each behind
+    `> ` (a blank line is a bare `>`), then the comment. File comments follow the reply comments,
+    grouped by file in the order each got its first comment, within a file by line and then
+    selection start. A quoted line is cut at 200 characters (a window around the selection, the
+    start of a whole-line comment), a quote at 20 lines (`> … (+N lines)`, the header keeps the
+    range) and at 2000 characters in all, always on a code point and each cut marked with `…`,
+    which counts toward the limit.
 - Auto-follow stops when the reader scrolls up; later output raises a **New messages** pill.
 - An empty chat is greeted from the composer (`.composer-greeting`, below), only where the agent's
   conversation was read and holds no turn. A chat still loading, one whose read failed, an agent

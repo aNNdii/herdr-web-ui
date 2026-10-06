@@ -1,12 +1,12 @@
-import { composeWithComments, isBlockComment, type BlockComment } from "./blockComments.ts";
+import { composeWithComments, isPaneComment, type PaneComment } from "./blockComments.ts";
 
 /**
  * Held messages are explicitly sent, never dispatched by reconnects or status changes. `comments`
- * is the snapshot of the block comments it carries, kept apart from the typed `text`; `agentOnly`
+ * is the snapshot of the reply and file comments it carries, kept apart from the typed `text`; `agentOnly`
  * is only read from entries stored earlier (composed before they were held, their text already
  * holds the quotes) and is never written for a new message.
  */
-export interface HeldMessage { id: string; text: string; agentOnly?: true; comments?: readonly BlockComment[] }
+export interface HeldMessage { id: string; text: string; agentOnly?: true; comments?: readonly PaneComment[] }
 
 /** What is sent for a held message: its comments composed with its text, or the text as stored. */
 export function heldMessageText(message: HeldMessage): string {
@@ -76,7 +76,7 @@ export class MessageQueueStore {
           if (typeof value.id !== "string" || typeof value.text !== "string" || ids.has(value.id)) return false;
           ids.add(value.id); return true;
         }).map((value: HeldMessage) => {
-          const comments = Array.isArray(value.comments) ? value.comments.filter(isBlockComment) : [];
+          const comments = Array.isArray(value.comments) ? value.comments.filter(isPaneComment) : [];
           return { id: value.id, text: value.text, ...(value.agentOnly === true ? { agentOnly: true as const } : {}), ...(comments.length ? { comments } : {}) };
         });
       }
@@ -101,7 +101,7 @@ export class MessageQueueStore {
 
   /** `comments`: the snapshot this message carries; `text` is only what was typed. With comments,
    * blank text is stored as "" (the held box then says "Comments only"); alone it stays as given. */
-  add(owner: string, text: string, { comments = [] }: { comments?: readonly BlockComment[] } = {}): void {
+  add(owner: string, text: string, { comments = [] }: { comments?: readonly PaneComment[] } = {}): void {
     this.refresh(owner);
     const stored = comments.length && text.trim() === "" ? "" : text;
     this.write(owner, [...this.read(owner), { id: newId(), text: stored, ...(comments.length ? { comments } : {}) }]);
