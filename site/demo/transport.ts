@@ -215,6 +215,11 @@ function usageReport(): UsageReport {
       { kind: "month", scope: "Cursor models", used_percent: 19, resets_at: at(290) },
       { kind: "month", scope: "Other models", used_percent: 8, resets_at: at(290) },
     ] },
+    { id: "opencode", key: "opencode:demo-opencode", account: null, plan: "Go", problem: null, checked_at: checked, windows: [
+      { kind: "session", scope: null, used_percent: 10, resets_at: at(3.2) },
+      { kind: "week", scope: null, used_percent: 28, resets_at: at(18) },
+      { kind: "month", scope: null, used_percent: 15, resets_at: at(520) },
+    ] },
   ] };
 }
 
@@ -493,6 +498,10 @@ class DemoSocket extends EventTarget {
     switch (message.type) {
       case "role": this.push({ type: "role-ack", mode: message.mode === "observe" ? "observe" : "interact" }); break;
       case "attach": if (message.pane_id) this.attach(message.pane_id); break;
+      // The demo has no competing attach slots and does not advertise this capability.
+      case "take-over":
+        this.push({ type: "error", code: "unsupported", message: "The demo has no competing terminal attachments.", pane_id: message.pane_id });
+        break;
       case "detach": if (message.pane_id) this.attached.delete(message.pane_id); break;
       case "input": if (message.pane_id && message.text !== undefined) this.typed(message.pane_id, message.text); break;
       case "keys": if (message.pane_id) for (const key of message.keys ?? []) this.typed(message.pane_id, key === "Enter" ? "\r" : key === "Backspace" ? "\x7f" : key.length === 1 ? key : ""); break;

@@ -142,7 +142,7 @@ export interface ApiError {
 }
 
 /** The subscriptions whose plan limits GET /api/usage can read from a CLI's own sign-in. */
-export type UsageProviderId = "claude" | "codex" | "cursor" | "copilot" | "grok" | "antigravity";
+export type UsageProviderId = "claude" | "codex" | "cursor" | "copilot" | "grok" | "antigravity" | "opencode";
 
 /** One limit of a plan: how much of it is used and when it starts over. */
 export interface UsageWindow {
@@ -625,6 +625,8 @@ export type ClientMessage =
   /** keep_size: the grid is covered (the chat lens), so the attach leaves the shared pty's size as it is */
   | { type: "attach"; pane_id: string; cols: number; rows: number; flow_control?: "ack"; keep_size?: boolean }
   | { type: "detach"; pane_id: string }
+  /** a pane another web bridge holds (`attach_held`): take herdr's attach slot from it, here, now */
+  | { type: "take-over"; pane_id: string }
   | { type: "input"; pane_id: string; text: string }
   | { type: "keys"; pane_id: string; keys: string[] }
   /** a composer message, sent to servers whose snapshot lists "submit": the server types it and
@@ -645,7 +647,7 @@ export type ClientMessage =
   | { type: "role"; mode: ClientRole };
 
 /** What a server supports beyond the base protocol, listed in its first snapshot; older bridges list nothing. */
-export type ServerFeature = "submit" | "secret-input" | "input-ready" | "submit-agent-only";
+export type ServerFeature = "submit" | "secret-input" | "input-ready" | "take-over" | "submit-agent-only";
 
 export type ServerMessage =
   | { type: "snapshot"; snapshot: SessionSnapshot; features?: ServerFeature[] }

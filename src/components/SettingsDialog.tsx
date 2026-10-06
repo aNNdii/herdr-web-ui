@@ -9,6 +9,8 @@ import { SHORTCUTS, formatKeys, shortcutKeys, shortcutConflict } from "../lib/sh
 import { CHAT_FONT_MAX, CHAT_FONT_MIN, CHAT_WIDTHS, chatFontSize, DEFAULT_SETTINGS, MARKDOWN_WIDTHS, QUICK_REPLIES_MAX, QUICK_REPLY_MAX_CHARS, SIZE_LIMIT_CHOICES, TERMINAL_FONT_MAX, TERMINAL_FONT_MIN, TERMINAL_WHEEL_SPEED_MAX, TERMINAL_WHEEL_SPEED_MIN, useSettings, forgetPaneViews } from "../lib/settings.ts";
 import { formatBytes } from "../lib/bridgeProgress.ts";
 import { LANGUAGE_NAMES, LANGUAGE_SETTINGS, useT } from "../lib/i18n.ts";
+import { KEY_BAR_EXTRAS } from "../lib/keys.ts";
+import { EXTRA_KEY_CAPS } from "./KeyBar.tsx";
 import { FONT_FAMILY_MAX_CHARS, sanitizeFontFamily } from "../lib/fontFamily.ts";
 import type { UpdatesModel } from "../lib/updates.ts";
 import type { MachineSettings } from "../../shared/machines.ts";
@@ -301,6 +303,21 @@ export function SettingsDialog({ open, onClose, actions, updates, auth, herdrVer
               <select id="terminal-input-mode" className="input" value={settings.terminalInputMode} onChange={(event) => update({ terminalInputMode: event.target.value as "auto" | "line" | "direct" })}>
                 <option value="auto">{t("Automatic")}</option><option value="line">{t("Input line")}</option><option value="direct">{t("Direct typing")}</option>
               </select>
+            </div>
+            <div className="settings-row">
+              <div><span className="settings-label">{t("Key bar")}</span><span className="settings-description">{t("Extra keys in the bar under the terminal on a touch screen. Esc, Tab, Ctrl, the arrows and ^C are always there.")}</span></div>
+            </div>
+            <div className="key-bar-extras" role="group" aria-label={t("Key bar")}>
+              {KEY_BAR_EXTRAS.map((extra) => {
+                const { cap, label } = EXTRA_KEY_CAPS[extra];
+                const on = settings.keyBarExtras.includes(extra);
+                return (
+                  <button key={extra} type="button" aria-pressed={on} aria-label={label ? t(label) : undefined} title={label ? t(label) : undefined}
+                    onClick={() => update({ keyBarExtras: on ? settings.keyBarExtras.filter((chosen) => chosen !== extra) : [...settings.keyBarExtras, extra] })}>
+                    {cap}
+                  </button>
+                );
+              })}
             </div>
           </section>
 
