@@ -32,7 +32,7 @@ import { OpenFileContext } from "../lib/filePaths.ts";
 import { patchText } from "../../shared/patch.ts";
 import { toolVerb } from "../lib/toolVerbs.ts";
 import { machinePath, paneStorageId } from "../../shared/machines.ts";
-import { BlockCommentContext, blockComments, replyPart, selectionTarget, type CommentTarget, type ReplyPart } from "../lib/blockComments.ts";
+import { BlockCommentContext, blockComments, commentTyped, replyPart, selectionTarget, type CommentTarget, type ReplyPart } from "../lib/blockComments.ts";
 import { floatingPlace, onLine, paneComposer, placeAtPointer, selectionComment, type SelectionComment } from "../lib/commentSelection.ts";
 import { showPendingComment, watchCommentHighlights } from "../lib/commentHighlight.ts";
 import { fileUrl } from "../lib/api.ts";
@@ -908,7 +908,7 @@ export const ChatView = memo(function ChatView({ paneId, refreshKey, sentKey = 0
   const closeComment = useCallback(() => setEditing(null), []);
   const openComment = useCallback((owner: string, target: CommentTarget, fromSelection = false) => {
     const open = editingRef.current;
-    if (open !== null && !open.modal && typed.current !== open.initialComment) {
+    if (open !== null && !open.modal && commentTyped(typed.current, open.initialComment)) {
       scroller.current?.querySelector<HTMLTextAreaElement>(".block-comment-card.is-editing textarea")?.focus({ preventScroll: true });
       return;
     }

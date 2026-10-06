@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import { parseMarkdown, type ListBlock, type MarkdownBlock } from "./markdown.ts";
-import { BLOCK_COMMENTS_PREFIX, BlockCommentStore, blockContent, blockTarget, commentTarget, composeWithComments, draftComment, formPlace, isBlockComment, isMarkdownBlock, noteHost, notesOnPart, outgoingMessage, partSegments, quoteExcerpt, quoteFor, replyPart, replyParts, SELECTION_QUOTE_MAX, selectionTarget, textRange, type BlockComment, type CommentTarget } from "./blockComments.ts";
+import { BLOCK_COMMENTS_PREFIX, BlockCommentStore, blockContent, blockTarget, commentCanSave, commentTarget, commentTyped, composeWithComments, draftComment, formPlace, isBlockComment, isMarkdownBlock, noteHost, notesOnPart, outgoingMessage, partSegments, quoteExcerpt, quoteFor, replyPart, replyParts, SELECTION_QUOTE_MAX, selectionTarget, textRange, type BlockComment, type CommentTarget } from "./blockComments.ts";
 
 const TS = "2026-10-03T10:12:00Z";
 const TIME = Date.parse(TS);
@@ -817,5 +817,36 @@ describe("selections across parts", () => {
         expect(isBlockComment({ ...spanned, until: bad })).toBe(false);
       }
     });
+  });
+});
+
+describe("commentTyped", () => {
+  it("is not typed while a new comment is still empty", () => {
+    expect(commentTyped("", "")).toBe(false);
+  });
+  it("is not typed while an edit is as it opened", () => {
+    expect(commentTyped("Fix this", "Fix this")).toBe(false);
+  });
+  it("is typed once a new comment has any text, whitespace included", () => {
+    expect(commentTyped("x", "")).toBe(true);
+    expect(commentTyped(" ", "")).toBe(true);
+  });
+  it("is typed once an edit differs from how it opened, even when it was emptied", () => {
+    expect(commentTyped("Fix that", "Fix this")).toBe(true);
+    expect(commentTyped("", "Fix this")).toBe(true);
+  });
+});
+
+describe("commentCanSave", () => {
+  it("has nothing to save in a new comment that is empty or blank", () => {
+    expect(commentCanSave("", "")).toBe(false);
+    expect(commentCanSave("  \n", "")).toBe(false);
+  });
+  it("saves a new comment with text", () => {
+    expect(commentCanSave("Fix this", "")).toBe(true);
+  });
+  it("saves an edit, also emptied: a blank edit deletes the comment", () => {
+    expect(commentCanSave("Fix that", "Fix this")).toBe(true);
+    expect(commentCanSave("", "Fix this")).toBe(true);
   });
 });
