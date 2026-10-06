@@ -1262,7 +1262,7 @@
    pointer the whole box takes a stronger fill, so the button inside it has none of its own. Going with the next
    send (.is-going) the icon is accent. Waiting (.is-waiting: a command, an answer, no agent) the icon and the text
    are dim and say "waiting", so colour is never the only signal; the reason is in the button's name and title.
-   After the X the box turns in place into the undo (.is-undo): "Comments removed: N" and a text button. */
+   The X removes every comment, and the box goes with them. */
 .composer-comments-bar {
   --bar-hover: color-mix(in srgb, var(--bg-hover) 94%, var(--text));
   --bar-hover-strong: color-mix(in srgb, var(--bg-hover) 88%, var(--text));
@@ -1271,8 +1271,7 @@
   align-items: center;
   gap: var(--space-1);
   min-width: 0;
-  /* the walk box and the undo box are one height (their buttons differ: a text button, a walk row and an icon
-     button), so nothing below moves when the box turns into the undo */
+  /* one control high, whatever its buttons are */
   min-height: var(--control-h);
   margin: var(--space-3) var(--space-5) 0;
   padding: var(--space-1) var(--space-1) var(--space-1) var(--space-3);
@@ -1293,7 +1292,7 @@
 }
 
 @media (hover: hover) {
-  .composer-comments-bar:not(.is-undo):hover {
+  .composer-comments-bar:hover {
     background: var(--bar-hover);
   }
 }
@@ -1339,22 +1338,15 @@
   white-space: nowrap;
 }
 
-.composer-comments-bar.is-undo .composer-comments-text {
-  flex: 1 1 auto;
-  color: var(--text);
-}
-
 /* the buttons keep their own size and tuck into the box's padding, so the box is one line high and their
    glyph, not their box, is what lines up; over the box's fill they take a stronger one */
-.composer-comments-remove,
-.composer-comments-undo {
+.composer-comments-remove {
   margin-block: calc(-1 * var(--space-1));
   margin-inline-end: calc(-1 * var(--space-1));
 }
 
 @media (hover: hover) {
-  .composer-comments-remove:hover:not(:disabled),
-  .composer-comments-undo:hover:not(:disabled) {
+  .composer-comments-remove:hover:not(:disabled) {
     background: var(--bar-hover-strong);
   }
 }

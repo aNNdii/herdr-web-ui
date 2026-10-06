@@ -531,18 +531,6 @@ export class BlockCommentStore {
     if (kept.length !== comments.length) this.write(owner, kept);
   }
 
-  /**
-   * Puts back comments a removal took (the composer's undo), as they were: same ids, anchors, order
-   * and text. One whose anchor holds a comment now, written since, is skipped: the newer one wins.
-   */
-  restore(owner: string, comments: readonly BlockComment[]): void {
-    this.refresh(owner);
-    const current = this.list(owner);
-    const taken = new Set(current.map((c) => c.anchor));
-    const back = comments.filter((c) => !taken.has(c.anchor));
-    if (back.length > 0) this.write(owner, [...current, ...back]);
-  }
-
   /** Re-read storage another tab may have written; notify only when it changed. */
   refresh(owner: string): void {
     if (this.unsaved.has(owner) || !this.lists.has(owner)) return;

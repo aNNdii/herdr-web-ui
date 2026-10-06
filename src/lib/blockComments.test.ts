@@ -208,65 +208,6 @@ describe("BlockCommentStore", () => {
     expect(store.list("o").map((c) => c.comment)).toEqual(["added while sending"]);
   });
 
-  it("restores what a removal took: the same comments, ids and order included", () => {
-    const { store, storage } = fixture();
-    store.save("o", at([3], "later"), "b");
-    store.save("o", at([1], "earlier"), "a");
-    const before = store.list("o");
-    store.remove("o", before.map((c) => c.id));
-    expect(store.list("o")).toEqual([]);
-    store.restore("o", before);
-    expect(store.list("o")).toEqual(before);
-    expect(new BlockCommentStore(() => storage).list("o")).toEqual(before);
-  });
-
-  it("restores in one write and notifies once", () => {
-    const { store } = fixture();
-    store.save("o", at([0], "first"), "one");
-    store.save("o", at([1], "second"), "two");
-    const before = store.list("o");
-    store.remove("o", before.map((c) => c.id));
-    let updates = 0;
-    store.subscribe(() => { updates++; });
-    store.restore("o", before);
-    expect(updates).toBe(1);
-  });
-
-  it("skips a restored comment whose anchor was written meanwhile: the newer one wins", () => {
-    const { store } = fixture();
-    store.save("o", at([0], "first"), "old one");
-    store.save("o", at([1], "second"), "old two");
-    const removed = store.list("o");
-    store.remove("o", removed.map((c) => c.id));
-    store.save("o", at([0], "first"), "newer");
-    store.restore("o", removed);
-    expect(store.list("o").map((c) => c.comment)).toEqual(["newer", "old two"]);
-  });
-
-  it("skips a restored comment whose anchor another tab wrote meanwhile", () => {
-    const { store, data } = fixture();
-    store.save("o", at([0], "first"), "old one");
-    store.save("o", at([1], "second"), "old two");
-    const removed = store.list("o");
-    store.remove("o", removed.map((c) => c.id));
-    // storage written behind the store: the other tab's comment on the first anchor
-    data.set(KEY, JSON.stringify({ version: 1, comments: [stored("t", "from the other tab", at([0], "first"))] }));
-    store.restore("o", removed);
-    expect(store.list("o").map((c) => c.comment)).toEqual(["from the other tab", "old two"]);
-  });
-
-  it("does nothing when restoring no comments, or only ones already back", () => {
-    const { store } = fixture();
-    store.save("o", at([0], "first"), "one");
-    const list = store.list("o");
-    let updates = 0;
-    store.subscribe(() => { updates++; });
-    store.restore("o", []);
-    store.restore("o", list);
-    expect(updates).toBe(0);
-    expect(store.list("o")).toBe(list);
-  });
-
   it("keeps a comment edited while a send was on its way: the send carried the old text", () => {
     const { store } = fixture();
     store.save("o", at([0], "first"), "old");
@@ -466,14 +407,6 @@ describe("selection comments in the store", () => {
     expect(store.get("o", selectionTarget(part, "beta", 6, 10))).toBeUndefined();
   });
 
-  it("restores a selection comment with its quote", () => {
-    const { store } = fixture();
-    store.save("o", selectionTarget(part, "beta", 6, 10), "note");
-    const taken = store.list("o");
-    store.remove("o", taken.map((c) => c.id));
-    store.restore("o", taken);
-    expect(store.list("o")).toEqual(taken);
-  });
 });
 
 describe("isBlockComment with a selection", () => {
@@ -627,16 +560,13 @@ describe("selections across parts", () => {
     expect(store.get("o", spanning)?.comment).toBe("across");
   });
 
-  it("edits it again from the stored comment, its last part kept, and restores it", () => {
+  it("edits it again from the stored comment, its last part kept", () => {
     const { store } = fixture();
     store.save("o", spanning, "across");
     expect(commentTarget(store.list("o")[0]!)).toEqual(spanning);
     store.save("o", commentTarget(store.list("o")[0]!), "edited");
     const edited = store.list("o");
     expect(edited.map((c) => [c.comment, c.anchor, c.until?.end])).toEqual([["edited", spanning.anchor, 5]]);
-    store.remove("o", edited.map((c) => c.id));
-    store.restore("o", edited);
-    expect(store.list("o")).toEqual(edited);
   });
 
   it("moves it off its anchor when its first part was replaced, like any comment", () => {

@@ -805,8 +805,6 @@ export const ZH: Record<string, string> = {
   "{count} comment waiting": "{count} 条评论等待中",
   "{count} comments waiting": "{count} 条评论等待中",
   "Remove all comments": "移除所有评论",
-  "Undo": "撤销",
-  "Comments removed: {count}": "已移除 {count} 条评论",
   "Comments only": "仅评论",
   "Comments with this message: {count}": "此消息的评论：{count}",
   "Go to the next comment": "跳到下一条评论",

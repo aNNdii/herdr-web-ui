@@ -1,7 +1,6 @@
 import {
   useCallback,
   useEffect,
-  useId,
   useLayoutEffect,
   useMemo,
   useRef,
@@ -90,8 +89,6 @@ const COMPOSER_HEIGHT_STEP = 24;
 const RESIZE_SLACK = { mouse: 3, touch: 10 } as const;
 /** Two taps on the grip this close return the box to its automatic height (iOS may send no dblclick). */
 const DOUBLE_TAP_MS = 350;
-/** How long the undo stays in the place of the context bar whose X removed the comments. */
-const UNDO_MS = 10_000;
 const COMMAND_SOURCES = ["builtin", "user", "project", "skill", "plugin"] as const;
 export const SOURCE_LABEL: Record<SlashCommand["source"], string> = {
   builtin: "Built in",
@@ -382,60 +379,19 @@ export function Composer({
   /** why the comments stay in the pane instead of going with the next send */
   const commentsStayNote = (held: NonNullable<typeof outgoing.commentsHeld>): string => t(held === "no-agent" ? "Comments stay here: they are only sent to an agent."
     : held === "answer" ? "Comments stay here: they are not sent with an answer." : "Comments stay here: they are not sent with a command.");
-  // What the bar's X removed, for the undo that takes the bar's place: it goes with the next send, a new
-  // comment, another pane or after UNDO_MS. No dialog asks first: an undo costs nothing when the removal was meant
-  const [undo, setUndo] = useState<{ owner: string; comments: readonly BlockComment[] } | null>(null);
-  const undoRef = useRef<HTMLButtonElement | null>(null);
-  /** the undo bar's text: the Undo button is described by it, so the focus on it reads "Undo, Comments removed: 3" */
-  const undoTextId = useId();
-  /** the button that takes the focus once rendered: the undo button after the X, the walk button after an undo */
-  const focusNext = useRef<"undo" | "walk" | null>(null);
-  const dismissUndo = useCallback((): void => setUndo(null), []);
-  /** what the undo restores; null while there is none to show: no removal, another pane's, or comments written since */
-  const undoable = undo !== null && undo.owner === commentOwner && comments.length === 0 ? undo.comments : null;
-  /** the context bar is drawn (comments, or the undo after the X): the message below it gives up part of its top padding */
-  const hasCommentBar = comments.length > 0 || undoable !== null;
-  useEffect(() => {
-    if (undo === null) return;
-    const timer = window.setTimeout(() => {
-      // the undo button is about to leave with the focus on it: the box takes it, except on a touch screen, where that would
-      // raise the keyboard unasked (PaneTerminal tells touch apart by the same query): the focus is just let go
-      const held = undoRef.current;
-      if (held !== null && document.activeElement === held) {
-        if (window.matchMedia("(pointer: coarse)").matches) held.blur();
-        else textareaRef.current?.focus();
-      }
-      dismissUndo();
-    }, UNDO_MS);
-    return () => window.clearTimeout(timer);
-  }, [undo, dismissUndo]);
-  // a new comment, or another pane: the removed ones are no longer what an undo is for
-  useEffect(() => { if (comments.length > 0) dismissUndo(); }, [comments.length, dismissUndo]);
-  useEffect(() => { dismissUndo(); }, [commentOwner, dismissUndo]);
-  // runs after both dismiss effects: a request is kept until its button exists, and dropped once it can no longer
-  // ("undo": the undo is gone; "walk": no comment left)
-  useEffect(() => {
-    const want = focusNext.current;
-    if (want === null) return;
-    const button = want === "undo" ? undoRef.current : walkRef.current;
-    if (button) { focusNext.current = null; button.focus(); }
-    else if (want === "walk" ? comments.length === 0 : undo === null) focusNext.current = null;
-  }, [undo, comments.length]);
-  /** the bar's X: every comment of this pane goes, the walk's mark with them; the undo in the bar's place has the focus */
+  /** the context bar is drawn while comments are stored: the message below it gives up part of its top padding */
+  const hasCommentBar = comments.length > 0;
+  /**
+   * The bar's X: every comment of this pane goes, the walk's mark with them, and the bar with them. Removed is removed:
+   * there is no undo and no dialog. The X leaves with the focus on it: the message box takes it, except on a touch
+   * screen, where that would raise the keyboard unasked (PaneTerminal tells touch apart by the same query).
+   */
   const removeAllComments = (): void => {
     if (comments.length === 0) return;
     blockComments.remove(commentOwner, comments.map((comment) => comment.id));
     nextComment.current = 0;
     clearCurrent();
-    focusNext.current = "undo";
-    setUndo({ owner: commentOwner, comments });
-  };
-  /** the undo button: the removed comments come back (one written meanwhile on the same block wins) and the walk button has the focus */
-  const undoRemoval = (): void => {
-    if (undo === null) return;
-    blockComments.restore(undo.owner, undo.comments);
-    focusNext.current = "walk";
-    setUndo(null);
+    if (!window.matchMedia("(pointer: coarse)").matches) textareaRef.current?.focus();
   };
   const agentLabel = agentDisplayLabel(agent);
   // the agent's suggestion stands in the empty box as it does in its own input, until anything is typed
@@ -805,7 +761,7 @@ export function Composer({
     const fromQueue = queueRef.current !== null && document.activeElement === queueRef.current && !queueTouched.current;
     const settle = (result: boolean | string): void => {
       const acknowledged = result === true ? composerDrafts.settle(draftKey, sent) : null;
-      if (result === true) { blockComments.remove(commentOwner, sentIds); dismissUndo(); }
+      if (result === true) blockComments.remove(commentOwner, sentIds);
       if (!mounted.current) return;
       if (typeof result === "string") setNote(result);
       if (acknowledged === null) return;
@@ -834,14 +790,13 @@ export function Composer({
       composerDrafts.end(draftKey);
       if (mounted.current) setNote(t("Not confirmed. Check the terminal before sending again."));
     }
-  }, [attachments, commentOwner, connected, dictation.forget, dismissUndo, draftKey, onSend, outgoing, sending, text, uploading]);
+  }, [attachments, commentOwner, connected, dictation.forget, draftKey, onSend, outgoing, sending, text, uploading]);
 
   /** A quick reply goes the way a typed message does (queued mid-turn, an answer to an open menu), and leaves the box alone. */
   const sendQuick = useCallback((reply: string) => {
     if (!connected || sending) return;
     setNote(null);
     const settle = (result: boolean | string): void => {
-      if (result === true) dismissUndo();
       if (mounted.current && typeof result === "string") setNote(result);
     };
     if (!composerDrafts.begin(draftKey)) return;
@@ -853,7 +808,7 @@ export function Composer({
       composerDrafts.end(draftKey);
       if (mounted.current) setNote(t("Not confirmed. Check the terminal before sending again."));
     }
-  }, [connected, dismissUndo, draftKey, onSend, sending]);
+  }, [connected, draftKey, onSend, sending]);
 
   const onKeyDown = useCallback(
     (event: KeyboardEvent<HTMLTextAreaElement>) => {
@@ -1059,17 +1014,8 @@ export function Composer({
 
         {/* The comments stored for this pane, a row between the attachments and the message ("Replying to…"): their count, and
             whether they go with the next send (accent icon) or wait (dim; the name says why). The text walks to them, the X drops
-            them all, and the undo takes the bar's place. Without comments the row takes no space */}
+            them all. Without comments the row takes no space */}
         {hasCommentBar && (() => {
-          // `undoable` is only set while no comment is stored
-          if (undoable !== null) {
-            return (
-              <div className="composer-comments-bar is-undo">
-                <span className="composer-comments-text" id={undoTextId}>{t("Comments removed: {count}", { count: undoable.length })}</span>
-                <button ref={undoRef} type="button" className="btn btn-ghost composer-comments-undo" aria-describedby={undoTextId} onClick={undoRemoval}>{t("Undo")}</button>
-              </div>
-            );
-          }
           const held = outgoing.commentsHeld;
           const waiting = held !== null;
           const count = comments.length;
