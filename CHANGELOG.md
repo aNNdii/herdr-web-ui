@@ -9,32 +9,163 @@ between releases do not reach them. Remote-PC runtime bundles are versioned sepa
 
 ### Added
 - Comment on any text in an agent's final reply in the chat by selecting it: a **Comment**
-  button floats where a mouse let go, above the selection's line there (below the selection on a
-  touch screen, clear of the selection handles). With a mouse it opens a small popover in the
-  chat where the button was, with a field and **Save** and **Cancel** (and **Delete** for an
-  existing comment); on a touch screen or in a narrow window it is a dialog that quotes exactly
-  what was selected. Several selections in one paragraph are several comments, and one selection
-  over several paragraphs or list items is one comment. The commented text is highlighted in
-  place (a tint and an underline in the accent colour), with no bar or tint beside it, and under
-  the part where the selection ends hangs a small speech bubble per comment, its tail pointing at
-  the end of the highlight; a click on a bubble edits the comment. In the message box the comments
-  show as a bar below any attached files, above the text ("3 comments on the reply"): a tap on it
-  walks to them, one comment per tap, marking the current bubble and its text and moving the
-  keyboard focus to the bubble, and its X removes them all, with an undo in the same place for ten
-  seconds. The bar's icon is accent-coloured while the comments go with the next message and dim,
-  with the bar saying "waiting" and the reason in its name, while they wait. With the keyboard
-  alone, text can be selected for a comment only through the browser's caret browsing (F7). The
-  next message sends the comments first, each quoting its selected text, in reading order. A
-  command or an answer to the agent's open question goes without them; they wait for the next
-  message. They only ever go to an agent: when none runs in the pane, what is typed goes alone (a
-  shell would run the quoted lines), and its terminal output takes no comments. A message with
-  comments queued during a turn keeps them as its own, shows their count in its row and sends them
-  when you press **Send now**; if the agent is gone by then, it is refused and stays in the queue
-  rather than being typed into the pane, and so it is when a Codex is busy with its own queued
-  questions. Comments are kept per pane on this device.
+  button floats where a mouse let go (below the selection on a touch screen, clear of its
+  handles). It opens a form in the chat, right under the paragraph, list item or block where the
+  selection ends, with **Cancel** and **Save**; the selected text stays highlighted while it is
+  written. Several selections in one paragraph are several comments, and one selection over
+  several paragraphs or list items is one comment. The commented text is highlighted in place (a
+  tint and an underline in the accent colour), and each comment is a card under that part, tinted
+  with the accent, with a **Pending** badge, the comment in full and buttons to edit or delete it.
+  Pointing at a card, or focusing it, brings its text up and fades the other comments' marks. In
+  the message box the comments show as a bar below any attached files, above the text ("3 comments
+  on the reply"): a tap on it walks to them, one comment per tap, and its X removes them all, with
+  an undo in the same place for ten seconds. The bar's icon is accent-coloured while the comments
+  go with the next message and dim, with the bar saying "waiting" and the reason in its name, while
+  they wait. With the keyboard alone, text can be selected for a comment only through the
+  browser's caret browsing (F7). The next message sends the comments first, each quoting its
+  selected text, in reading order. A command or an answer to the agent's open question goes without
+  them; they wait for the next message. They only ever go to an agent: when none runs in the pane,
+  what is typed goes alone (a shell would run the quoted lines), and its terminal output takes no
+  comments. A message with comments queued during a turn keeps them as its own, shows their count
+  in its row and sends them when you press **Send now**; if the agent is gone by then, it is
+  refused and stays in the queue rather than being typed into the pane, and so it is when a Codex
+  is busy with its own queued questions. Comments are kept per pane on this device.
   ([#409](https://github.com/devswha/herdr-web-ui/pull/409) by @aNNdii)
+- New workspace's **Browse** filters the loaded folders in the current directory as you type.
+  Navigation clears the filter, and a truncated listing says when search covers only the first
+  500 folders. ([#430](https://github.com/devswha/herdr-web-ui/pull/430) by @suho-han)
+- The usage meters read OpenCode Go's limits too: its rolling session, the week and the month,
+  with the key OpenCode keeps in `~/.local/share/opencode/auth.json` (under `XDG_DATA_HOME`
+  when it is set) or the `OPENCODE_API_KEY` variable. An OpenCode key without a Go
+  subscription shows no meter.
+  ([#444](https://github.com/devswha/herdr-web-ui/pull/444) by @diogo7dias)
 
 ### Changed
+- The website says what it is for in its title and description (Claude Code and Codex from your
+  phone), answers seven common questions in a new FAQ section, and gives search engines a sitemap
+  and structured data for the app and the FAQ.
+  ([#497](https://github.com/devswha/herdr-web-ui/pull/497))
+- On macOS a Codex pane's chat costs the server about a sixth of what it did on each poll (a
+  median of 16 ms instead of 103 ms, measured on two live Codex panes). The store a Codex process
+  writes to is remembered for its pid and arguments instead of being read with `ps` every 2 s,
+  and the rollout it has open is found with one `lsof` run for the pane's processes (a wrapper
+  and the binary are two) that skips the stat calls a name does not need.
+  ([#491](https://github.com/devswha/herdr-web-ui/pull/491) by @kilhyeonjun)
+- The app's startup script is a fifth smaller (408 kB to 331 kB gzipped, and 48 kB to 39 kB of
+  CSS): KaTeX, which draws math in the chat, loads with the first reply that has an expression.
+  Until it arrives, that expression shows in its source form, as it did when KaTeX could not read it.
+  ([#493](https://github.com/devswha/herdr-web-ui/pull/493) by @kilhyeonjun)
+
+### Fixed
+- With Language set to **System**, English stays selected when it is the browser's first
+  supported language, even if Japanese, Korean or Chinese appears later in its preferences.
+  Before, English was skipped in favor of a later supported language.
+  ([#496](https://github.com/devswha/herdr-web-ui/pull/496) by @snowykr)
+- An OmO pane's chat keeps a background task's title after the newest page moves past the prompt
+  that started the task, as 0.3.51 meant to. Before, the title was kept only when a transcript
+  deleted earlier had used the same inode (as Linux reuses them) and left its titles behind, and
+  such a transcript's titles could name another session's tasks with the same id.
+  ([#498](https://github.com/devswha/herdr-web-ui/pull/498) by @kilhyeonjun)
+- An OmO pane that asks you a question reads INPUT until you answer. Before, a question OmO
+  waits on read RUN, and one it asks without waiting (it keeps working, or ends its turn, with
+  the question folded over its input box) read RUN or DONE.
+  ([#488](https://github.com/devswha/herdr-web-ui/pull/488))
+- A question OmO asks without waiting gets its card in the chat: tap an option, or type a reply
+  to answer it. Before, the chat showed no card for it, so an option could only be picked in the
+  terminal. ([#488](https://github.com/devswha/herdr-web-ui/pull/488))
+- A Claude, omp or pi pane that has just started opens its chat on the greeting ("What should
+  Claude do in …?"), as an OmO pane already did. Before, until the first message the chat
+  showed the terminal's text or an empty line instead, so a new workspace or worktree never
+  greeted you. ([#500](https://github.com/devswha/herdr-web-ui/pull/500))
+
+## [0.3.51] - 2026-10-06
+
+### Added
+- **Open here** on a held pane explicitly takes it from another web bridge or standalone
+  `herdr terminal attach`. A displaced bridge waits with the same button; it never takes the pane
+  back automatically. Available on supporting bridges, for interact connections only.
+  ([#368](https://github.com/devswha/herdr-web-ui/pull/368) by @WOULDU-pres)
+
+- The terminal's key bar on a touch screen has an **Alt** key beside Ctrl. Like Ctrl it holds for
+  one key: Alt then a letter, Backspace or Enter sends ESC before it, and Alt then an arrow sends
+  Alt+arrow. **Settings → Appearance → Key bar** turns Alt off or adds Shift+Tab, Home/End,
+  PgUp/PgDn, Ctrl+D, Ctrl+Z, `|`, `~` and `/`, each in a fixed place in the row. Esc, Tab, Ctrl,
+  the arrows and Ctrl+C stay as they were. ([#487](https://github.com/devswha/herdr-web-ui/pull/487))
+
+### Fixed
+- A tab strip you scrolled yourself to look at other tabs stays where you left it when a
+  typeface arrives late and redraws the tabs' names at another width. Before, the strip
+  brought the open tab back into view then; it still does so until you have scrolled it.
+  ([#479](https://github.com/devswha/herdr-web-ui/pull/479))
+- On macOS, a gjc pane's chat finds its session from the terminal breadcrumb gjc leaves. Before,
+  the process start time it is matched by was read as UTC, so on any other time zone every fresh
+  breadcrumb looked hours old and was passed over. Process start times, which Codex, OmO and gjc
+  panes are matched by, are now read on macOS too (they were only read from Linux `/proc`).
+  ([#484](https://github.com/devswha/herdr-web-ui/pull/484) by @kilhyeonjun)
+- The chat of a Codex pane started with its own `CODEX_HOME` (a launcher that keeps one store
+  per profile) shows its conversation. Before, the server looked for every rollout under its own
+  `CODEX_HOME` or `~/.codex`, found none for that pane and fell back to the terminal scrollback.
+  The store is now read from the pane's Codex process (its environment), for the conversation,
+  images, tool output and queued questions; a configured Codex home still wins.
+  ([#486](https://github.com/devswha/herdr-web-ui/pull/486) by @kilhyeonjun)
+- The chat shows the card for a question Claude Code asks with `AskUserQuestion` in three
+  layouts it missed: options that carry a preview (drawn in a box to the right of the options,
+  with a notes line and an unnumbered "Chat about this"), a question asked while Claude keeps a
+  task list under its panel (`3 tasks (0 done, 3 open)` and a row per task), and a named
+  session's rule drawn under the question with no task list. Before, the first showed the
+  fallback card and the other two were taken for answered questions, so the chat showed none.
+  ([#485](https://github.com/devswha/herdr-web-ui/pull/485) by @kilhyeonjun)
+- A table in the chat that is wider than the reply scrolls sideways in its own box. Before, it
+  squeezed every column to fit, down to a letter or two, so words and file paths broke after
+  any letter. A column is now never narrower than its longest word.
+  ([#481](https://github.com/devswha/herdr-web-ui/pull/481) by @aNNdii)
+- In the chat of an OmO pane, a background task that ends shows where OmO reported it: a
+  card that says how many tasks ended, and for each its summary, whether it finished, failed
+  or was cancelled, the agent and model it ran as, how long it took, its turns, tool calls and
+  tokens, and its answer on request. Before, the chat showed nothing when a task ended, and
+  what the agent did after it ran on in the same block as if nothing had come in. The `task`
+  row reads the summary the call gave its task instead of its short description, and opened
+  it lists each task it started with its agent and prompt, instead of its raw input or a
+  checklist of "task 1", "task 2" nobody ticks.
+  ([#477](https://github.com/devswha/herdr-web-ui/pull/477) by @nahwan-kim)
+- In the chat of an OmO, omp, gjc or pi pane, an answer stays an answer when the agent wakes
+  again after it on its own, for a monitor's event or a background command that ended. Before,
+  what it did after the wake-up ran into the same turn, and the answer, a whole review for
+  example, was folded away under "Worked for" while the terminal showed it.
+  ([#483](https://github.com/devswha/herdr-web-ui/pull/483))
+
+## [0.3.50] - 2026-10-06
+
+### Changed
+- The app brings its own typefaces instead of counting on the ones a device has: Pretendard for
+  the interface and the chat, and JetBrains Mono for code in the chat and the interface, so a
+  phone or a PC without them draws Latin text and Korean in the same letters as one with them.
+  Japanese and Chinese are not the same everywhere: Pretendard has kana and only a few hundred
+  ideographs, so kanji and Chinese text are still drawn in the device's own font, and a Japanese
+  line mixes the two. Nothing is fetched from the internet: the files come from your own PC
+  with the app, a page downloads only the pieces of
+  Pretendard its text needs (about 90 KB for a chat in English, about 200 KB more once Korean
+  is on the page), and each piece is kept for offline use after that. The terminal is untouched: its
+  font, its **Terminal font** setting and its grid are as before, and a **Chat font** you chose
+  still comes first. In the chat, answers, your own messages and what the agent says while it
+  works are a step larger (15px at the default **Chat font size**, which still scales
+  everything) on a looser line; bold is a semibold; inline code sits a little under its line and
+  code blocks are a step larger with more room; the message box is typed at the same size with
+  a mouse and stays 16px on touch; the empty chat's question is a larger line. Tool rows, times
+  and other small labels keep their size.
+  ([#473](https://github.com/devswha/herdr-web-ui/pull/473))
+- In the chat's message box the agent's mark, the model, the reasoning level and the context
+  ring sit together in one quiet pill, and the model is shown by its name where the id is a
+  regular one: `claude-opus-5-5` reads **Opus 5.5**, `claude-sonnet-5` **Sonnet 5**, `gpt-5.6`
+  **GPT-5.6**, `gpt-5.6-sol` **GPT-5.6-Sol**, `glm-5.3` **GLM-5.3**, and the level follows as **High**. No name is ever
+  guessed: any other id (a dated snapshot, a suffix such as `gpt-5.6-sol-max`, another provider's
+  prefix, another vendor, a spelling that is not the vendor's own such as `claude-sonnet-5-05`) is
+  shown exactly as received, in the code font. Behind a name the id
+  as received is in the name's tooltip and is read by a screen reader; on a touch screen it is
+  not shown yet. A pane that records no reasoning level shows the name alone. The pill only shows the model, it is not a button yet. Where the
+  pill does not fit beside Queue (seen on a 390px phone) it steps aside whole while Queue is
+  showing, and the context ring stays.
+  ([#467](https://github.com/devswha/herdr-web-ui/pull/467))
 - In the chat, the line with the model sits inside the message box, as its last row, instead of
   above it, on a phone as on a desktop. It shows the agent's mark, background tasks, the model,
   the reasoning level as one word (`high`) and the context ring. The agent's written name and the
@@ -79,6 +210,25 @@ between releases do not reach them. Remote-PC runtime bundles are versioned sepa
   a phone, **Discard** is an X, and the message box keeps the same side margin as the
   conversation.
   ([#466](https://github.com/devswha/herdr-web-ui/pull/466))
+- In the chat, an agent's question, approval or plan no longer sits at the end of the
+  conversation: its card is docked directly above the message box, on the same column, so what
+  is asked and where you answer are one block and the conversation scrolls freely behind it.
+  Held messages stay above it, folded to their one line. The card is plainer: no shadow, its
+  title is the one thing in red (the "INPUT NEEDED" badge is still read by a screen reader),
+  and the options are flat rows with their number as a key, all of equal weight. A command or
+  plan to approve stays in the card's code box and is the only part that shrinks when room is
+  short (six lines, down to two); the card itself is at most 60% of the window, or six rows on a
+  phone with its keyboard up, and scrolls beyond that with Confirm always in sight. The message
+  box says "Type 1–3 to choose…" (or "Type 1–3 or your own reply…") in place of "Answer above:
+  type 1–3 to choose…", which was cut on a phone. While the agent waits for you, the open work
+  block reads "Needs you" with a still red dot in place of "Working…". Answering works as
+  before: a press on an option, a typed number followed by Confirm, or your own reply; Enter in
+  an empty box answers nothing. After a press with a mouse or keyboard, focus goes to the
+  message box, on a tablet or a touch-screen laptop too; a tap never moves it there. The card keeps following Settings → Chat font size and Chat font, and on a phone
+  with its keyboard up a tap on the card's text, or a drag down it, puts the keyboard away as
+  on the conversation.
+  ([#468](https://github.com/devswha/herdr-web-ui/pull/468),
+  [#475](https://github.com/devswha/herdr-web-ui/pull/475))
 
 - In chat, a tool row reads as what the agent did: "Read src/metrics.ts", "Edited
   src/pages/Reports.tsx", "Ran pnpm test", in place of an icon, the tool's id and a slash. The
@@ -139,9 +289,41 @@ between releases do not reach them. Remote-PC runtime bundles are versioned sepa
   ([#462](https://github.com/devswha/herdr-web-ui/pull/462))
 
 ### Fixed
+- An answer tapped in the chat for a row the cursor is not on looks at the screen again before
+  it presses Enter (or the first key that does more than move the cursor). A menu answered in
+  the terminal while the answer was moving the cursor could be replaced by another menu, which
+  then took the Enter; the answer now stops with "the prompt changed" unless the screen still
+  shows the card's menu with the cursor on its row, having pressed only ↑ and ↓. It also stops
+  once the agent is back at work under it. And a question asked again with the same text is a
+  card of its own where the app can see that the first asking ended (it was answered from the
+  app, the agent went back to work, or the prompt left the screen), so a typed pick waiting for
+  Confirm, or the card still open on another device, no longer answers the second asking. Not
+  covered: the keys after the first one that does more than move (the text and Enter of a typed
+  answer, the later ticks of a multiple choice), and a prompt answered in a terminal and asked
+  again word for word with nothing the app can see in between. Remote PCs get this with the
+  next `remote-vN` runtime.
+  ([#470](https://github.com/devswha/herdr-web-ui/pull/470))
+- The installed app opens without a network right after an update that renewed its offline
+  store, as this one does. The old store used to be emptied the moment the new version took
+  over, so until the app had been opened online once more, a reload with no connection showed
+  the browser's error page. The old store is now kept until the new one holds the app.
+  ([#473](https://github.com/devswha/herdr-web-ui/pull/473))
+- Ctrl+Enter typed into the live terminal reaches Claude Code as Ctrl+Enter, so a message typed
+  while it works is sent at once instead of waiting in its queue. The terminal sent plain Enter; it
+  now sends the key the way the pane's program asked for (modifyOtherKeys), also to a device that
+  opens the pane later, and keeps Enter for programs that asked for nothing. A phone's input line
+  and a Windows mirror pane send Enter as before.
+  ([#471](https://github.com/devswha/herdr-web-ui/pull/471) by @WOULDU-pres)
 - A draft in the message box keeps its full height when the window or the pane is resized, or
   the chat width changes: the box used to keep the height of its old line breaks until the next
   key press. ([#463](https://github.com/devswha/herdr-web-ui/pull/463))
+- With a browser font size other than 16px (from 11.4px up), the Default chat width is never
+  wider than Wide.
+  Its widest was a fixed 960px while Wide follows the font size, so at a 13px font Wide (936px)
+  made the chat narrower than Default on a large monitor. Default's widest now follows the font
+  size too (960px at 16px, 1200px at 20px), and it is never narrower than Narrow's 820px: under
+  an 11.4px font that 820px is itself wider than Wide.
+  ([#474](https://github.com/devswha/herdr-web-ui/pull/474))
 - An update asked for in the first moments after the app starts, or right after another update,
   waits until the start is over. It used to stop the app in the middle of its start-up check,
   and the app then fell back to the source checkout or did not come up.
@@ -1887,7 +2069,9 @@ First public version.
 - Installable PWA, a mobile key bar, web push alerts and optional token auth.
 - Distribution as a herdr plugin.
 
-[Unreleased]: https://github.com/devswha/herdr-web-ui/compare/v0.3.49...HEAD
+[Unreleased]: https://github.com/devswha/herdr-web-ui/compare/v0.3.51...HEAD
+[0.3.51]: https://github.com/devswha/herdr-web-ui/compare/v0.3.50...v0.3.51
+[0.3.50]: https://github.com/devswha/herdr-web-ui/compare/v0.3.49...v0.3.50
 [0.3.49]: https://github.com/devswha/herdr-web-ui/compare/v0.3.48...v0.3.49
 [0.3.48]: https://github.com/devswha/herdr-web-ui/compare/v0.3.47...v0.3.48
 [0.3.47]: https://github.com/devswha/herdr-web-ui/compare/v0.3.46...v0.3.47

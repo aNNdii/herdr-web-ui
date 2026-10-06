@@ -22,6 +22,7 @@ bun test                        # needs herdr installed; creates and removes its
 bun run test:ui                 # browser regression against isolated test servers
 bun scripts/chat-browser-qa.ts  # chat lens end to end
 bun scripts/output-browser-qa.ts # terminal output flow control end to end
+bun scripts/math-browser-qa.ts  # chat math: KaTeX loads with the first expression
 bun run test:ssh                # remote-PC integration over SSH
 bun scripts/fresh-install-docker.ts [owner/repo] [ref]  # a new user's install in a bare Ubuntu (Docker)
 ```
@@ -46,6 +47,8 @@ bun scripts/droplet-demo-regression.ts        # real-app alerts below the header
 bun scripts/chat-greeting-demo-regression.ts  # an empty chat's greeting: centred on a desktop, docked on a phone
 bun scripts/composer-fit-demo-regression.ts   # the input card's model label: whole or stepped out beside Queue, the context number and an upload
 bun scripts/held-rows-demo-regression.ts      # held messages: the fold under an approval card, its button, a row's error
+bun scripts/prompt-dock-demo-regression.ts    # the prompt card docked over the input card: its place, its height on a short phone, the grip, a typed pick
+bun scripts/font-swap-demo-regression.ts      # the app's faces arriving late on a slow link: a reader at the end of a chat stays there, a tab strip the user scrolled stays put
 ```
 
 `FILE_VIEWER_CASE=landscape-notch` selects a viewer case; `FILE_VIEWER_CSS=/path/to/before.css` compares another stylesheet. These checks use Chromium mobile emulation and synthetic safe-area/keyboard geometry; they cannot verify actual iOS Safari keyboard dismissal or notch insets. The existing `bun scripts/file-viewer-regression.ts` separately checks history with an owned herdr pane. The original `scripts/mobile-viewport-regression.ts` exports `checkMobileViewport` for the real-app `bun run test:ui` suite; it also checks the command palette and xterm focus transitions. The demo runners build the real client into a temporary directory, inject the committed fictional-session transport and serve it only on loopback; they do not use a live herdr session or download website media. They exercise real-app viewport and alert geometry, but not live herdr connectivity.
@@ -106,6 +109,10 @@ demos, a screenshot gallery, supported agents, phone setup and a comparison tabl
 assembles it into `_site/` with icons, the social preview and scaled screenshots from `docs/screenshots/`.
 The two demo videos come from local `docs/screenshots/*.mp4` when present, otherwise the README's uploads;
 ffmpeg creates their poster frames. Without ffmpeg, the page omits unavailable posters.
+
+For search engines the build also writes `sitemap.xml` (the page only: the demo is `noindex`) and copies
+the page's FAQ rows (`<div class="qa">`) into its head as FAQPage structured data, so edit a question in
+the page and the data follows. The SoftwareApplication data is written in the page's head by hand.
 
 The build also copies the retained `site/assets/` and `site/media/` files, including the film linked
 from the README and its chat loop. These remain available at their existing URLs even though the

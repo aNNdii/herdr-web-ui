@@ -36,6 +36,8 @@ import {
   rankSlashCommands,
   terminalOnlyCommand,
 } from "../lib/compose.ts";
+import { modelLabel } from "../lib/modelName.ts";
+import { useFacesArrived } from "../lib/fontFaces.ts";
 import { activeTrigger, applyCompletion, type ActiveTrigger } from "../lib/mentions.ts";
 import { quickReplyButtons, useSettings } from "../lib/settings.ts";
 import { AgentMark } from "./AgentMark.tsx";
@@ -485,6 +487,12 @@ export function Composer({
     };
   }, []);
 
+  // The app's faces swap in after the first paint (fonts/fonts.css, font-display: swap) and are
+  // not as wide as the fallback they replace. No box changes size for that, so nothing else
+  // would measure again: each face's arrival (lib/fontFaces.ts) renders the composer once more, which sizes the message
+  // box (below) and fits the model label (fitStatus) with the face that is drawn.
+  const facesLoaded = useFacesArrived();
+
   useLayoutEffect(() => {
     const element = textareaRef.current;
     if (!element) return;
@@ -498,7 +506,7 @@ export function Composer({
     element.style.height = `${element.scrollHeight}px`;
     const height = Math.round(element.getBoundingClientRect().height);
     setAutoHeight((current) => current === height ? current : height);
-  }, [text, manualHeight, placeholder, boxWidth, hasCommentBar]);
+  }, [text, manualHeight, placeholder, boxWidth, facesLoaded, hasCommentBar]);
 
   useEffect(() => {
     const element = textareaRef.current;
@@ -917,6 +925,8 @@ export function Composer({
   // comments alone are a message too: Queue holds them while the agent works
   const queueShown = composerQueueShown({ queueMode, connected, text, uploading }) || (queueMode && connected && goingComments > 0);
   const hint = composerStatusHint({ uploading, connected, text });
+  const model = metadata?.model ? modelLabel(metadata.model) : null;
+  const modelShown = Boolean(metadata?.model || metadata?.reasoning_effort);
   const hintText = hint === null ? null : t(hint === "uploading" ? "Uploading file…" : "Reconnecting… message held here, never queued");
   const menuId = `composer-menu-${paneId}`;
 
@@ -1152,18 +1162,30 @@ export function Composer({
           data-offline={connected ? undefined : ""} data-hint={hint ?? undefined}>
           {/* everything but the sentence: one row that never wraps, also where the sentence takes a line of its own */}
           <span className="composer-status-meta">
-            {agent && <AgentMark agent={agent} size={14} />}
             <span className="composer-agent-label visually-hidden">{agentLabel}</span>
             <span className="composer-status-separator visually-hidden" aria-hidden="true">·</span>
             <strong className={composerStatusWordDrawn(agentStatus) ? undefined : "visually-hidden"}>{t(composerStatusWord(agentStatus))}</strong>
-            {(metadata?.model || metadata?.reasoning_effort) && <span className="composer-model-info" aria-label={t("Model and reasoning")}>
-              <span className="composer-model" title={metadata.model ?? t("Model not available")}>{metadata.model ?? t("Model —")}</span>
-              <span className="composer-reasoning" title={metadata.reasoning_effort ? t("Reasoning effort: {effort}", { effort: metadata.reasoning_effort }) : t("Reasoning effort not available")}>
-                <span className="composer-reasoning-full visually-hidden">{t("Reasoning {effort}", { effort: metadata.reasoning_effort ?? "—" })}</span>
-                <span className="composer-reasoning-short" aria-hidden="true">{metadata.reasoning_effort ?? "—"}</span>
-              </span>
-            </span>}
-            {metadata?.context && <ContextRing context={metadata.context} shown={contextShown} onToggle={() => setContextShown((open) => !open)} />}
+            {/* the mark, the model, the level and the context ring as one quiet pill. It only shows: no role,
+                no focus, nothing to press but the ring inside it. A pane that names no model draws no pill
+                (.is-bare): the mark, a level if it has one, and the ring stand in the row as they are */}
+            <span className={`composer-pill${metadata?.model ? "" : " is-bare"}`}>
+              {agent && <AgentMark agent={agent} size={14} />}
+              {modelShown && <span className="composer-model-info" aria-label={t("Model and reasoning")}>
+                {/* a name only for an id modelLabel can name for certain; any other id is drawn as received, in the identifier face */}
+                <span className={`composer-model${model ? model.named ? "" : " is-id" : " is-none"}`} title={metadata?.model ?? t("Model not available")}>{model?.text ?? t("Model —")}</span>
+                {/* behind a name the id as received is still read; a touch cannot reach the title */}
+                {model?.named && <span className="composer-model-id visually-hidden">{metadata?.model}</span>}
+                {/* no level recorded: nothing is drawn for it, no dot and no dash; the sentence is still read */}
+                <span className={`composer-reasoning${metadata?.reasoning_effort ? "" : " visually-hidden"}`} title={metadata?.reasoning_effort ? t("Reasoning effort: {effort}", { effort: metadata.reasoning_effort }) : t("Reasoning effort not available")}>
+                  <span className="composer-reasoning-full visually-hidden">{t("Reasoning {effort}", { effort: metadata?.reasoning_effort ?? "—" })}</span>
+                  {metadata?.reasoning_effort && <>
+                    <span className="composer-reasoning-dot" aria-hidden="true">·</span>
+                    <span className="composer-reasoning-short" aria-hidden="true">{metadata.reasoning_effort}</span>
+                  </>}
+                </span>
+              </span>}
+              {metadata?.context && <ContextRing context={metadata.context} shown={contextShown} onToggle={() => setContextShown((open) => !open)} />}
+            </span>
             {/* the chip is a button in the left controls; its count is still said here, where a change is announced */}
             {backgroundTasks > 0 && <span className="composer-task-count visually-hidden">{t(backgroundTasks === 1 ? "{n} background task" : "{n} background tasks", { n: backgroundTasks })}</span>}
           </span>
