@@ -7,6 +7,7 @@ import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent as Rea
 
 import "./CommentEditor.css";
 
+import { commentCanSave, commentTyped } from "../lib/blockComments.ts";
 import { restoreFocusTarget } from "../lib/commentSelection.ts";
 import { useT } from "../lib/i18n.ts";
 
@@ -19,10 +20,12 @@ export interface CommentDraft {
   surface: RefObject<HTMLDivElement>;
   field: RefObject<HTMLTextAreaElement>;
   value: string;
+  /** Save does something (`commentCanSave`): a new comment with only blanks has nothing to save */
+  canSave: boolean;
   setValue: (value: string) => void;
   /** saves the text, or only closes when it is unchanged */
   save: () => void;
-  /** on the editor's box: Cmd/Ctrl+Enter in the field saves; in a modal Tab stays inside; in an inline form Escape closes */
+  /** on the editor's box: Cmd/Ctrl+Enter in the field saves; in a modal Tab stays inside; in an inline form Escape closes while nothing was typed */
   onKeyDown: (event: ReactKeyboardEvent<HTMLDivElement>) => void;
 }
 
@@ -36,7 +39,7 @@ export interface CommentDraftOptions {
   opener?: HTMLElement | null | ((scope: Element | null) => HTMLElement | null);
   /** where the focus goes when its opener is gone (the composer of the pane): asked once, as the editor opens */
   fallback: (scope: Element | null) => HTMLElement | null;
-  /** not modal: Escape only from inside it, no Tab trap, and the focus is given back only if the editor still had it */
+  /** not modal: Escape only from inside it and only while nothing was typed, no Tab trap, and the focus is given back only if the editor still had it */
   inline?: boolean;
   /** the text the field starts with when it is not `initialComment`: a form that was being written in, drawn again */
   startValue?: string;
@@ -46,8 +49,9 @@ export interface CommentDraftOptions {
 
 /**
  * The behaviour both comment editors share. The field grows with the comment, takes the focus with
- * its caret at the end, and Escape cancels: anywhere while a modal is up, only from inside an
- * inline form (`inline`), which leaves the rest of the page usable. On close the focus goes back to
+ * its caret at the end, and Escape cancels: anywhere while a modal is up; from inside an inline
+ * form (`inline`), which leaves the rest of the page usable, only while nothing was typed in it.
+ * The "typed" notion is `commentTyped`, the one ChatView uses to keep a written form from being replaced. On close the focus goes back to
  * the `opener` (by default what had it when the editor opened), else to the `fallback` element: a
  * deleted comment takes its own card, the opener, with it. `fallback()` is asked once, as the
  * editor opens (the caller's own composer: its chat may be gone when the editor closes, and
@@ -127,10 +131,15 @@ export function useCommentDraft(
     return () => window.removeEventListener("keydown", onKey, true);
   }, [onClose, inline]);
 
+  const typed = commentTyped(value, initialComment);
+  const canSave = commentCanSave(value, initialComment);
   const onKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>): void => {
     // React's root dispatches after every document- and window-capture listener, so the walk's Escape (Composer.tsx, on
-    // the document) has already run when an inline form gives up here, whatever the order the listeners were added in
+    // the document) has already run when an inline form gives up here, whatever the order the listeners were added in.
+    // Only an untouched form gives up: what was typed is not thrown away by a key (Cancel is the way out), and the
+    // event goes on unstopped, to the walk's Escape and whatever else listens above
     if (inline && event.key === "Escape") {
+      if (typed) return;
       event.stopPropagation();
       event.preventDefault();
       onClose();
@@ -138,7 +147,9 @@ export function useCommentDraft(
     }
     if (event.key === "Enter" && (event.metaKey || event.ctrlKey) && event.target === field.current) {
       event.preventDefault();
-      save();
+      // as the inline form's Save button: nothing to save is no save, and the form stays (the modal's Save
+      // is never disabled, and its shortcut closes it as before)
+      if (!inline || canSave) save();
       return;
     }
     // a modal keeps Tab inside; an inline form is in the page's flow, and Tab goes on from it
@@ -153,7 +164,7 @@ export function useCommentDraft(
     }
   };
 
-  return { surface, field, value, setValue, save, onKeyDown };
+  return { surface, field, value, canSave, setValue, save, onKeyDown };
 }
 
 /** The comment's field in either editor. */

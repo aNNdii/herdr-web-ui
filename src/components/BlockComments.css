@@ -109,7 +109,7 @@
    "Pending" badge, Edit and Delete on the right) and the comment in full below it. No author: the
    comment is the reader's own. The text it is on shows as the highlight (lib/commentHighlight.ts).
    A group, not a button: its two buttons are the controls. The form that writes or edits a comment
-   (CommentCard.tsx) is a card of the same frame, untinted (below) */
+   (CommentCard.tsx) is not a card but the message box's own surface (below) */
 .block-comment-card {
   display: flex;
   flex-direction: column;
@@ -190,24 +190,96 @@
   border-color: var(--accent);
 }
 
-/* the form: the field and, under it, Cancel and Save on the right. Not yet a comment: the plain
-   elevated surface, untinted, as GitLab's reply form */
+/* The form is the chat's message box in the column's scale (Composer.css `.composer-surface`): one
+   surface, its fill, hairline, shadow and focus edge, with the field borderless inside it and the
+   controls in a row under the text, on the right. Not yet a comment, so untinted. --radius-xl, not the
+   composer's --radius-2xl: the box is a line or two tall and 24px would round it into a pill */
 .block-comment-card.is-editing {
-  gap: var(--space-2);
-  border-color: var(--border-strong);
+  gap: 0;
+  padding: 0;
+  border-color: var(--border);
+  border-radius: var(--radius-xl);
   background: var(--bg-elevated);
+  box-shadow: var(--shadow-card);
+  transition:
+    border-color var(--dur-fast) var(--ease-out),
+    box-shadow var(--dur-fast) var(--ease-out);
 }
 
+/* focus is the surface's, as the composer's: the accent edge on the rounded box, not a ring on the
+   field (the field's own outline is off below) */
+.block-comment-card.is-editing:focus-within {
+  border-color: var(--accent);
+  box-shadow: var(--shadow-card), 0 0 0 var(--hairline) var(--accent-tint);
+}
+
+/* the field inside the surface: no frame, fill or ring of its own (the modal's keeps all three,
+   CommentEditor.css), the composer's text padding, and its size with a mouse. It grows with the
+   comment (CommentDraft.tsx) up to four lines, then scrolls */
+.block-comment-card.is-editing .comment-editor-field {
+  max-height: calc(4lh + var(--space-3) + var(--space-1));
+  padding: var(--space-3) var(--space-4) var(--space-1);
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  outline: 0;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .block-comment-card.is-editing .comment-editor-field {
+    font-size: var(--fs-chat);
+    line-height: var(--lh-code);
+  }
+}
+
+.block-comment-card.is-editing .comment-editor-field::placeholder {
+  color: var(--text-dim);
+}
+
+/* the controls' row, as the composer's: Cancel as text, then Save as the round accent button */
 .block-comment-actions {
   display: flex;
+  align-items: center;
   justify-content: flex-end;
   gap: var(--space-2);
+  padding: var(--space-1) var(--space-2) var(--space-2);
 }
 
-/* smaller than the app's dialog buttons: the card is small, and a mouse aims well */
-.block-comment-actions .btn {
-  height: calc(var(--control-h) - var(--space-2));
-  padding: 0 var(--space-2);
+/* Save: the composer's send button by its tokens (Composer.css `.composer-send`), at the control height */
+.block-comment-save {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: var(--control-h);
+  height: var(--control-h);
+  padding: 0;
+  background: var(--primary);
+  border: var(--hairline) solid var(--primary);
+  border-radius: var(--radius-pill);
+  color: var(--primary-text);
+  cursor: pointer;
+  transition:
+    background-color var(--dur-fast) var(--ease-out),
+    border-color var(--dur-fast) var(--ease-out);
+}
+
+.block-comment-save svg {
+  width: var(--icon-size);
+  height: var(--icon-size);
+}
+
+/* a new comment with nothing in it: nothing to save */
+.block-comment-save:disabled {
+  opacity: 0.7;
+  cursor: default;
+}
+
+@media (hover: hover) {
+  .block-comment-save:hover:not(:disabled) {
+    background: var(--primary-hover);
+    border-color: var(--primary-hover);
+  }
 }
 
 /* The Comment button over text selected in a final reply (ChatView.tsx): the app's small floating
@@ -231,13 +303,13 @@
   }
 
   /* fingers: the card's buttons and the form's reach the touch target (the header grows with them) */
-  .block-comment-action {
+  .block-comment-action,
+  .block-comment-save {
     width: var(--touch-target);
     height: var(--touch-target);
   }
 
   .block-comment-actions .btn {
     height: var(--touch-target);
-    padding: 0 var(--space-3);
   }
 }

@@ -4,13 +4,14 @@
  * `.block-comment-notes`). The card has no author: a "Pending" badge, as the comment goes with the
  * next message, an Edit and a Delete button, and the comment in full; the text it is on is the
  * highlight, not repeated in the card. The form is a card of the same frame holding the field,
- * with Cancel and Save; the text it is on also stays highlighted in the reply
- * (lib/commentHighlight.ts). It is in the chat's flow, not over it, so
- * the chat stays usable: Escape from inside it and Cancel give up, Save and Cmd/Ctrl+Enter save, a
- * blank comment deletes (`useCommentDraft`), and a press outside does not close it.
+ * with Cancel and Save, as one surface like the message box (BlockComments.css); the text it is on
+ * also stays highlighted in the reply (lib/commentHighlight.ts). It is in the chat's flow, not over
+ * it, so the chat stays usable: Cancel gives up, and so does Escape from inside it while nothing was
+ * typed (what was typed is kept: `commentTyped`), Save and Cmd/Ctrl+Enter save, a blank comment
+ * deletes (`useCommentDraft`), and a press outside does not close it.
  */
 import { createContext, useEffect, useLayoutEffect, useRef, type FocusEvent, type PointerEvent } from "react";
-import { Pencil, Trash2 } from "lucide-react";
+import { Check, Pencil, Trash2 } from "lucide-react";
 
 import "./BlockComments.css";
 
@@ -18,6 +19,7 @@ import { quoteExcerpt, type BlockComment, type CommentTarget } from "../lib/bloc
 import { activateComment } from "../lib/commentHighlight.ts";
 import { firstEditButton, focusAfter, paneComposer, restoreFocusTarget } from "../lib/commentSelection.ts";
 import { useT } from "../lib/i18n.ts";
+import { isMacPlatform } from "../lib/shortcuts.ts";
 import { CommentField, useCommentDraft } from "./CommentDraft.tsx";
 
 /**
@@ -125,7 +127,7 @@ export interface CommentFormProps {
   anchors: readonly string[];
 }
 
-/** The form for a new comment or an edit, in a card of the cards' frame. */
+/** The form for a new comment or an edit: one input surface, the field with Cancel and Save inside it. */
 export function CommentForm({ edit, replaces, anchors }: CommentFormProps) {
   const t = useT();
   const near = replaces === null ? [] : [replaces.anchor, ...focusAfter(anchors, replaces.anchor)];
@@ -139,6 +141,7 @@ export function CommentForm({ edit, replaces, anchors }: CommentFormProps) {
     startValue: edit.draft(),
     onText: edit.text,
   });
+  const saveTitle = `${t("Save")} (${isMacPlatform() ? "⌘↵" : "Ctrl+Enter"})`;
   const { attach, id } = edit;
   useLayoutEffect(() => attach(id), [attach, id]);
   // brought into view as it opens, after the field took the focus: the least scrolling that shows it
@@ -154,8 +157,10 @@ export function CommentForm({ edit, replaces, anchors }: CommentFormProps) {
     >
       <CommentField draft={draft} />
       <div className="block-comment-actions">
-        <button type="button" className="btn" onClick={edit.close}>{t("Cancel")}</button>
-        <button type="button" className="btn btn-primary" onClick={draft.save}>{t("Save")}</button>
+        <button type="button" className="btn btn-ghost" onClick={edit.close}>{t("Cancel")}</button>
+        <button type="button" className="block-comment-save" aria-label={t("Save")} title={saveTitle} disabled={!draft.canSave} onClick={draft.save}>
+          <Check aria-hidden="true" />
+        </button>
       </div>
     </div>
   );

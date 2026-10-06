@@ -277,8 +277,9 @@ export function Composer({
     };
     // keydown on the document in the capture phase: after the window-capture Escape owners (the palette, dialogs, menus,
     // dictation, the modal editor), which stop the event first, and before React's handlers. An open edit form the walk
-    // stands on gives up on Escape from its own key handler, so this has always run before it: the mark goes, the focus
-    // moves to the walk control, and the form then closes without holding the focus, leaving it there
+    // stands on gives up on Escape from its own key handler only while nothing was typed in it, so this has always run
+    // before it: the mark goes, the focus moves to the walk control, and an untouched form then closes without holding the
+    // focus, leaving it there. A form with typed text is left open (its Escape does nothing, so the event is not stopped)
     document.addEventListener("click", onClick, true);
     document.addEventListener("keydown", onKeyDown, true);
     return () => {
@@ -335,8 +336,8 @@ export function Composer({
       chat.scrollBy({ top: walkScroll(marked, note.getBoundingClientRect(), { top, height: chat.clientHeight }), behavior });
     }
     // the note is a group with its own name: with the focus on it a screen reader reads the comment, and Tab reaches its buttons.
-    // An open edit form is a stop too: its field takes the focus, so Escape there is the form's own (it gives up, and the
-    // focus goes back to this control, as from any note)
+    // An open edit form is a stop too: its field takes the focus, so Escape there is the form's own (it gives up while
+    // nothing was typed; either way the focus goes back to this control, as from any note)
     (note.querySelector<HTMLElement>("textarea") ?? note).focus({ preventScroll: true });
   };
   const mounted = useRef(true);
