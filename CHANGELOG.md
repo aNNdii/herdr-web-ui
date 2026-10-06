@@ -19,17 +19,28 @@ between releases do not reach them. Remote-PC runtime bundles are versioned sepa
 - A task list (`- [x] done`, `- [ ] open`) in the chat and in a Markdown preview shows a checked or
   empty box instead of the brackets.
   ([#429](https://github.com/devswha/herdr-web-ui/pull/429) by @aNNdii)
-- Comment on single parts of an agent's final reply in the chat: a paragraph, a heading, a list
-  item, a code block, a table or a formula. Point at a part (or tap it on a phone) and its comment
-  button appears; the comment is written in a small dialog that quotes the part. A commented part
-  is marked in the chat and carries its comment in a note under it; a chip in the message box's
-  status row counts them and walks to them. The next message sends them first, each quoting
-  its part, in reading order. A command or an answer to the agent's open
-  question goes without them; they wait for the next message. They only ever go to an agent: when
-  none runs in the pane, what is typed goes alone (a shell would run the quoted lines), and its
-  terminal output takes no comments. A message with comments queued during a turn keeps that
-  rule: if the agent is gone by the time it is sent, it is refused and stays in the queue rather
-  than being typed into the pane. Comments are kept per pane on this device.
+- Comment on any text in an agent's final reply in the chat by selecting it: a **Comment**
+  button floats where a mouse let go (below the selection on a touch screen, clear of its
+  handles). It opens a form in the chat, right under the paragraph, list item or block where the
+  selection ends, with **Cancel** and **Save**; the selected text stays highlighted while it is
+  written. Several selections in one paragraph are several comments, and one selection over
+  several paragraphs or list items is one comment. The commented text is highlighted in place (a
+  tint and an underline in the accent colour), and each comment is a card under that part, tinted
+  with the accent, with a **Pending** badge, the comment in full and buttons to edit or delete it.
+  Pointing at a card, or focusing it, brings its text up and fades the other comments' marks. In
+  the message box the comments show as a bar below any attached files, above the text ("3 comments
+  on the reply"): a tap on it walks to them, one comment per tap, and its X removes them all, with
+  an undo in the same place for ten seconds. The bar's icon is accent-coloured while the comments
+  go with the next message and dim, with the bar saying "waiting" and the reason in its name, while
+  they wait. With the keyboard alone, text can be selected for a comment only through the
+  browser's caret browsing (F7). The next message sends the comments first, each quoting its
+  selected text, in reading order. A command or an answer to the agent's open question goes without
+  them; they wait for the next message. They only ever go to an agent: when none runs in the pane,
+  what is typed goes alone (a shell would run the quoted lines), and its terminal output takes no
+  comments. A message with comments queued during a turn keeps them as its own, shows their count
+  in its row and sends them when you press **Send now**; if the agent is gone by then, it is
+  refused and stays in the queue rather than being typed into the pane, and so it is when a Codex
+  is busy with its own queued questions. Comments are kept per pane on this device.
   ([#409](https://github.com/devswha/herdr-web-ui/pull/409) by @aNNdii)
 
 ### Changed

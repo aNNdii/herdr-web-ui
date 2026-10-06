@@ -33,13 +33,14 @@ export function composerPayload(text: string, bracketedPaste: boolean): string {
 /** Why a composer message did not go (SubmitResult's code): the composer keeps the text and says this. */
 /** The server refused the message before any of it reached the pane: nothing was typed. */
 export function submitNotTyped(code: string): boolean {
-  return code === "agent_blocked" || code === "read_only" || code === "submit_timeout";
+  return code === "agent_blocked" || code === "read_only" || code === "submit_timeout" || code === "agent_only_busy";
 }
 
 export function submitNote(code: string, message: string): string {
   if (code === "agent_blocked") return t("Not sent: the agent is waiting for an answer in the terminal. Answer it first.");
   if (code === "read_only") return t("Not sent: this view only watches the pane.");
   if (code === "agent_only") return t("Not sent: comments go to an agent only, and none runs in this pane now.");
+  if (code === "agent_only_busy") return t("Not sent: the agent is busy with questions it queued. Nothing was typed. Send it again when it is ready.");
   if (code === "agent_only_unsupported") return t("Not sent: update this PC to send comments.");
   if (code === "submit_timeout") return t("Not sent: it waited too long behind an earlier message, and nothing was typed. Send it again.");
   if (code === "disconnected" || code === "timeout") return t("Not confirmed: the pane did not confirm this message. Check the terminal before sending it again.");

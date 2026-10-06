@@ -48,8 +48,6 @@
   overscroll-behavior: contain;
   padding: var(--space-4) var(--space-4) var(--space-5);
   background: var(--bg);
-  /* blocks of a reply place their comment "+" by the room beside the column (BlockComments.css) */
-  container: chat / inline-size;
 }
 
 /* From 769px the header over the chat has no bar and no rule (styles.css): the transcript

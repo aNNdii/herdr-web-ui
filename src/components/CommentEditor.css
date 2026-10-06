@@ -2,11 +2,10 @@
   width: min(100%, 560px);
 }
 
-/* the block quoted, as the chat shows a "> quote" and as the message will carry it: context for
-   the comment, not the text being written; a long one scrolls */
+/* the selected text or the block quoted, as the chat shows a "> quote" and as the message will
+   carry it: context for the comment, not the text being written. As tall as its text: no frame of
+   its own scrolls, the dialog's body does once the dialog reaches its own height limit */
 .comment-editor-block {
-  max-height: 40dvh;
-  overflow: auto;
   margin-bottom: var(--space-3);
   padding: var(--space-2) var(--space-3);
   border-left: var(--rail-w) solid var(--border-strong);
@@ -14,6 +13,22 @@
   /* the page's own ground, darker than the dialog: the quote reads as quoted, and stays legible */
   background: var(--bg);
   color: var(--text);
+}
+
+/* the quote is context, not a widget: a code box and a table sit in it without their own frame */
+.comment-editor-block .markdown-code {
+  margin-bottom: 0;
+  border: 0;
+  border-radius: 0;
+}
+
+.comment-editor-block .markdown-table-wrap {
+  margin-bottom: 0;
+}
+
+.comment-editor-block th,
+.comment-editor-block td {
+  border-width: 0 0 var(--hairline) 0;
 }
 
 .comment-editor-field {

@@ -287,7 +287,7 @@ Comfortable values are `:root`; the final column is the complete compact overrid
 | `--ring` | `2px solid var(--accent)` | Global `:focus-visible` outline |
 | `--ring-offset` | `2px` | Outline offset |
 | `--z-banner` | `5` | Terminal banners |
-| `--z-popover` | `10` | Composer completions |
+| `--z-popover` | `10` | Composer completions, the Comment button and the comment popover |
 | `--z-scrim` | `15` | Mobile drawer scrim |
 | `--z-drawer` | `20` | Mobile drawer |
 | `--z-modal` | `30` | Dialog and palette scrims |
@@ -591,21 +591,145 @@ One set for both themes: the card is island black wherever it shows.
   column is never narrower than its longest word, and a table without room scrolls sideways in
   its own box.
   Thinking renders as a folded block only when **Show thinking** is enabled.
-- Block comments (`BlockComments.css`): every part of a final reply (paragraph, heading, list item,
-  code block, table, display formula, a whole blockquote) takes a comment. Hovering a part for
-  150ms tints it with an 8% `--accent` mix and shows its comment button (`MessageSquarePlus`,
-  28px, `--radius-sm`); on a touch screen a tap chooses the part. The tint starts `--space-2`
-  before the text column, a list item's marker included, so the tints, bars and buttons of all
-  parts line up at any list depth. Beside a chat column of 880px and more the button sits in the
-  left gutter, `--space-2` from the tint, as a bare icon that takes `--bg-hover` under the pointer,
-  so no text moves; narrower, it is a hairline `--bg-panel` badge on the part's top right corner,
-  with a tap area of `--touch-target`. A commented part gets an `--accent` bar of `--rail-w` on the
-  tint's left edge. Its comment is the reader's own note, so it is a box right under the part
-  (`--accent-tint`, `--radius-sm`, `--text` in `--fs-sm`, clamped to two lines, starting where the
-  tint does), not a dim caption; a click there edits it, and Delete is in the editor.
-- The comment editor is a 560px `.modal` (a bottom sheet on a phone): the part quoted on `--bg`
-  with a `--border-strong` rail, a field that grows from one line to four, then Delete (ghost, on
-  the left), Cancel and Save.
+- Block comments (`BlockComments.css`, `CommentPopover.css`): a comment is made by selecting text in
+  a final reply, and only so: there is no button on a part, no hover state and no tap that chooses a
+  part. A selection in one part (a paragraph, heading, list item, code block, table, display
+  formula, a whole blockquote) is the comment's text; several selections in one part are several
+  comments. A selection that runs over several parts (paragraphs, list items, a heading and the
+  paragraph after it) is still ONE comment: all of it is quoted (the parts' text, one line break
+  between them) and highlighted, and its bubble hangs under the part where the selection ends. An
+  end on a rule, or at the very start of the next part (a triple click), ends at the part before. A
+  user message, a live reply and a work block's narration take none, and a selection that starts
+  outside a reply is not a comment. There is no keyboard-only way to comment besides the browser's
+  caret browsing (F7), a decision made for this feature.
+- The Comment button (`.comment-selection`, in `ChatView`): once a selection ends (a mouse button
+  released, a touch handle let go, the keyboard's selection keys) a `.btn` pill with a
+  `MessageSquarePlus` icon and **Comment** (`--bg-elevated`, `--fs-sm`, `--radius-pill`,
+  `--shadow-card`, `--z-popover`) floats where the user's attention is. It sits in the scrolling
+  view, so it scrolls with the text, stays `--space-2` inside the view's sides, and flips to the
+  other side of the line only where its own has no room.
+  - With a mouse or a pen it waits for the button to be released, is centred on the release's x and
+    sits `--space-2` above the selection's line under the release's y (the nearest line when the
+    release is between lines, or outside the text).
+  - On a touch screen it is `--touch-target` tall and 28px *below* the selection's last line, clear
+    of the selection handles and of the system menu, which sits above.
+  - A selection made with the keyboard (no release) puts it over the last line, centred on its
+    right end, `--space-2` above it. A selection that changes (the keyboard extends it) takes this
+    rule too; the same text reached otherwise (a reflow, the keyboard over a blank or a rule) keeps
+    the release's place while the release's y is still on a line of the selection (a touch release
+    always).
+
+  The lines are those of the whole selection, measured on its text only (not on the boxes of whole
+  parts, the bubbles, a code block's header or its controls): a drag over several parts puts the
+  button on the line the pointer let go on, in the last, or above or below the selection's last
+  line. It does not move while the selection stays the same (a new release that changes the
+  selection places it again). A press on it keeps the selection, and its own label cannot be
+  selected. It goes when the selection collapses, leaves the reply or an editor opens, and stays
+  hidden while the popover is open.
+- The text of every comment is highlighted for as long as the comment exists (CSS Custom Highlight,
+  `lib/commentHighlight.ts`), as a reviewer marks text in a document: `::highlight(block-comment)`
+  is `--accent` at 18% over transparent with a 2px `--accent` underline (the thickness is a
+  declaration of its own, so a browser that ignores it inside a highlight keeps the rest). It is
+  translucent, so a code block's, table's or blockquote's own fill shows through, in every theme.
+  - A comment on a whole part (stored by an earlier version) highlights all of that part's text.
+  - A spanning comment gets one range per part it covers: the first from where the selection
+    starts, the parts in between whole, the last up to where it ends. There is never one range
+    across parts, so the bubbles between them are not painted. A formula is highlighted whole, its
+    glyphs included.
+  - Nothing is drawn beside the text: no bar, no rail, no tint on the part. A commented part looks
+    as an uncommented one.
+  - Where the browser lacks the API there is no highlight, and the bubbles still show. A selection
+    in a code block that is still folded is highlighted only while it lies in the visible head.
+- Stronger: `::highlight(block-comment-active)` (the comment whose bubble the pointer is over or the
+  keyboard focus is on; a focus left by a click does not count), `block-comment-current` (the
+  composer's walk) and `block-comment-pending` (the selection a comment is being written on, below)
+  are each `--accent` at 20%, painted over the base 18%, so together about 35%. The current one is
+  painted over the active and the pending one.
+- One speech bubble per comment hangs under its part (under the last part a spanning selection
+  reaches), in reading order: the text's order, not the order the comments were written in, and a
+  spanning comment sorts by where it starts. The part and its bubbles read as one group, the part's
+  usual bottom margin below the last. The bubble is a `<button>` (`cursor: pointer`), a small card:
+  `--bg-elevated` fill, a `--hairline` `--border` edge (`--border-strong` under a pointer that
+  hovers), `--radius-md`, padding `--space-1` `--space-2`, `--fs-sm` at `--lh-base`, the comment in
+  `--text` clamped to two lines, `fit-content` wide up to 80% of the part, with a 14px
+  `MessageSquare` in `--text-dim` (`--accent` on hover and focus-visible). The text it is on is the
+  highlight, so the bubble shows no excerpt. Its accessible name keeps it, "Comment on “excerpt”:
+  text" (the excerpt cut at 32 characters; a comment on a whole part has its text as its name), and
+  its title is "Edit comment". A click or tap edits the comment. One layout at every width. On a
+  coarse pointer the bubble (about 30px tall) gets a `--touch-target` tap area: a transparent
+  `::after` centred on it, so its look and its tail (`::before`) do not change.
+- The bubble's tail points up at where the highlight ends: a square of `--tail-size` (`--space-2`)
+  turned 45° on the bubble's top edge, in the bubble's fill with the bubble's border on its two
+  outer sides. It is placed by script (`lib/commentHighlight.ts`, whenever the highlights are
+  rebuilt and whenever the transcript's size changes):
+  - The bubble is moved right (a relative offset, so it is never narrowed) until its tail sits at
+    the x where the highlight's last line ends (a formula by its glyphs); a comment on a whole
+    part, or one whose text is not found, puts it `--space-3` after the part's text start. The
+    bubble stays inside the part's width.
+  - The tail stays `--radius-md` + `--tail-size` in from either side of the bubble, so it is never
+    on a rounded corner; a bubble narrower than that gets it in its middle.
+  - Several bubbles of one part stack, each placed on its own. The tail rises over the bubble's
+    edge by `--tail-rise` (`--tail-size` × 0.71), so the group's top margin and the gap between two
+    bubbles are `--space-1` + `--tail-rise`: the visible gap is a little more than `--space-1`, and
+    a tail never cuts into the bubble or the text above it.
+  - The tail does not follow a horizontal scroll of a wide table inside its part: the text
+    scrolls, the bubble stays.
+- The current comment: when the composer's context bar walks to a bubble (below), that bubble is
+  `is-current` until the next step, a click or tap anywhere else (a touch scroll or a scrollbar
+  drag is not one), or Escape; one at a time. Its border is `--accent`, its tail's too, and its
+  icon, with a `--dur-fast` `--ease-out` transition (one shot, no animation); its text takes the
+  current highlight. The walk goes in the order the bubbles stand in the chat. The chat scrolls so
+  that the comment's text and its bubble are in the view's middle together; when both are taller
+  than the view, the bubble's bottom goes to the view's bottom, so the bubble the walk focuses is
+  always on screen. The bubble takes the keyboard focus (without scrolling): Enter edits the
+  comment, a screen reader reads it. The bar sits after the whole chat in the tab order, so Escape,
+  pressed with the focus on the current bubble, ends the mark and returns the focus to the bar's
+  walk button: Enter there walks on.
+- The comment editor has two forms, chosen when it opens by `(pointer: fine)` and not
+  `(pointer: coarse), (max-width: 768px)` (the query of the phone layout in `styles.css`):
+  - **Popover** (`CommentPopover.tsx`, `.comment-popover`): a small card in the scrolling chat
+    view, so it scrolls with the text, on `--bg-elevated` with a `--hairline` `--border` edge,
+    `--radius-lg`, `--shadow-card`, padding and gap `--space-2`, `--fs-sm`, `--z-popover`. It is
+    `min(360px, 100% − 2 × --space-2)` wide, and it shows no quote: the selection stays visible as
+    a highlight. For a new comment it opens where the Comment button was (its top-left at the
+    button's), for an existing one 4px under the bubble, left-aligned with it. It is placed inside
+    the view (`--space-2` from its sides) and goes above its anchor where there is no room below.
+    It follows its anchor when the text above rewraps or grows, and grows away from the anchor
+    while typing.
+  - Its field is the modal's: it grows from one line to four, takes the focus with the caret at
+    the end, and scrolls after that. The footer reads **Delete** (ghost, on the left, only for an
+    existing comment, no confirmation), then **Cancel** and **Save** (primary) on the right, the
+    app's `.btn` at `--control-h` − `--space-2` tall with `--space-2` of side padding.
+  - `role="dialog"` named **Comment**, not modal: no scrim and no inert page. Tab cycles inside it,
+    and Escape works only while the focus is in it. Cmd/Ctrl+Enter or **Save** saves, a blank
+    comment deletes, an unchanged one only closes.
+  - A press outside closes it only while its text is exactly what it opened with; with something
+    typed it stays, and so does the text, and a press on a bubble then only puts the focus back in
+    its field. A press on the bubble an untouched popover opened from closes it (a toggle). A
+    press on the chat's own scrollbar is scrolling and does not close it; one in the chat's padding
+    does. Only
+    one popover is open per chat; two panes can each hold one, when one of them holds text.
+  - The focus returns to the bubble after an edit, and to the pane's composer after a new or a
+    deleted comment (the popover is for a mouse or a pen), only if the popover still had the focus or nothing had: it never takes it
+    from where the user went (another pane's composer, the terminal).
+  - For a new comment the field takes the browser's selection away, so the selected text shows
+    as `block-comment-pending` (over the base highlight, the same segments a saved comment gets,
+    several parts included) until the comment is saved or given up.
+  - **Modal** (`CommentEditor.tsx`, a 560px `.modal`; a bottom sheet at 640px and below): for a
+    coarse pointer or a window of 768px or less, and for a comment whose part is not in the chat
+    (reached from the composer's walk). It quotes what was selected as plain text, exactly, line
+    breaks kept, on `--bg` with a `--border-strong` rail, as the message will carry it (a comment
+    on a whole part quotes the part, drawn). The quote is context, so it has no controls: no copy
+    button, no fold (**Show all N lines**), no link or file chip, no frame on a code box or a table
+    (a `--hairline` between table rows stays), and nothing in it is a Tab stop. It is as tall as
+    its text, with no scrolling frame of its own: the dialog grows to its limit (`.modal`, 720px;
+    92% as a sheet) and its body scrolls past that. Under it
+    the same field and the same buttons, **Delete**, **Cancel** and **Save**; the dialog's title
+    says what it is (**Comment**). There is no pending highlight: the quote is the context. On
+    close the focus goes back to the bubble that opened it; where that is gone (a deleted
+    comment), a pointer that hovers gets this pane's composer, and on a touch screen
+    (`(pointer: coarse)`) a deleted comment lets the focus go, so no keyboard rises unasked.
+  - Saving a new comment lets the selection go; editing one leaves whatever is selected.
 - Auto-follow stops when the reader scrolls up; later output raises a **New messages** pill.
 - An empty chat is greeted from the composer (`.composer-greeting`, below), only where the agent's
   conversation was read and holds no turn. A chat still loading, one whose read failed, an agent
@@ -816,17 +940,61 @@ One set for both themes: the card is island black wherever it shows.
   to the message box (a touch press moves no focus, so no keyboard is raised). The placeholder is
   just `Message <agent>…`. The message is typed at `--fs-chat` on `--lh-code` with a mouse
   (`(hover: hover) and (pointer: fine)`) and at `--fs-input` otherwise.
-- Block comments waiting for the next message are shown where they were written, under their part
-  in the chat. The composer only counts them: a chip in the status content, after the model pill
-  (hairline, `--radius-sm`, `--fs-xs`, a line high) with an `--accent` speech bubble
-  and edge, so they take no row of their own and the box is untouched. A tap walks the chat to
-  the next commented part, round again; a comment whose part is not in the chat is a stop of
-  its own that opens its editor, so the chip reaches every comment it counts. On touch the chip keeps its size and its tap area grows to `--touch-target`
-  (the status content clips its sides only). The chip counts every stored comment; the Send and Queue
-  buttons carry a small count badge (`--bg-elevated`, `--accent` edge, `--fs-2xs`, top right) of
-  the comments this send takes, with the number in their name and tooltip: it is where the eyes
-  are when the message goes out, and comments stored for a pane outlive a reload. No badge when
-  they wait (a command, an answer, no agent).
+- Block comments waiting for the next message are shown where they were written, as inline cards
+  under their part in the chat. The composer holds them as one context bar, a row between the
+  attachment strip and the message (rows: attachments, comments, message, controls; the DOM is in
+  the same order), in the grammar of a "Replying to…" bar (`.composer-comments-bar`). Nothing of
+  them shows above the card (no pill, no row), the control row and status content are exactly as
+  without comments, and the attachment strip stays the files' alone, as on `main`. The row takes
+  no space when there are no comments.
+  - Place: a box in the card's content column, the "reply preview" of messaging apps, with no rail.
+    Its left and right edges line up with the attachment tiles' and the message's text (`--space-5`
+    in from the card's inner edges, `--space-4` on a phone, under 480px), `--space-2` below the
+    strip, or `--space-3` from the card's top (the strip's own top padding) when no file is attached.
+  - Look: `--radius-lg`, filled with `--bg-hover` (always, subtle). The message below gives up part
+    of its top padding while the bar is there (`--space-2`, and its minimum height shrinks by the
+    same amount), so its first line is `--space-2` under the box. The field's own box is that much
+    shorter; the space under its text is not: the controls row and the first line's distance to it
+    stay as they are, so nothing below the bar moves when it comes or goes.
+  - Inside, with `--space-1` above, below and at the right and `--space-3` before the icon: a 14px
+    `MessageSquare`, the sentence in `--fs-sm` on one line (it ellipsizes, the X stays), and an X
+    icon button tucked into the right padding. The box is one line, `--control-h` tall
+    (`--touch-target` on a coarse pointer), in both states.
+  - Under a pointer that hovers, the whole box takes a slightly stronger fill (`--bg-hover` mixed
+    6% with `--text`) and the walk button has none of its own (no box in a box); the X and Undo
+    take a stronger one (12%). Focus rings are the app's `:focus-visible` ring on the walk button,
+    the X and Undo; the box clips nothing.
+
+  Two looks, told by words and not only colour:
+  - **Goes with the next send** (`is-going`): `--accent` icon, the sentence `3 comments on
+    the reply` ("1 comment on the reply") in `--text`.
+  - **Waits** (`is-waiting`: a command, an answer to an open question, no agent): `--text-dim` icon
+    and sentence, which says `3 comments waiting`; the reason ("Comments stay
+    here: they are not sent with a command" and its siblings) is in the button's name and title.
+
+  The sentence is one button: a tap walks the chat to the next bubble of this pane's own chat
+  (several panes can be mounted), round again, and makes it the current comment (above), one stop
+  per bubble, so a part with three comments is three stops. Its name is the sentence (while waiting,
+  with the reason after it), and its title adds "Go to the next comment". The button fills the box's
+  full height (it takes the box's padding as negative margin, as the X does), so a tap anywhere in
+  the box's height lands on it: `--touch-target` tall on a coarse pointer. A comment whose part is
+  not in the chat (older history not loaded, a reply that changed) is a stop of its own that opens
+  its editor (the modal), so the bar reaches every comment it counts. The bar counts every stored
+  comment, and comments stored for a pane outlive a reload.
+
+  The X is a button of its own, "Remove all comments": it drops every comment of the pane at once
+  and clears the current mark. A confirmation would add a step to every removal that was meant and
+  is clicked through by habit, so the removal is undone instead (an undo costs nothing when it was
+  meant): the box turns, **in its own place and at its height**, into the undo bar:
+  `Comments removed: 3` in `--text` and a text button **Undo**, no X, and the focus moves to Undo,
+  which is described by that sentence, so a screen reader reads "Undo, Comments removed: 3". A tap
+  on Undo restores the comments as they were (one written on the same block meanwhile wins) and
+  the focus goes back to the walk button. The undo bar goes when the message is sent, a new comment
+  is written, the pane changes or after 10 seconds; if it has the focus then, the message box takes
+  it on a pointer that hovers, and on a touch screen (`(pointer: coarse)`) the focus is only let
+  go, so no keyboard rises unasked. Send and Queue carry no badge: the number of comments *this*
+  send takes is in their name and tooltip ("Send message · Comments to send: 3"), and none is named
+  while the comments wait.
 - Not connected, the sentence `Reconnecting… message held here, never queued` is said once and
   whole: it is the placeholder while the box is empty and moves into the status content once
   there is a draft (`composerStatusHint`), on a phone too. A sentence there (this one, or
@@ -850,7 +1018,17 @@ One set for both themes: the card is island black wherever it shows.
   `Held until the agent is ready`, plus `· 2 messages` from two; a translation too long for a
   phone's column takes a second line, it is never cut), then a row per message: its text, still
   a box to edit (transparent until focused, up to four lines, two at `480px` and below),
-  `Send now` and `Discard`. Hairlines between rows run the column's width; every line of text starts `--space-3`
+  `Send now` and `Discard`. A message queued with comments keeps them as a snapshot taken when
+  Queue was pressed: the row shows and edits only what was typed, and before `Send now` sits the
+  comment chip in its going state (`--accent-tint`, `--accent` icon, the count; a `role="img"`
+  that only informs, named "Comments with this message: n", centred on the row's own height). A
+  message of comments alone shows `Comments only` in `--text-dim` in its empty box, and `Send now`
+  stays enabled. `Send now` composes the comments and the typed text at that moment, as the
+  composer does, and a message over the length limit is not sent: the row says "Too long to send.
+  Shorten the message or remove comments." `Discard` drops the message with its comments.
+  A message with comments, sent from here or from the box, goes agent-only; the server refuses it
+  with `agent_only_busy` while a Codex is busy with its own queued questions, so it is never typed
+  into them, and the message and its comments stay. Hairlines between rows run the column's width; every line of text starts `--space-3`
   in. The list, not the group, has the height limit (two and a half rows, then it scrolls), and it
   gives way before the caption does. "Queued messages (n)" and each row's "Message n" stay for
   assistive tech only (`.visually-hidden`).
