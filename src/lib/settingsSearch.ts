@@ -4,7 +4,7 @@
  */
 
 /** Every page, in the navigation's order. The id is the deep link's `<page>`. */
-export const SETTINGS_PAGES = ["appearance", "terminal", "chat", "voice", "notifications", "shortcuts", "devices", "remote-pcs", "usage", "about"] as const;
+export const SETTINGS_PAGES = ["appearance", "terminal", "chat", "voice", "notifications", "files", "shortcuts", "devices", "remote-pcs", "usage", "about"] as const;
 export type SettingsPageId = (typeof SETTINGS_PAGES)[number];
 
 const HASH_PREFIX = "#settings";

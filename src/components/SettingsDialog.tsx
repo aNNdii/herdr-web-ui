@@ -6,7 +6,7 @@
  * The open page is in the address (#settings/<page>, lib/settingsSearch.ts) until it closes.
  */
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { Bell, ChartLine, Check, ChevronLeft, ChevronRight, Contrast, Info, Keyboard, MessageSquare, Mic, Monitor, Search, Smartphone, SquareTerminal, X, type LucideIcon } from "lucide-react";
+import { Bell, ChartLine, Check, ChevronLeft, ChevronRight, Contrast, FileText, Info, Keyboard, MessageSquare, Mic, Monitor, Search, Smartphone, SquareTerminal, X, type LucideIcon } from "lucide-react";
 
 import "./SettingsDialog.css";
 
@@ -14,6 +14,7 @@ import type { AppActions } from "../lib/actions.ts";
 import { useT } from "../lib/i18n.ts";
 import { runningAppVersion } from "../lib/runningVersion.ts";
 import { useSettings } from "../lib/settings.ts";
+import { formatBytes } from "../lib/bridgeProgress.ts";
 import { parseSettingsHash, searchWords, settingsHash, type SettingsPageId } from "../lib/settingsSearch.ts";
 import { formatKeys } from "../lib/shortcuts.ts";
 import type { UpdatesModel } from "../lib/updates.ts";
@@ -23,6 +24,7 @@ import { AboutPage } from "./settings/AboutPage.tsx";
 import { AppearancePage } from "./settings/AppearancePage.tsx";
 import { ChatPage } from "./settings/ChatPage.tsx";
 import { DevicesPage } from "./settings/DevicesPage.tsx";
+import { FileViewerPage } from "./settings/FileViewerPage.tsx";
 import { NotificationsPage } from "./settings/NotificationsPage.tsx";
 import { RemotePcsPage } from "./settings/RemotePcsPage.tsx";
 import { SettingsPage, SettingsSearchContext, useMediaQuery } from "./settings/SettingsUi.tsx";
@@ -181,6 +183,7 @@ function SettingsWindow({ onClose, actions, updates, auth, herdrVersion, onEnabl
       case "chat": return <ChatPage />;
       case "voice": return <VoicePage />;
       case "notifications": return <NotificationsPage onEnableNotifications={onEnableNotifications} />;
+      case "files": return <FileViewerPage />;
       case "shortcuts": return <ShortcutsPage />;
       case "devices": return <DevicesPage auth={auth} />;
       case "remote-pcs": return <RemotePcsPage machines={machines} onAddPc={actions.openAddPc} onSetup={(machine, update) => onSetupMachine?.(machine, update)} onRemoved={(id) => onMachineRemoved?.(id)} />;
@@ -303,6 +306,10 @@ function useNav(machines: readonly Machine[], updates: UpdatesModel): Array<{ ti
         ? join(settings.alertInput && t("Needs input"), settings.alertDone === "long" ? t("Long turns") : settings.alertDone === "always" ? t("Every turn") : null) ?? t("Off")
         : t("Off on this device"),
     },
+    files: {
+      icon: FileText, title: t("File viewer"), subtitle: t("Files opened from a pane: how they read, and how much of a large one loads."), keywords: "file viewer files code markdown",
+      summary: join(settings.wrapCode && t("Wrap long lines"), formatBytes(settings.textLoadLimit)),
+    },
     shortcuts: {
       icon: Keyboard, title: t("Keyboard shortcuts"), subtitle: t("Some keys are reserved by the browser. Off sends the keys to the terminal."), keywords: "keyboard shortcuts keys hotkeys",
       summary: overrides === 0 ? t("Defaults") : t("{n} changed", { n: overrides }),
@@ -327,7 +334,7 @@ function useNav(machines: readonly Machine[], updates: UpdatesModel): Array<{ ti
   const item = (id: SettingsPageId): NavItem => ({ id, ...byId[id] });
   // in SETTINGS_PAGES' order (lib/settingsSearch.ts)
   const groups: Array<{ title: string; ids: SettingsPageId[] }> = [
-    { title: t("This device"), ids: ["appearance", "terminal", "chat", "voice", "notifications", "shortcuts"] },
+    { title: t("This device"), ids: ["appearance", "terminal", "chat", "voice", "notifications", "files", "shortcuts"] },
     { title: t("Server & connections"), ids: ["devices", "remote-pcs", "usage"] },
     { title: "herdr web ui", ids: ["about"] },
   ];

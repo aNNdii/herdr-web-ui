@@ -1093,7 +1093,7 @@ One set for both themes: the card is island black wherever it shows.
 - Navigation (`.settings-nav`): the title, the search field (`.settings-search`, a `/` keycap;
   `/` moves there from anywhere not editable), then three groups of pages, each a dim semibold
   `--fs-xs` heading over 36px items (lucide glyph and name, `--fs-sm`): **This device** (Appearance,
-  Terminal, Chat, Voice input, Notifications, Keyboard shortcuts), **Server & connections** (Phone &
+  Terminal, Chat, Voice input, Notifications, File viewer, Keyboard shortcuts), **Server & connections** (Phone &
   devices, Remote PCs, Plan usage) and **herdr web ui** (About & updates). Items are 2px apart, so a
   hovered item's fill never touches the open one's. The open page's item (`aria-current="page"`)
   takes `--bg-hover`, a `--rail-w` `--accent` rail on its left edge and an `--accent` glyph, as
@@ -1154,6 +1154,8 @@ One set for both themes: the card is island black wherever it shows.
   audio goes, the OpenAI key with Save key and Remove key); tidying, while the mic button is on.
 - Notifications: this device's push state with Send test (and **Turn alerts on again** when it
   needs it), what to be told about, and the in-app banner and sound.
+- File viewer: Wrap long lines and Markdown width (Default / Full width), then Large files: Load
+  text files up to and Highlight syntax up to (256 KB / 1 MB each).
 - Keyboard shortcuts: one row per shortcut with its key select (Default, Off, any free
   Mod+Shift+key), Dictate's fixed keycaps, and Reset all shortcuts.
 - Phone & devices: the address a phone can open (or the step still missing), Keep screen on,
