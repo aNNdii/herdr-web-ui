@@ -262,7 +262,7 @@ describe("numbered lists as agents write them", () => {
     const source = "1. first\n\n   | a | b |\n   |---|---|\n   | 1 | 2 |\n\n1. second\n1. third";
     expect(lists(source)).toEqual([{ start: 1, items: 3 }]);
     const html = render(source);
-    expect(html).toContain('<ol class="markdown-list"><li><span>first</span><div class="markdown-block"><div class="markdown-table-wrap"><table>');
+    expect(html).toContain('<ol class="markdown-list"><li><div class="markdown-item"><span>first</span></div><div class="markdown-block"><div class="markdown-table-wrap"><table>');
     expect(html.match(/<ol/g)).toHaveLength(1);
   });
 

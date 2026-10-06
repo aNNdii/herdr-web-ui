@@ -13,10 +13,12 @@ describe("composerMessage and submitNote", () => {
     expect(submitNote("submit_timeout", "x")).toMatch(/^Not sent: .*nothing was typed/);
     expect(submitNote("disconnected", "x")).toMatch(/^Not confirmed: .*Check the terminal/);
     expect(submitNote("pane_not_found", "pane w1:p9 not found")).toBe("Not sent: pane w1:p9 not found");
+    expect(submitNote("agent_only_busy", "x")).toBe("Not sent: the agent is busy with questions it queued. Nothing was typed. Send it again when it is ready.");
   });
 
   it("knows a refusal that typed nothing from a message that may have reached the pane", () => {
     expect(["submit_timeout", "agent_blocked", "read_only"].map(submitNotTyped)).toEqual([true, true, true]);
+    expect(submitNotTyped("agent_only_busy")).toBe(true);
     expect(["disconnected", "timeout", "submit_failed"].map(submitNotTyped)).toEqual([false, false, false]);
   });
 });

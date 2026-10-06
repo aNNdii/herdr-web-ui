@@ -55,6 +55,7 @@ import {
 } from "./herdr/client.ts";
 import { type AlertTiming, createPushService, defaultStateDir, handlePushRequest } from "./push.ts";
 import { codexQuestionsCollapsed, handlePromptRequest } from "./prompt.ts";
+import { submitRoute } from "./submit-route.ts";
 import { secretPrompt, validSecret } from "../shared/secret-prompt.ts";
 import { PasteImageError, savePaneImage } from "./paste.ts";
 import { PtySession } from "./pty/session.ts";
@@ -402,7 +403,9 @@ export function createServer(
    *
    * `agentOnly` (a message carrying comments, which quote the agent's reply) never takes the
    * send_text way: typed into a shell, the quote's "> " would redirect into a file and each
-   * line would run. Without an agent in front it is refused, nothing typed.
+   * line would run. Without an agent in front it is refused, nothing typed. So it is for a Codex
+   * blocked only by its queue: a plain message is typed into its main prompt, but this one is
+   * refused (`agent_only_busy`), since only agent.prompt may carry it.
    */
   async function submitText(paneId: string, text: string, payload: string, arrivedAt: number, fromTerminal = false, authorize: () => void = () => {}, agentOnly = false): Promise<void> {
     const inTime = (): void => {
@@ -423,9 +426,11 @@ export function createServer(
     } catch (error) {
       if (!(error instanceof HerdrError)) throw error;
       const queuedOnly = error.code === "agent_blocked" && await blockedOnlyByCodexQueue(paneId);
-      if (error.code !== "agent_not_found" && error.code !== "agent_not_ready" && !queuedOnly) throw error;
-      // a Codex blocked only by its queue is an agent, and its prompt takes the message
-      if (agentOnly && !queuedOnly) throw new HerdrError("agent_only", "no agent runs in this pane, and this message is only sent to one; nothing was typed");
+      const route = submitRoute(error.code, queuedOnly, agentOnly);
+      if (route === "rethrow") throw error;
+      if (route === "refuse-no-agent") throw new HerdrError("agent_only", "no agent runs in this pane, and this message is only sent to one; nothing was typed");
+      if (route === "refuse-busy") throw new HerdrError("agent_only_busy", "the agent is busy with questions it queued, and this message only goes to it directly; nothing was typed");
+      // route "type": a Codex blocked only by its queue is an agent, and its prompt takes the message
     }
     inTime();
     // a mirrored pane's browser never learned the program's paste mode, so `payload` came as bare

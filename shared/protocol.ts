@@ -608,7 +608,8 @@ export type ClientMessage =
    * pane's bracketed-paste mode, typed when no agent is in front. `typed`: the terminal's own
    * input line, which types `payload` like the keyboard would even into an agent's open menu.
    * `agent_only` (servers listing "submit-agent-only"): only an agent gets it, never the pane's
-   * input, so a message quoting a reply never reaches a shell; refused with code agent_only */
+   * input, so a message quoting a reply never reaches a shell; refused with code agent_only (no agent in
+   * front) or agent_only_busy (a Codex blocked by its own queue) */
   | { type: "submit"; id: number; pane_id: string; text: string; payload: string; typed?: boolean; agent_only?: boolean }
   /** Masked input: revalidate the visible prompt, type literal bytes + Enter immediately.
    * Never queued, retried, sent through agent.prompt, or echoed in a result. */
