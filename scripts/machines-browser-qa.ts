@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { chromium } from "playwright-core";
+import { settingsPage } from "./settings-nav.ts";
 import { herdrRpc } from "../server/herdr/client.ts";
 const fixture = JSON.parse(readFileSync(process.argv[2]!, "utf8")) as { root: string; remoteHome: string; port: number; machineId: string; secondMachineId: string; paneId: string };
 const { machineId: a, secondMachineId: b, paneId } = fixture;
@@ -77,6 +78,7 @@ try {
   await create.waitFor(); await create.getByRole("button", { name: "Close dialog", exact: true }).click();
   // Add PC lives in Settings → Remote PCs; opening it closes Settings
   await page.locator(".sidebar-footer").getByRole("button", { name: "Settings", exact: true }).click();
+  await settingsPage(page, "remote-pcs");
   await page.getByRole("dialog", { name: "Settings", exact: true }).getByRole("button", { name: "Add PC", exact: true }).click();
   const dialog = page.getByRole("dialog", { name: "Add PC", exact: true }); await dialog.waitFor();
   await page.screenshot({ path: join(evidence, "desktop-add-pc-dark.png") });
@@ -91,6 +93,7 @@ try {
   await page.waitForFunction(() => Math.abs(document.querySelector(".sidebar.is-open")!.getBoundingClientRect().x) < 1);
   await page.screenshot({ path: join(evidence, "mobile-light.png") });
   await page.locator(".sidebar-footer").getByRole("button", { name: "Settings", exact: true }).click();
+  await settingsPage(page, "remote-pcs");
   await page.getByRole("dialog", { name: "Settings", exact: true }).getByRole("button", { name: "Add PC", exact: true }).click();
   await page.screenshot({ path: join(evidence, "mobile-add-pc-light.png") });
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth), false);
@@ -99,6 +102,7 @@ try {
   await page.getByRole("button", { name: "Open workspace list", exact: true }).click();
   await page.locator(".sidebar-footer").getByRole("button", { name: "Settings", exact: true }).click();
   const settings = page.getByRole("dialog", { name: "Settings", exact: true });
+  await settingsPage(page, "appearance");
   await settings.getByRole("button", { name: "Dark", exact: true }).click();
   await settings.getByRole("button", { name: "Close settings", exact: true }).click();
   await page.getByRole("button", { name: "Open workspace list", exact: true }).click();

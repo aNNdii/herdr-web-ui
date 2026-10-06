@@ -31,6 +31,8 @@ import { checkCtrlEnter } from "./terminal-ctrl-enter-regression.ts";
 import { checkCommandArrows } from "./terminal-command-arrows-regression.ts";
 import { checkFolderFilter } from "./folder-filter-regression.ts";
 import { checkUpdateNotice } from "./update-notice-regression.ts";
+import { checkSettingsDialog } from "./settings-regression.ts";
+import { openSettingsPage } from "./settings-nav.ts";
 import { UsageService } from "../server/usage.ts";
 
 const root = realpathSync(mkdtempSync(join(tmpdir(), "herdr-web-ui-browser-")));
@@ -274,7 +276,7 @@ try {
 
   // Add PC lives in Settings → Remote PCs, not in the sidebar; opening it closes Settings behind it
   assert.equal(await page.locator(".sidebar").getByRole("button", { name: "Add PC", exact: true }).count(), 0, "the sidebar has no Add PC button");
-  await page.keyboard.press("ControlOrMeta+Shift+Comma");
+  await openSettingsPage(page, "remote-pcs");
   await page.getByRole("dialog", { name: "Settings" }).getByRole("button", { name: "Add PC", exact: true }).click();
   await page.getByRole("dialog", { name: "Add PC", exact: true }).waitFor();
   assert.equal(await page.getByRole("dialog", { name: "Settings" }).count(), 0, "Add PC closes Settings");
@@ -299,7 +301,7 @@ try {
   // the idle status poll runs every 30 s: a hide and a show restart it at once, onto the fake
   await setPageHidden(true);
   await setPageHidden(false);
-  await page.keyboard.press("ControlOrMeta+Shift+Comma");
+  await openSettingsPage(page, "about");
   const checkUpdates = page.getByRole("dialog", { name: "Settings" }).getByRole("button", { name: "Check for updates", exact: true });
   await checkUpdates.waitFor();
   await checkUpdates.click();
@@ -373,6 +375,7 @@ try {
   await checkChatKeepsTerminalSize(browser, origin);
   await checkPaneSwitchKeepsTerminalSize(browser, origin);
   await checkUpdateNotice(browser, origin);
+  await checkSettingsDialog(browser, origin);
 
   const report = (state: string) => herdrRpc("pane.report_agent", {
     pane_id: paneA, source: "manual", agent: "claude", state,
@@ -410,7 +413,7 @@ try {
   // pane is under 1148px, so the lane is its 820px floor, as at Narrow; at Wide the lane is wider
   // than the pane and the column is the pane less its gutters. A larger window grows the lane
   const chatWidth = async (name: string): Promise<void> => {
-    await page.keyboard.press("ControlOrMeta+Shift+Comma");
+    await openSettingsPage(page, "chat");
     await page.getByRole("group", { name: "Chat width", exact: true }).getByRole("button", { name, exact: true }).click();
     await page.getByRole("button", { name: "Close settings", exact: true }).click();
   };
@@ -488,8 +491,8 @@ try {
   // a quick reply goes out as typed, and leaves a draft in the box alone; the row shows only when
   // chosen in Settings, and the box has no button for it
   const quickRow = async (show: boolean): Promise<void> => {
-    await page.keyboard.press("ControlOrMeta+Shift+Comma");
-    const toggle = page.getByRole("switch", { name: "Show above the message box", exact: true });
+    await openSettingsPage(page, "chat");
+    const toggle = page.getByRole("switch", { name: "Show quick replies", exact: true });
     if ((await toggle.getAttribute("aria-checked")) !== String(show)) await toggle.click();
     await page.getByRole("button", { name: "Close settings", exact: true }).click();
   };
@@ -580,7 +583,7 @@ try {
   // Every directory has a fold caret, even with one pane; opening a pane reveals its folder.
   const split = await herdrRpc<{ pane: { pane_id: string } }>("pane.split", { target_pane_id: paneB, direction: "down", focus: false });
   await page.getByRole("button", { name: "Settings", exact: true }).click();
-  await page.locator('.segmented[aria-label="Sidebar grouping"]').getByRole("button", { name: "By folder", exact: true }).click();
+  await page.getByRole("group", { name: "Group sidebar by", exact: true }).getByRole("button", { name: "Folder", exact: true }).click();
   await page.getByRole("button", { name: "Close settings", exact: true }).click();
   const sectionB = page.locator(`.directory-group[data-directory="${join(root, "b")}"]`);
   const toggleB = sectionB.locator(".directory-header");
@@ -718,7 +721,7 @@ try {
   // In the By workspace view the worktree's row sits under its repository's, as herdr packs them.
   // Its menu deletes the checkout: a dirty one is refused in git's words first, then deleted anyway.
   await page.getByRole("button", { name: "Settings", exact: true }).click();
-  await page.locator('.segmented[aria-label="Sidebar grouping"]').getByRole("button", { name: "By workspace", exact: true }).click();
+  await page.getByRole("group", { name: "Group sidebar by", exact: true }).getByRole("button", { name: "Workspace", exact: true }).click();
   await page.getByRole("button", { name: "Close settings", exact: true }).click();
   const childRow = page.locator(`.worktree-children .pane-item:has(.pane-select[title^="${worktree.pane_id} —"])`);
   await childRow.waitFor();
@@ -755,7 +758,7 @@ try {
   assert.equal(existsSync(worktree.path), false, "the checkout is gone");
   worktreeWorkspaces.splice(worktreeWorkspaces.indexOf(worktree.workspace_id), 1);
   await page.getByRole("button", { name: "Settings", exact: true }).click();
-  await page.locator('.segmented[aria-label="Sidebar grouping"]').getByRole("button", { name: "By folder", exact: true }).click();
+  await page.getByRole("group", { name: "Group sidebar by", exact: true }).getByRole("button", { name: "Folder", exact: true }).click();
   await page.getByRole("button", { name: "Close settings", exact: true }).click();
   console.log("PASS a worktree row sits under its repository's row, and its menu deletes the checkout, asking twice for a dirty one");
 

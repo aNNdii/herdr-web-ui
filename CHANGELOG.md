@@ -18,6 +18,14 @@ between releases do not reach them. Remote-PC runtime bundles are versioned sepa
   ([#444](https://github.com/devswha/herdr-web-ui/pull/444) by @diogo7dias)
 
 ### Changed
+- Settings is a larger window of its own pages: a navigation column (This device, Server &
+  connections, herdr web ui) beside the page, each page in titled groups of rows with shorter
+  descriptions, and a search that shows every matching setting at once, in the language shown or
+  in English (`/` to search, Escape clears it first). The window keeps its size between pages, and
+  the app stays in view behind it. A link ending in `#settings/<page>` opens it on that page. On a
+  phone it fills the screen: a list of the pages with their current values, then the page. The
+  palettes are tiles with a preview, the terminal's typing modes are explained, quick replies move
+  with arrows, and paired devices and remote PCs keep their actions in a `⋯` menu.
 - The website says what it is for in its title and description (Claude Code and Codex from your
   phone), answers seven common questions in a new FAQ section, and gives search engines a sitemap
   and structured data for the app and the FAQ.

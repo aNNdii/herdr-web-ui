@@ -94,7 +94,7 @@ bun run start
 
 ### In a terminal
 
-**The phone address, again:** run the one-line installer again. On a PC where the app is installed it installs nothing and prints the address and its QR code, serving the app to your tailnet first if nothing does yet. It finds the version that actually runs: herdr's plugin directory keeps the version first installed, and **Settings → Updates** runs newer ones from `~/.config/herdr-web-ui/updates`. From a checkout, `bun scripts/plugin.ts phone` does the same.
+**The phone address, again:** run the one-line installer again. On a PC where the app is installed it installs nothing and prints the address and its QR code, serving the app to your tailnet first if nothing does yet. It finds the version that actually runs: herdr's plugin directory keeps the version first installed, and **Settings → About & updates** runs newer ones from `~/.config/herdr-web-ui/updates`. From a checkout, `bun scripts/plugin.ts phone` does the same.
 
 **A pairing code, on a PC with no browser of its own:**
 
@@ -170,7 +170,7 @@ running llama.cpp server that this app cannot ask. The model and reasoning effor
 
 ## Subscription usage
 
-The strip beside **Settings** shows the plan limits of the AI tools signed in on the PC the app's server runs on: for each account its provider's logo and one limit, the plan's week or its 5-hour session as chosen in Settings (red from 80%). A plan with neither shows its limit closest to running out. Tap it for every limit (5-hour session, week, month, per model where a plan has them) and when each starts over. It is off until you turn it on in **Settings → Subscription usage**: turning it on sends the sign-ins on the server's PC to each provider's usage endpoint.
+The strip beside **Settings** shows the plan limits of the AI tools signed in on the PC the app's server runs on: for each account its provider's logo and one limit, the plan's week or its 5-hour session as chosen in Settings (red from 80%). A plan with neither shows its limit closest to running out. Tap it for every limit (5-hour session, week, month, per model where a plan has them) and when each starts over. It is off until you turn it on in **Settings → Plan usage**: turning it on sends the sign-ins on the server's PC to each provider's usage endpoint.
 
 | Provider | Sign-in it reads |
 | --- | --- |
@@ -186,7 +186,7 @@ Only providers with a sign-in are shown; a GitHub account without Copilot is lef
 
 - **Read only.** The server never refreshes a token: Claude, Codex, Cursor and Grok rotate refresh tokens, and a refresh the tool did not make would sign it out. An expired sign-in says so; using the tool once renews it.
 - **Asked only while someone looks.** Nothing runs in the background. The server asks a provider at most every five minutes, a refresh from the popover at most every 30 seconds, and a provider that answered 429 not before it said to.
-- **Yours to arrange.** Settings → Subscription usage orders the accounts, picks the limit the strip shows (**Weekly** or **Session**), hides any (from the strip and its popover alike), and switches the meters between what is used and what is left.
+- **Yours to arrange.** Settings → Plan usage orders the accounts, picks the limit the strip shows (**Weekly** or **Session**), hides any (from the strip and its popover alike), and switches the meters between what is used and what is left.
 - **The server's PC only.** Remote PCs are not included.
 - On macOS, a server started outside the logged-in desktop session (over SSH, or by a multiplexer started there) reads the keychain item through a one-shot job in that desktop session. A keychain that still cannot be opened shows as such instead of the numbers.
 
@@ -212,22 +212,22 @@ The one-line installer runs this for you when Tailscale runs on the PC and does 
 
 Only devices in your tailnet can open that address, and only yours get in without a code: see [Access and safety](#access-and-safety).
 
-**Settings → Phone** in the app does this step for you as far as it can: it shows the address Tailscale already serves for this PC as a QR code, or the exact command still to run, and the address it will give.
+**Settings → Phone & devices** in the app does this step for you as far as it can: it shows the address Tailscale already serves for this PC as a QR code, or the exact command still to run, and the address it will give.
 
 1. Open the address.
 2. Install the app: in Safari, choose **Share → Add to Home Screen**; in Chrome, choose **Install app**.
 3. Open the **⋯** menu at the top right and tap **Alerts** to turn on alerts for that device. iPhone needs iOS 16.4+ and the home-screen app.
 
-To check alerts later, choose **Settings → Alerts → Send test**. The result tells you
+To check alerts later, choose **Settings → Notifications → Send test**. The result tells you
 whether the test was sent or failed; a missing subscription offers **Turn alerts on again**.
 
 On a phone:
 - Agent panes open in the chat.
 - The terminal gets a key bar above the keyboard (Esc, Tab, Ctrl, Alt, arrows, Ctrl+C).
-  **Settings → Appearance → Key bar** adds or removes Alt, Shift+Tab, Home/End, PgUp/PgDn,
+  **Settings → Terminal → Key bar** adds or removes Alt, Shift+Tab, Home/End, PgUp/PgDn,
   Ctrl+D, Ctrl+Z, `|`, `~` and `/`.
 - Dragging the terminal scrolls the real herdr pane.
-- **Settings → Phone → Keep screen on** keeps the screen awake while a terminal or chat
+- **Settings → Phone & devices → Keep screen on** keeps the screen awake while a terminal or chat
   pane is open. It is off by default, releases when the app is hidden, and resumes when
   you return. It needs HTTPS or localhost and browser support; power-saving mode may refuse it.
 
@@ -257,7 +257,7 @@ More in [remote PCs](remote-pcs.md).
 Anyone who can reach the server can type into your terminals, so what matters is who gets in. It listens on `127.0.0.1` by default, which means only this computer. From anywhere else, a request gets in in one of three ways:
 
 - **It is you, says Tailscale.** `tailscale serve` states the requesting device's Tailscale login in a header it strips from anything incoming. A login that matches this PC's own gets in; another login is refused, and a tagged device (one with no person's login) needs pairing. Nothing to set up, unless this PC's own Tailscale node is tagged: it then has no login of its own, so every device pairs, yours included, or you name your login in `HERDR_WEB_TAILSCALE_OWNER`.
-- **It is a paired device.** **Settings → Devices**, on the PC (or on a device already paired), shows a six-digit code that lives ten minutes and a QR code that carries it. On a headless PC, the `pair` command prints the same in its terminal (see [In a terminal](#in-a-terminal)); Devices also shows the pairing link as text, to send to the other device. The other device enters it once and keeps its own credential in an HttpOnly cookie; the list shows it, and **Revoke** immediately closes its terminal connections and roster stream and refuses subsequent requests.
+- **It is a paired device.** **Settings → Phone & devices**, on the PC (or on a device already paired), shows a six-digit code that lives ten minutes and a QR code that carries it. On a headless PC, the `pair` command prints the same in its terminal (see [In a terminal](#in-a-terminal)); Paired devices also shows the pairing link as text, to send to the other device. The other device enters it once and keeps its own credential in an HttpOnly cookie; the list shows it, and **Revoke** (in its row's ⋯ menu) immediately closes its terminal connections and roster stream and refuses subsequent requests.
 - **It holds the token.** `HERDR_WEB_TOKEN`, for scripts and proxies, as a cookie after sign-in or as `Authorization: Bearer <token>`. When a token is set, everything else needs it, this computer and your own Tailscale login included: enter it once on each device, and that browser stays signed in for a year. A paired device still gets in without it.
 
 | How you reach it | What gets you in |
@@ -331,7 +331,7 @@ To check it, open `https://herdr.example.com/api/session` from another device wi
 
 **Sign out** in the header or command palette clears this browser's token and device cookies; terminal sessions and agents keep running. It is shown for token or device authentication, not automatic local or Tailscale access.
 
-If `devices.json` under `HERDR_WEB_STATE_DIR` (default `~/.config/herdr-web-ui`) is corrupt or unreadable, the server keeps unrecognized external clients out and preserves the file. Local access and the owner's trusted Tailscale login without a configured token, and a valid token, still work. Settings → Devices and the server log explain the error. Restore a valid registry from backup or fix its permissions, then restart; pairing and device changes remain disabled until it is repaired.
+If `devices.json` under `HERDR_WEB_STATE_DIR` (default `~/.config/herdr-web-ui`) is corrupt or unreadable, the server keeps unrecognized external clients out and preserves the file. Local access and the owner's trusted Tailscale login without a configured token, and a valid token, still work. Settings → Phone & devices and the server log explain the error. Restore a valid registry from backup or fix its permissions, then restart; pairing and device changes remain disabled until it is repaired.
 
 Nothing is typed without you:
 - Input typed while disconnected waits as a draft for you to send or discard.
@@ -364,7 +364,7 @@ Observe connections cannot take a pane, and a displaced bridge never takes it ba
 
 ## Updates
 
-`bun run start` and the plugin look for a newer **release** 10 seconds after start and then every 5 minutes. A release is a `vX.Y.Z` tag ([changelog](../CHANGELOG.md)); commits between releases never reach installs. When a new version is out, a line under the header names it, and its **Update** button installs it and shows the install's steps; **Settings → Updates** has the same controls and the full error when an install fails. To install releases without asking, set `HERDR_WEB_AUTO_UPDATE=1`.
+`bun run start` and the plugin look for a newer **release** 10 seconds after start and then every 5 minutes. A release is a `vX.Y.Z` tag ([changelog](../CHANGELOG.md)); commits between releases never reach installs. When a new version is out, a line under the header names it, and its **Update** button installs it and shows the install's steps; **Settings → About & updates** has the same controls and the full error when an install fails. To install releases without asking, set `HERDR_WEB_AUTO_UPDATE=1`.
 
 An update is built and typechecked in a private checkout while the current server keeps serving. The new server must pass a health check, or the previous build comes back. herdr and your agents keep running, and a **Reload app** notice lets you save drafts before the new frontend loads.
 
@@ -372,7 +372,7 @@ Updates need a clean checkout: `main` for a source install, or herdr's plugin ch
 
 ### Updating herdr
 
-herdr itself is updated from **Settings → herdr → Update herdr**. herdr refuses `herdr update` typed into one of its panes ("run `herdr update` outside herdr"), and every terminal in the app is a pane, so the server runs it instead, for the herdr on the PC the app runs on:
+herdr itself is updated from **Settings → About & updates → Update herdr**. herdr refuses `herdr update` typed into one of its panes ("run `herdr update` outside herdr"), and every terminal in the app is a pane, so the server runs it instead, for the herdr on the PC the app runs on:
 
 - It installs the newest herdr and moves the running panes onto it with a live handoff. Panes and agents keep running, and open terminals reconnect.
 - If a newer herdr was already installed from a shell, the running server is still the old one: Settings says so, and the button only moves the panes.

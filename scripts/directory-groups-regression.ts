@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { chromium } from "playwright-core";
 import type { Page } from "playwright-core";
+import { settingsPage } from "./settings-nav.ts";
 import { createServer } from "../server/index.ts";
 import { HerdrError, herdrRpc, sessionSnapshot, workspaceClose, workspaceCreate } from "../server/herdr/client.ts";
 import { UsageService } from "../server/usage.ts";
@@ -155,20 +156,20 @@ try {
   };
   // the workspace with two panes in one tab: one row, whose strip and pane picker reach the second
   const otherWorkspace = `.workspace:has(${paneSelector(other.paneId)}), .workspace:has(${paneSelector(split.pane.pane_id)})`;
-  const grouping = '.settings-dialog .segmented[aria-label="Sidebar grouping"]';
+  const grouping = '.settings-dialog .segmented[aria-label="Group sidebar by"]';
   const switchGrouping = async (mode: "workspace" | "directory", states: readonly State[]): Promise<void> => {
     const documentIdentity = await page.evaluate(() => performance.timeOrigin);
     await changeState(page, [{ selector: grouping }],
       () => page.getByRole("button", { name: "Settings", exact: true }).click(), "grouping Settings opens");
     assert.equal(await page.locator(grouping).count(), 1);
-    assert.equal(await page.locator(grouping).getByRole("button", { name: "By workspace", exact: true }).count(), 1);
-    assert.equal(await page.locator(grouping).getByRole("button", { name: "By folder", exact: true }).count(), 1);
+    assert.equal(await page.locator(grouping).getByRole("button", { name: "Workspace", exact: true }).count(), 1);
+    assert.equal(await page.locator(grouping).getByRole("button", { name: "Folder", exact: true }).count(), 1);
     await changeState(page, states,
       () => page.locator(grouping).getByRole("button", {
-        name: mode === "workspace" ? "By workspace" : "By folder", exact: true,
+        name: mode === "workspace" ? "Workspace" : "Folder", exact: true,
       }).click(), `${mode} grouping applies without reload`);
     assert.equal(await page.locator(grouping).getByRole("button", {
-      name: mode === "workspace" ? "By workspace" : "By folder", exact: true,
+      name: mode === "workspace" ? "Workspace" : "Folder", exact: true,
     }).getAttribute("aria-pressed"), "true");
     assert.equal(await page.evaluate(() => performance.timeOrigin), documentIdentity, "grouping must not replace the document");
     assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem("herdr-web-ui:settings") ?? "{}").sidebarGrouping), mode);
@@ -495,11 +496,14 @@ try {
   assert.ok(groupingControl);
   await screenshot("settings-en");
   await changeState(page, [{ selector: "html", attribute: ["lang", "ko-KR"] }],
-    () => page.locator(".settings-dialog").getByRole("button", { name: "한국어", exact: true }).click(),
+    // Language is a select (Appearance → Interface): System, then each language by its own name
+    () => page.locator(".settings-dialog select").first().selectOption("ko"),
     "Settings changes the UI language to Korean");
   await groupingControl.scrollIntoViewIfNeeded();
   await screenshot("settings-ko");
   await page.setViewportSize({ width: 375, height: 900 });
+  // a phone starts on Settings' list of pages: the grouping is on Appearance
+  await settingsPage(page, "appearance");
   await groupingControl.scrollIntoViewIfNeeded();
   const mobileGrouping = await groupingControl.boundingBox();
   assert.ok(mobileGrouping && mobileGrouping.x >= 0 && mobileGrouping.x + mobileGrouping.width <= 375, "mobile grouping choices fit the viewport");
@@ -521,7 +525,7 @@ try {
   await page.getByRole("button", { name: "설정", exact: true }).click();
   await page.locator(".settings-dialog").waitFor({ state: "attached" });
   await changeState(page, [{ selector: "html", attribute: ["lang", "en-US"] }],
-    () => page.locator(".settings-dialog").getByRole("button", { name: "English", exact: true }).click(),
+    () => page.locator(".settings-dialog select").first().selectOption("en"),
     "Settings restores English action locators");
   await changeState(page, [{ selector: ".settings-dialog", count: 0 }],
     () => page.keyboard.press("Escape"), "English Settings closes");

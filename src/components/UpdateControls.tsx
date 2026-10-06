@@ -6,7 +6,8 @@ import { describeUpdate } from "../lib/updateProgress.ts";
 import type { UpdatesModel } from "../lib/updates.ts";
 import "./Machines.css";
 import "./UpdateControls.css";
-import { useT } from "../lib/i18n.ts";
+import { currentLocale, useT } from "../lib/i18n.ts";
+import { SettingsRow, SettingsTag } from "./settings/SettingsUi.tsx";
 
 declare const __APP_VERSION__: string;
 
@@ -26,30 +27,40 @@ function UpdateProgress({ status, fallback }: { status: UpdateStatus | null; fal
   </div>;
 }
 
+/**
+ * Settings → About & updates: this app's running version, its update check and install, and the
+ * reload a finished install asks for. One row of the page's card.
+ */
 export function UpdateControls({ updates, bridgesFollow = false }: { updates: UpdatesModel; bridgesFollow?: boolean }) {
   const t = useT();
   const { status, error, busy, needsReload, request } = updates;
   const installing = busy && (status?.phase === "building" || status?.phase === "restarting");
   const tabVersion = staleClientVersion(status, __APP_VERSION__);
-  return <section className="settings-section settings-updates">
-    <h3>{t("Updates")}</h3>
-    {/* always a version: the sidebar no longer carries one */}
-    <p className="settings-hint">{t("Running {version}", { version: runningAppVersion(status, __APP_VERSION__) })}</p>
-    {tabVersion && <p className="settings-hint">{t("This tab still runs {version} until it is reloaded.", { version: tabVersion })}</p>}
-    {installing && !error ? <div role="status"><UpdateProgress status={status} fallback={t(status?.phase === "building" ? "Installing dependencies and building…" : "Restarting the bridge…")} /></div> : <p className="settings-hint" role="status">
-      {error ?? status?.error ?? status?.blocked_reason ?? (busy ? t("Checking for updates…") :
-        status?.available ? t("Version {version} is available.", { version: versionLabel(status.latest_version, status.latest_revision) ?? "" }) : status?.checked_at ? t("Up to date.") : t("Waiting for an update check…"))}
+  const problem = error ?? status?.error ?? status?.blocked_reason ?? null;
+  const upToDate = !problem && !busy && !status?.available && !!status?.checked_at;
+  return <SettingsRow
+    className="settings-updates"
+    label="herdr web ui"
+    tag={status?.available ? <SettingsTag>{t("Update available")}</SettingsTag> : upToDate ? <SettingsTag tone="ok">{t("Up to date")}</SettingsTag> : undefined}
+    // always a version: the sidebar no longer carries one
+    description={t("Running {version}", { version: runningAppVersion(status, __APP_VERSION__) })}
+    keywords="about version update updates check install restart herdr web ui"
+    control={status?.managed ? <button type="button" className="btn btn-secondary" disabled={busy} onClick={() => void request("check")}>{t("Check for updates")}</button> : undefined}
+  >
+    {tabVersion && <p className="settings-note">{t("This tab still runs {version} until it is reloaded.", { version: tabVersion })}</p>}
+    {installing && !error ? <div role="status"><UpdateProgress status={status} fallback={t(status?.phase === "building" ? "Installing dependencies and building…" : "Restarting the bridge…")} /></div> : <p className="settings-note" role="status">
+      {upToDate ? null : problem ?? (busy ? t("Checking for updates…") :
+        status?.available ? t("Version {version} is available.", { version: versionLabel(status.latest_version, status.latest_revision) ?? "" }) : t("Waiting for an update check…"))}
     </p>}
     {status?.managed && <>
-      <p className="settings-hint">{t("Checks for new releases every 5 minutes.")} {t(status.auto_update ? "Automatic installation is enabled." : "Install when you are ready; the bridge briefly reconnects and herdr sessions keep running.")}{bridgesFollow ? ` ${t("Remote PCs' bridges are updated afterwards when the new version needs it.")}` : ""}</p>
+      <p className="settings-note">{t("Checks for new releases every 5 minutes.")} {t(status.auto_update ? "Automatic installation is enabled." : "Install when you are ready; the bridge briefly reconnects and herdr sessions keep running.")}{bridgesFollow ? ` ${t("Remote PCs' bridges are updated afterwards when the new version needs it.")}` : ""}</p>
       <div className="update-actions">
-        <button type="button" className="btn" disabled={busy} onClick={() => void request("check")}>{t("Check for updates")}</button>
         <button type="button" className="btn btn-primary" disabled={busy || !status.available || !!status.blocked_reason} onClick={() => void request("install")}>{t("Update and restart")}</button>
       </div>
     </>}
-    {status?.checked_at && <p className="settings-hint">Last checked {new Date(status.checked_at).toLocaleString()}</p>}
-    {needsReload && <p className="settings-hint">{t("The server was updated. Save any unsent drafts, then")} <button type="button" className="btn" onClick={() => window.location.reload()}>{t("Reload app")}</button></p>}
-  </section>;
+    {status?.checked_at && <p className="settings-note">{t("Last checked {time}", { time: new Date(status.checked_at).toLocaleString(currentLocale()) })}</p>}
+    {needsReload && <p className="settings-note">{t("The server was updated. Save any unsent drafts, then")} <button type="button" className="btn btn-secondary" onClick={() => window.location.reload()}>{t("Reload app")}</button></p>}
+  </SettingsRow>;
 }
 
 /**
@@ -60,27 +71,26 @@ export function HerdrUpdateControls({ enabled, herdrVersion }: { enabled: boolea
   const t = useT();
   const { status, error, busy, request } = useHerdrUpdate(enabled);
   const version = runningHerdrVersion(status, herdrVersion);
+  const description = version ? t("Running herdr {version}", { version }) : undefined;
   // Windows, an older server, a herdr that does not answer: nothing to offer, and the version
   // the health check reported is still read here, since the sidebar no longer carries it
   if (!status?.supported) {
-    return version ? <section className="settings-section settings-herdr-update">
-      <h3>herdr</h3>
-      <p className="settings-hint">{t("Running herdr {version}", { version })}</p>
-    </section> : null;
+    return version ? <SettingsRow className="settings-herdr-update" label="herdr" description={description} keywords="about version herdr" /> : null;
   }
   const stale = status.stale && !!status.binary_version && !!status.server_version;
-  return <section className="settings-section settings-herdr-update">
-    <h3>herdr</h3>
-    {version && <p className="settings-hint">{t("Running herdr {version}", { version })}</p>}
-    {stale && <p className="settings-hint">{t("herdr {installed} is installed, but the running server is {running}. Updating moves your panes onto the installed version.", { installed: status.binary_version ?? "", running: status.server_version ?? "" })}</p>}
-    <p className="settings-hint">{t("Installs the newest herdr on the PC this app runs on and moves its running panes onto it. Panes and agents keep running, and open terminals reconnect.")}</p>
-    <div className="update-actions">
-      <button type="button" className={stale ? "btn btn-primary" : "btn"} disabled={busy} onClick={() => void request()}>{t("Update herdr")}</button>
-    </div>
-    {(error || busy) && <p className="settings-hint" role="status">{error ?? t("Updating herdr…")}</p>}
+  return <SettingsRow
+    className="settings-herdr-update"
+    label="herdr"
+    description={description}
+    keywords="about version herdr update install"
+    control={<button type="button" className={stale ? "btn btn-primary" : "btn btn-secondary"} disabled={busy} onClick={() => void request()}>{t("Update herdr")}</button>}
+  >
+    {stale && <p className="settings-note">{t("herdr {installed} is installed, but the running server is {running}. Updating moves your panes onto the installed version.", { installed: status.binary_version ?? "", running: status.server_version ?? "" })}</p>}
+    <p className="settings-note">{t("Installs the newest herdr on the PC this app runs on and moves its running panes onto it. Panes and agents keep running, and open terminals reconnect.")}</p>
+    {(error || busy) && <p className="settings-note" role="status">{error ?? t("Updating herdr…")}</p>}
     {/* herdr's own words: what it installed, or why it did not */}
     {!busy && status.output && <pre className="update-output" data-failed={status.phase === "error" || undefined}>{status.output}</pre>}
-  </section>;
+  </SettingsRow>;
 }
 
 /**

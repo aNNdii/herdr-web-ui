@@ -5,11 +5,11 @@ input boundary; the terminal screen is still rendered from the attach stream.
 
 ## Input modes and drafts
 
-Settings → Appearance → Terminal input mode offers Automatic, Input line and Direct typing.
+Settings → Terminal → Typing offers Automatic, Input line and Direct typing.
 Automatic keeps the existing device preference: a touch screen uses the input line unless the
 user previously chose direct typing; a fine pointer uses direct typing. The key bar's keyboard
 button switches modes too, on a touch screen only: a desktop changes the mode in Settings.
-Settings → Shortcuts can change each app action's Mod+Shift key or return its keys to the
+Settings → Keyboard shortcuts can change each app action's Mod+Shift key or return its keys to the
 terminal. The hold-to-dictate binding remains fixed. Conflicts include the legacy New workspace
 alias, and Reset restores the defaults. Browser-reserved keys still depend on the browser and
 installed-app mode.
@@ -27,7 +27,7 @@ Control sequences are counted as discarded, never saved for later execution. No 
 on reconnect. The input-line and chat Send buttons preserve an active composition, and the key bar
 waits for composition to finish. Leaving the input clears its composition guard.
 
-The key bar always has Esc, Tab, Ctrl, the arrows and ^C. Settings → Appearance → Key bar adds
+The key bar always has Esc, Tab, Ctrl, the arrows and ^C. Settings → Terminal → Key bar adds
 Alt (on by default), Shift+Tab, Home/End, PgUp/PgDn, ^D, ^Z, `|`, `~` and `/`, each in a fixed
 place in the row. Ctrl and Alt are one-shot: an armed Alt puts ESC before the next character
 (Alt+Backspace, Alt+Enter) and adds the Alt modifier to an arrow, Home, End or Page key
