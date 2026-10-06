@@ -872,8 +872,6 @@ export const JA: Record<string, string> = {
   "{count} comment waiting": "コメント {count} 件が待機中",
   "{count} comments waiting": "コメント {count} 件が待機中",
   "Remove all comments": "コメントをすべて削除",
-  "Undo": "元に戻す",
-  "Comments removed: {count}": "コメントを {count} 件削除しました",
   "Comments only": "コメントのみ",
   "Comments with this message: {count}": "このメッセージのコメント: {count}",
   "Go to the next comment": "次のコメントへ移動",

@@ -102,7 +102,7 @@ export function CommentCard({ comment, anchors, onEdit, onDelete }: CommentCardP
         <button
           type="button" className="icon-button block-comment-action" aria-label={t("Delete comment")} title={t("Delete comment")}
           onClick={(event) => {
-            // gone at once, no question: the composer's bar undoes a removal, a comment is cheap to write again.
+            // gone at once, no question and no undo: a comment is cheap to write again.
             // The focus goes to the next card's Edit button, else the previous one's, else the pane's composer
             // (not on a touch screen: that would raise the keyboard unasked)
             const view = event.currentTarget.closest(".chat-view");

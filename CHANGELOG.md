@@ -29,10 +29,9 @@ between releases do not reach them. Remote-PC runtime bundles are versioned sepa
   with the accent, with a **Pending** badge, the comment in full and buttons to edit or delete it.
   Pointing at a card, or focusing it, brings its text up and fades the other comments' marks. In
   the message box the comments show as a bar below any attached files, above the text ("3 comments
-  on the reply"): a tap on it walks to them, one comment per tap, and its X removes them all, with
-  an undo in the same place for ten seconds. The bar's icon is accent-coloured while the comments
-  go with the next message and dim, with the bar saying "waiting" and the reason in its name, while
-  they wait. With the keyboard alone, text can be selected for a comment only through the
+  on the reply"): a tap on it walks to them, one comment per tap, and its X removes them all. The
+  bar's icon is accent-coloured while the comments go with the next message and dim, with the bar
+  saying "waiting" and the reason in its name, while they wait. With the keyboard alone, text can be selected for a comment only through the
   browser's caret browsing (F7). The next message sends the comments first, each quoting its
   selected text, in reading order. A command or an answer to the agent's open question goes without
   them; they wait for the next message. They only ever go to an agent: when none runs in the pane,

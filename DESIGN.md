@@ -974,9 +974,9 @@ One set for both themes: the card is island black wherever it shows.
     icon button tucked into the right padding. The box is one line, `--control-h` tall
     (`--touch-target` on a coarse pointer), in both states.
   - Under a pointer that hovers, the whole box takes a slightly stronger fill (`--bg-hover` mixed
-    6% with `--text`) and the walk button has none of its own (no box in a box); the X and Undo
-    take a stronger one (12%). Focus rings are the app's `:focus-visible` ring on the walk button,
-    the X and Undo; the box clips nothing.
+    6% with `--text`) and the walk button has none of its own (no box in a box); the X takes a
+    stronger one (12%). Focus rings are the app's `:focus-visible` ring on the walk button and the
+    X; the box clips nothing.
 
   Two looks, told by words and not only colour:
   - **Goes with the next send** (`is-going`): `--accent` icon, the sentence `3 comments on
@@ -995,19 +995,12 @@ One set for both themes: the card is island black wherever it shows.
   its editor (the modal), so the bar reaches every comment it counts. The bar counts every stored
   comment, and comments stored for a pane outlive a reload.
 
-  The X is a button of its own, "Remove all comments": it drops every comment of the pane at once
-  and clears the current mark. A confirmation would add a step to every removal that was meant and
-  is clicked through by habit, so the removal is undone instead (an undo costs nothing when it was
-  meant): the box turns, **in its own place and at its height**, into the undo bar:
-  `Comments removed: 3` in `--text` and a text button **Undo**, no X, and the focus moves to Undo,
-  which is described by that sentence, so a screen reader reads "Undo, Comments removed: 3". A tap
-  on Undo restores the comments as they were (one written on the same block meanwhile wins) and
-  the focus goes back to the walk button. The undo bar goes when the message is sent, a new comment
-  is written, the pane changes or after 10 seconds; if it has the focus then, the message box takes
-  it on a pointer that hovers, and on a touch screen (`(pointer: coarse)`) the focus is only let
-  go, so no keyboard rises unasked. Send and Queue carry no badge: the number of comments *this*
-  send takes is in their name and tooltip ("Send message · Comments to send: 3"), and none is named
-  while the comments wait.
+  The X is a button of its own, "Remove all comments": it drops every comment of the pane at once,
+  clears the current mark, and the bar goes with them. Removed is removed: there is no undo and no
+  confirmation. The focus moves to the message box on a pointer that hovers; on a touch screen
+  (`(pointer: coarse)`) it is only let go, so no keyboard rises unasked. Send and Queue carry no
+  badge: the number of comments *this* send takes is in their name and tooltip ("Send message ·
+  Comments to send: 3"), and none is named while the comments wait.
 - Not connected, the sentence `Reconnecting… message held here, never queued` is said once and
   whole: it is the placeholder while the box is empty and moves into the status content once
   there is a draft (`composerStatusHint`), on a phone too. A sentence there (this one, or
