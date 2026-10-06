@@ -2,14 +2,15 @@ import { useCallback, useContext, useEffect, useLayoutEffect, useReducer, useRef
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
-import { ChevronRight, Clock, TriangleAlert, X } from "lucide-react";
+import { ChevronRight, Clock, MessageSquare, TriangleAlert, X } from "lucide-react";
 import "@xterm/xterm/css/xterm.css";
 import "./PaneTerminal.css";
 
 import { HerdrSocket } from "../lib/ws.ts";
-import { controlCode, ctrlEnterSequence, isPrintable, keySequence, modifyOtherKeysLevel, type KeyBarKey } from "../lib/keys.ts";
+import { altSequence, controlCode, ctrlEnterSequence, isPrintable, keySequence, modifyOtherKeysLevel, type KeyBarKey } from "../lib/keys.ts";
 import { EMPTY_DRAFT, applyToDraft, draftIsEmpty, type InputDraft } from "../lib/draft.ts";
-import { messageQueues } from "../lib/messageQueue.ts";
+import { composeWithComments, type BlockComment } from "../lib/blockComments.ts";
+import { heldAgentOnly, heldMessageText, messageQueues } from "../lib/messageQueue.ts";
 import { heldCountShown, heldOpenAtFold, heldOpenOnFocus, heldRefocusDue, heldRowError, heldRowsFold, heldRowsHidden, heldToggleShown, SHORT_PHONE_QUERY } from "../lib/heldRows.ts";
 import { MAX_COMPOSER_CHARS, QUEUE_READY_STATUS, agentDisplayLabel, composerMessage, composerPayload, submitNote, submitNotTyped } from "../lib/compose.ts";
 import { afterRead, afterSend, afterSettled, composerLift, greetingMemory, rememberGreeting, greetingFits, greetingFolder, roomOverComposer, showsGreeting, type ChatRead } from "../lib/greeting.ts";
@@ -163,6 +164,8 @@ export function PaneTerminal({
   const setComposing = useCallback((active: boolean) => { composingRef.current = active; setComposingState(active); }, []);
   const ctrlRef = useRef(false);
   const [ctrlArmed, setCtrlArmed] = useState(false);
+  const altRef = useRef(false);
+  const [altArmed, setAltArmed] = useState(false);
   // observe mode: the ref is what onData and the resize listeners read mid-stream
   const observeRef = useRef(false);
   // a mirrored pane (no terminal attach on its PC): the grid is the pane's own in herdr, adopted like an observer's
@@ -872,6 +875,13 @@ export function PaneTerminal({
         setCtrlArmed(false);
         input = controlCode(data) ?? data;
       }
+      // after Ctrl, so an armed pair sends ESC + the control code (Ctrl+Alt+key)
+      const alt = altRef.current ? altSequence(input) : null;
+      if (alt !== null) {
+        altRef.current = false;
+        setAltArmed(false);
+        input = alt;
+      }
       if (socket.sendInput(current, input)) return;
       // A closed socket, an attachment still opening, or a failed synchronous send:
       // keep printable input for explicit review, never replay it automatically.
@@ -1168,6 +1178,11 @@ export function PaneTerminal({
     draftPaneRef.current = paneId;
     term.reset();
     modifyOtherKeysRef.current = 0;
+    // a one-shot Ctrl or Alt armed for the pane that was open does not reach the next pane's first key
+    ctrlRef.current = false;
+    setCtrlArmed(false);
+    altRef.current = false;
+    setAltArmed(false);
     if (!paneId) return;
     try {
       fit?.fit();
@@ -1208,6 +1223,14 @@ export function PaneTerminal({
     const armed = !ctrlRef.current;
     ctrlRef.current = armed;
     setCtrlArmed(armed);
+    if (!inputLineRef.current) termRef.current?.focus();
+  }, []);
+
+  const toggleAlt = useCallback(() => {
+    if (composingRef.current) return;
+    const armed = !altRef.current;
+    altRef.current = armed;
+    setAltArmed(armed);
     if (!inputLineRef.current) termRef.current?.focus();
   }, []);
 
@@ -1405,7 +1428,7 @@ export function PaneTerminal({
   }, [greetingDue, paneId]);
 
   const composerSend = useCallback(
-    (text: string, { agentOnly = false }: { agentOnly?: boolean } = {}): boolean | string | Promise<boolean | string> => {
+    (text: string, { comments = [] }: { comments?: readonly BlockComment[] } = {}): boolean | string | Promise<boolean | string> => {
       const pane = paneRef.current;
       // Codex's queue open in the terminal holds the input: a message would become the answer
       if (pane !== null && heldByOpenQueue) {
@@ -1429,11 +1452,12 @@ export function PaneTerminal({
         );
       }
       if (pane !== null && agent !== null && agentStatus === "working") {
-        // the agent may be gone by Send now: one with comments must not reach a shell then
-        queueStore.add(paneStorageId(machineId, pane), text, { agentOnly });
+        // the comments are kept apart from the text, as a snapshot: the agent may be gone by Send now,
+        // and a message with comments must not reach a shell then
+        queueStore.add(paneStorageId(machineId, pane), text, { comments });
         return true; // the composer may clear its box: the text lives in the queue card
       }
-      return sendComposerText(text, agentOnly);
+      return sendComposerText(composeWithComments(comments, text), comments.length > 0);
     },
     [agent, agentStatus, answerPanePrompt, answering, heldByOpenQueue, sendComposerText, queueStore, machineId],
   );
@@ -1470,6 +1494,9 @@ export function PaneTerminal({
         {paneId !== null && held && (
           <div className="terminal-banner terminal-banner-warning" role="status">
             <span>{t("Another app has this pane open. It connects here as soon as that app lets go.")}</span>
+            {!observing && socketRef.current?.canTakeOver() && (
+              <button type="button" className="btn terminal-banner-action" title={t("Take this pane from another web app or terminal attach. That connection will close.")} onClick={() => { if (paneId !== null) socketRef.current?.takeOver(paneId); }}>{t("Open here")}</button>
+            )}
           </div>
         )}
         {paneId !== null && !chatView && unsupported && (
@@ -1594,7 +1621,8 @@ export function PaneTerminal({
               id={`queued-${message.id}`}
               className="composer-queue-text"
               value={message.text}
-              rows={Math.min(4, message.text.split("\n").length)}
+              rows={Math.max(1, Math.min(4, message.text.split("\n").length))}
+              placeholder={message.comments?.length ? t("Comments only") : undefined}
               aria-label={t("Queued message {n}", { n: index + 1 })}
               maxLength={MAX_COMPOSER_CHARS}
               disabled={queueStore.isSending(message.id)}
@@ -1602,15 +1630,25 @@ export function PaneTerminal({
               onChange={(event) => { queueStore.edit(queueOwner, message.id, event.target.value); }}
             />
             <div className="composer-queue-actions">
+              {message.comments?.length ? (() => {
+                const count = t("Comments with this message: {count}", { count: message.comments.length });
+                return <span className="composer-comments-chip composer-queue-comments" role="img" aria-label={count} title={count}><MessageSquare aria-hidden="true" />{message.comments.length}</span>;
+              })() : null}
               <button type="button" className="composer-queue-send"
-                disabled={!connected || held || secretActive || queueSending !== null || queued.some((item) => queueStore.isSending(item.id)) || heldByOpenQueue || message.text.trim().length === 0}
+                disabled={!connected || held || secretActive || queueSending !== null || queued.some((item) => queueStore.isSending(item.id)) || heldByOpenQueue || heldMessageText(message).trim().length === 0}
                 title={heldByOpenQueue ? t("Codex has a question open in the terminal: answer it above first") : undefined}
                 onClick={() => {
+                  // composed now, as the composer does: the comments and what is typed here
+                  const outgoing = heldMessageText(message);
+                  if (outgoing.length > MAX_COMPOSER_CHARS) {
+                    setQueueError({ owner: queueOwner, id: message.id, text: t("Too long to send. Shorten the message or remove comments.") });
+                    return;
+                  }
                   if (sendingRef.current || !queueStore.beginSend(queueOwner, message.id)) return;
                   sendingRef.current = true;
                   setQueueSending(message.id); setQueueError(null);
                   const owner = queueOwner;
-                  void Promise.resolve(sendComposerText(message.text, message.agentOnly === true))
+                  void Promise.resolve(sendComposerText(outgoing, heldAgentOnly(message)))
                     .then((result) => {
                       if (result === true) { queueStore.remove(owner, message.id); }
                       else setQueueError({ owner, id: message.id, text: typeof result === "string" ? result : t("Not sent. Reconnect and try again.") });
@@ -1670,6 +1708,7 @@ export function PaneTerminal({
       )}
       {paneId !== null && !secretActive && !observing && !ended && inputLine && <TerminalInput key={paneId} owner={paneStorageId(machineId, paneId)} onComposing={setComposing} connected={connected && !held} onSend={sendTerminalLine} onEnter={pressEnter} />}
       {paneId !== null && !secretActive && !observing && !chatView && <KeyBar disabled={composing} onKey={pressKey} ctrlArmed={ctrlArmed} onToggleCtrl={toggleCtrl}
+        altArmed={altArmed} onToggleAlt={toggleAlt} extras={settings.keyBarExtras}
         {...(coarse ? { directTyping, onToggleDirect: toggleDirect } : {})} />}
     </div>
   );

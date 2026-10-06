@@ -1,42 +1,56 @@
-/* Comments on blocks of an agent's final reply (Markdown.tsx, lib/blockComments.ts): a "+" for
-   a block, and on a commented one an accent bar and the comment under it. Beside a wide chat
-   column the "+" and the bar sit in the left gutter, so a block's text never moves; where the
-   column has no room beside it (a phone, a narrow window) the "+" sits at the block's top right. */
-.is-commentable {
-  position: relative;
-  /* from the element's left edge back to where the reply's text column starts */
-  --comment-edge: 0px;
-  --comment-add-size: 28px;
-  /* the tint of the block under the pointer or the finger. It reaches a little past the text, and
-     on the left always to one step before the text column, a list item's marker included, so the
-     tint, the bar and the "+" of every block line up however deep it sits. Opaque: the two
-     shadows that widen it overlap, and a translucent tint would draw a darker band there */
-  --comment-tint: color-mix(in srgb, var(--accent) 8%, var(--bg));
-  --comment-tint-reach: var(--space-1);
-  --comment-tint-left: calc(var(--comment-edge) + var(--space-2));
-  --comment-tint-shadow:
-    calc(var(--comment-tint-reach) - var(--comment-tint-left)) 0 0 var(--comment-tint-reach) var(--comment-tint),
-    var(--space-1) 0 0 var(--comment-tint-reach) var(--comment-tint);
-  /* the bar on the tint's left edge, the "+" a step left of the bar (in the gutter layout) */
-  --comment-bar-x: calc(-1 * var(--comment-tint-left));
-  --comment-add-x: calc(var(--comment-bar-x) - var(--space-2) - var(--comment-add-size));
-  /* how far the "+" stands out past the block's top right corner, as a badge (no gutter) */
-  --comment-badge-out: 10px;
-  transition: background-color var(--dur-fast) var(--ease-out), box-shadow var(--dur-fast) var(--ease-out);
+/* Comments on blocks of an agent's final reply (Markdown.tsx, lib/blockComments.ts): a comment is
+   made by selecting text in a reply, through the floating Comment button (ChatView.tsx), which
+   opens an inline form. The text a comment is on is highlighted (lib/commentHighlight.ts), and
+   under the part where it ends hangs a card per comment (CommentCard.tsx). Nothing is drawn
+   beside the text. A list item's own words are its `.markdown-item` (Markdown.tsx): its nested
+   blocks follow it. */
+
+/* the text of every comment shown: a tint and an accent underline, as a reviewer's marks in a
+   document (a comment on a whole part marks all its text). Translucent: on a code block, a table
+   or a blockquote their own fill shows through. The underline's thickness is a declaration of its
+   own, so a browser that does not take it in a highlight keeps the rest */
+::highlight(block-comment) {
+  background-color: color-mix(in srgb, var(--accent) 18%, transparent);
+  text-decoration-line: underline;
+  text-decoration-color: var(--accent);
+  text-decoration-thickness: 2px;
 }
 
-/* a block in a list starts past the list's indent (ChatView.css): its gutter starts where the
-   outermost list's does */
-.markdown-list .is-commentable {
-  --comment-edge: var(--space-5);
+/* the selection a comment is being written on in the inline form (its field took the browser's
+   selection away): the stronger tint over the one above, together about 35% accent */
+::highlight(block-comment-pending) {
+  background-color: color-mix(in srgb, var(--accent) 20%, transparent);
 }
 
-.markdown-list .markdown-list .is-commentable {
-  --comment-edge: calc(2 * var(--space-5));
+/* Focus mode: while a card's comment is up (the pointer over the card, the keyboard's focus in it,
+   or the composer's walk on it) lib/commentHighlight.ts sets `data-comment-focus` on that chat
+   view, and only on it, so two panes are independent. The other comments' marks fade to a hint
+   and the one that is up stands on its own: its own full underline and a strong tint, not the
+   base's. `.chat-view[…] ::highlight(name)` is valid: a highlight pseudo-element takes selectors
+   of its originating element, here the text's ancestors. A browser that cannot parse it drops
+   only this rule and keeps the plain marks above. The active and current marks are painted over
+   the faded base, so their underline and tint are their own (the app sets the attribute only
+   while one of them has text to show) */
+.chat-view[data-comment-focus] ::highlight(block-comment) {
+  background-color: color-mix(in srgb, var(--accent) 6%, transparent);
+  text-decoration-color: color-mix(in srgb, var(--accent) 40%, transparent);
 }
 
-.markdown-list .markdown-list .markdown-list .is-commentable {
-  --comment-edge: calc(3 * var(--space-5));
+::highlight(block-comment-active),
+::highlight(block-comment-current) {
+  background-color: color-mix(in srgb, var(--accent) 40%, transparent);
+  text-decoration-line: underline;
+  text-decoration-color: var(--accent);
+  text-decoration-thickness: 2px;
+}
+
+/* the text being written stays as it is while a card is up (about 35%, as with no card), over the faded base: so more of
+   its own tint, and its full underline, which the base no longer draws */
+.chat-view[data-comment-focus] ::highlight(block-comment-pending) {
+  background-color: color-mix(in srgb, var(--accent) 30%, transparent);
+  text-decoration-line: underline;
+  text-decoration-color: var(--accent);
+  text-decoration-thickness: 2px;
 }
 
 /* a code block clips and a table scrolls its own box: they sit on this host instead, which takes
@@ -60,186 +74,170 @@
   margin: 0;
 }
 
-.block-comment-add {
-  position: absolute;
-  top: calc(-1 * var(--comment-badge-out));
-  right: calc(-1 * var(--comment-badge-out));
-  z-index: 1;
-  width: var(--comment-add-size);
-  height: var(--comment-add-size);
-  display: grid;
-  place-items: center;
-  padding: 0;
-  border: var(--hairline) solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--bg-panel);
-  color: var(--text-dim);
-  cursor: pointer;
-  /* hidden but still a Tab stop: the keyboard shows it by focusing it. Going, it fades a moment
-     late; the pointer cannot press it unseen */
-  opacity: 0;
-  pointer-events: none;
-  transition: opacity 150ms ease 300ms;
-}
-
-/* a finger gets the whole touch target, the eye the small badge: the tap area reaches past it */
-@media (pointer: coarse) {
-  .block-comment-add::before {
-    content: "";
-    position: absolute;
-    inset: calc((var(--comment-add-size) - var(--touch-target)) / 2);
-  }
-}
-
-.block-comment-add svg {
-  width: 16px;
-  height: 16px;
-}
-
-@media (hover: hover) {
-  .block-comment-add:hover {
-    color: var(--text-strong);
-    border-color: var(--accent);
-  }
-}
-
-/* a code block's top right is its copy button */
-.markdown-block:has(> .markdown-code) > .block-comment-add {
-  top: 4px;
-  right: 44px;
-}
-
-/* the innermost block under the pointer, not every item it is nested in. Its "+" and tint wait a
-   moment: a pointer sweeping across the reply passes blocks it does not mean, and lights none */
-@media (hover: hover) {
-  .is-commentable:hover:not(:has(.is-commentable:hover)) > .block-comment-add {
-    opacity: 1;
-    pointer-events: auto;
-    transition: opacity var(--dur-fast) var(--ease-out) 150ms;
-  }
-
-  /* the block the "+" belongs to, tinted as a tap tints it on a phone */
-  .is-commentable:hover:not(:has(.is-commentable:hover)) {
-    border-radius: var(--radius-sm);
-    background: var(--comment-tint);
-    box-shadow: var(--comment-tint-shadow);
-    transition-delay: 150ms;
-  }
-
-  /* the pointer on another block: the "+" it left goes at once, so only one shows. The lingering
-     above is for a pointer that left a block for the gutter or the margin, on its way to the "+" */
-  .chat-view:has(.is-commentable:hover) .block-comment-add {
-    transition: opacity 80ms ease;
-  }
-}
-
-/* the keyboard or a tap chose it: no reason to wait. Keyboard focus only: the focus a closed
-   editor hands back to its "+" after a click must not keep that "+" up */
-.chat-view .block-comment-add:focus-visible,
-.chat-view .is-commentable:has(:focus-visible):not(:has(.is-commentable :focus-visible)) > .block-comment-add,
-.chat-view .is-selected > .block-comment-add {
-  opacity: 1;
-  pointer-events: auto;
-  transition: opacity var(--dur-fast) var(--ease-out);
-}
-
-.is-commentable.is-selected {
-  border-radius: var(--radius-sm);
-  background: var(--comment-tint);
-  box-shadow: var(--comment-tint-shadow);
-}
-
-/* A chat column with room beside it (ChatView.css names the container): the "+" moves into the
-   left gutter, out of the text's way. From 880px the 820px column and the view's padding leave
-   it the 44px it takes. */
-@container chat (min-width: 880px) {
-  /* flush with the top of the tint, which reaches past the text. Out in the gutter it covers no
-     text, so it needs no surface of its own: a quiet icon, with a surface under the pointer */
-  .block-comment-add,
-  .markdown-block:has(> .markdown-code) > .block-comment-add {
-    top: calc(-1 * var(--comment-tint-reach));
-    right: auto;
-    left: var(--comment-add-x);
-    border-color: transparent;
-    background: transparent;
-  }
-
-  .block-comment-add:hover {
-    border-color: transparent;
-    background: var(--bg-hover);
-  }
-
-  /* the gutter beside a block, all the way down, is the block's: the pointer travelling from any
-     of its lines to the "+" keeps it hovered */
-  .is-commentable::after {
-    content: "";
-    position: absolute;
-    top: 0;
-    bottom: 0;
-    right: 100%;
-    width: calc(-1 * var(--comment-add-x));
-  }
-}
-
-/* above the tint's shadow, which reaches under it */
-.is-commented::before {
-  content: "";
-  z-index: 1;
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  left: var(--comment-bar-x);
-  width: var(--rail-w);
-  border-radius: 2px;
-  background: var(--accent);
-}
-
-/* The comment is the reader's own note, so it reads as one: a tinted box, in the text colour, not a
-   dim caption. Close under its block: the block's bottom margin stays below the row instead. Its
-   box starts where the block's tint does, so the words stay under the block's words. */
-.block-comment-row {
+/* A part's cards, one per comment in reading order, full width under it (and the inline form for
+   a new comment after them); the part's bottom margin goes below the last, so the part and its
+   cards read as one group */
+.block-comment-notes {
   display: flex;
-  align-items: flex-start;
+  flex-direction: column;
   gap: var(--space-2);
-  width: fit-content;
-  max-width: calc(100% + var(--space-2));
-  margin: calc(var(--space-1) - var(--space-3)) 0 var(--space-3) calc(-1 * var(--space-2));
-  padding: var(--space-1) var(--space-2);
-  border: 0;
-  border-radius: var(--radius-sm);
-  background: var(--accent-tint);
+  margin: var(--space-2) 0 var(--space-3) 0;
+}
+
+.is-commentable:has(+ .block-comment-notes) {
+  margin-bottom: 0;
+}
+
+/* in a list a paragraph or a table keeps only --space-1 below it (ChatView.css, above): so does
+   the group of it and its cards. Same specificity as the table rule above, after it */
+.markdown-list .is-commentable:has(+ .block-comment-notes) {
+  margin-bottom: 0;
+}
+
+.markdown-list p + .block-comment-notes,
+.markdown-list .markdown-block:has(> .markdown-table-wrap) + .block-comment-notes {
+  margin-bottom: var(--space-1);
+}
+
+/* a list item's cards are inside the item's own box (Markdown.tsx), before its nested blocks */
+.markdown-item > .block-comment-notes {
+  margin: var(--space-2) 0 0 0;
+}
+
+/* A comment's card, GitLab's pending draft note: a surface tinted with the accent and an edge of
+   it, so it reads as a comment of the reader's, not as part of the reply; a header row (the
+   "Pending" badge, Edit and Delete on the right) and the comment in full below it. No author: the
+   comment is the reader's own. The text it is on shows as the highlight (lib/commentHighlight.ts).
+   A group, not a button: its two buttons are the controls. The form that writes or edits a comment
+   (CommentCard.tsx) is a card of the same frame, untinted (below) */
+.block-comment-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding: var(--space-2) var(--space-3);
+  border: var(--hairline) solid color-mix(in srgb, var(--accent) 35%, var(--border));
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--accent) 8%, var(--bg-elevated));
   color: var(--text);
-  font: inherit;
   font-size: var(--fs-sm);
   line-height: var(--lh-base);
-  text-align: left;
-  cursor: pointer;
+  transition: border-color var(--dur-fast) var(--ease-out);
 }
 
-li > .block-comment-row {
-  margin: var(--space-1) 0 0 calc(-1 * var(--space-2));
+.block-comment-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
 }
 
-.block-comment-row svg {
-  flex: none;
-  width: 14px;
-  height: 14px;
-  margin-top: 0.25em;
+/* the comment waits for the next message: the accent, as other things that are yours and unsent;
+   a stronger tint than the card's, so it stands on it */
+.block-comment-badge {
   color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
 }
 
-.block-comment-row span {
-  display: -webkit-box;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
-  overflow: hidden;
+/* the buttons sit on the right, a little smaller than the app's icon buttons, which would make the
+   header taller than its text; a finger gets the full touch target. After .icon-button (styles.css):
+   same specificity, so the order decides */
+.block-comment-action {
+  width: calc(var(--control-h) - var(--space-2));
+  height: calc(var(--control-h) - var(--space-2));
+  color: var(--text-dim);
+}
+
+.block-comment-edit {
+  margin-left: auto;
+}
+
+@media (hover: hover) {
+  .block-comment-action:hover:not(:disabled) {
+    color: var(--text-strong);
+  }
+}
+
+/* the comment, as written: its lines and long words kept, plain text */
+.block-comment-text {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
 
+/* The card that is up (the pointer over it, the keyboard's focus in it; its comment's text comes up
+   too, see Focus mode above) has an accent edge, as the card the walk stands on has, so the card
+   and its text pair. The form is no card to point at: it keeps its own edge. Not on a touch
+   screen, where a tap leaves :hover on */
 @media (hover: hover) {
-  .block-comment-row:hover {
-    background: color-mix(in srgb, var(--accent) 20%, transparent);
-    color: var(--text-strong);
+  .block-comment-card:not(.is-editing):hover {
+    border-color: var(--accent);
+  }
+}
+
+/* the keyboard's: only a focus the keyboard (or the walk) put there, as `focusOn` in CommentCard.tsx */
+.block-comment-card:not(.is-editing):focus-visible {
+  border-color: var(--accent);
+}
+
+/* its own rule: a browser without :has() drops only this one */
+.block-comment-card:not(.is-editing):has(:focus-visible) {
+  border-color: var(--accent);
+}
+
+/* The card the walk from the composer stands on (Composer.tsx sets `is-current` by hand, one at
+   a time, until the next step, a click elsewhere or Escape, which also brings the focus back to
+   the walk control): an accent border, the same as hover and the keyboard's focus; its comment's
+   text takes the current highlight (above) */
+.block-comment-card.is-current {
+  border-color: var(--accent);
+}
+
+/* the form: the field and, under it, Cancel and Save on the right. Not yet a comment: the plain
+   elevated surface, untinted, as GitLab's reply form */
+.block-comment-card.is-editing {
+  gap: var(--space-2);
+  border-color: var(--border-strong);
+  background: var(--bg-elevated);
+}
+
+.block-comment-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-2);
+}
+
+/* smaller than the app's dialog buttons: the card is small, and a mouse aims well */
+.block-comment-actions .btn {
+  height: calc(var(--control-h) - var(--space-2));
+  padding: 0 var(--space-2);
+}
+
+/* The Comment button over text selected in a final reply (ChatView.tsx): the app's small floating
+   control, a pill on the elevated surface with the card shadow. Placed by script inside the
+   scrolling view, so it scrolls with the text. A press on it keeps the selection; its own label is
+   not selectable */
+.comment-selection {
+  position: absolute;
+  z-index: var(--z-popover);
+  border-radius: var(--radius-pill);
+  box-shadow: var(--shadow-card);
+  font-size: var(--fs-sm);
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+}
+
+@media (pointer: coarse) {
+  .comment-selection {
+    height: var(--touch-target);
+  }
+
+  /* fingers: the card's buttons and the form's reach the touch target (the header grows with them) */
+  .block-comment-action {
+    width: var(--touch-target);
+    height: var(--touch-target);
+  }
+
+  .block-comment-actions .btn {
+    height: var(--touch-target);
+    padding: 0 var(--space-3);
   }
 }

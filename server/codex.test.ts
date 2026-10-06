@@ -1,8 +1,8 @@
-import { afterEach, describe, expect, it } from "bun:test";
+import { afterEach, describe, expect, it, spyOn } from "bun:test";
 import { appendFileSync, mkdirSync, mkdtempSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { codexCallFailed, codexHistoryTail, codexRolloutPath, forgetHistoryChains, matchCodexTranscript, matchShortCodexAnswers, parseCodexTranscript, resumedThread, unansweredCodexQuestions } from "./codex.ts";
+import { codexCallFailed, codexHistoryTail, codexHomeInPsLine, codexRolloutPath, processCodexHome, forgetHistoryChains, matchCodexTranscript, matchShortCodexAnswers, parseCodexTranscript, resumedThread, unansweredCodexQuestions } from "./codex.ts";
 import { splitTurn } from "../src/lib/workBlocks.ts";
 
 const ts = "2026-09-22T01:00:00.000Z";
@@ -12,6 +12,56 @@ const message = (role: string, text: string, phase?: string) => item({
   type: "message", role, content: [{ type: role === "user" ? "input_text" : "output_text", text }], ...(phase ? { phase } : {}),
 });
 const jsonl = (...records: unknown[]) => records.map((record) => JSON.stringify(record)).join("\n");
+
+describe("a Codex process's own store", () => {
+  it.skipIf(process.platform !== "linux" && process.platform !== "darwin")("reads CODEX_HOME from the process's environment, and nothing from one without it", async () => {
+    // not a system binary: macOS shows no environment of those (Codex is not one)
+    const sleeper = (env: Record<string, string | undefined>) =>
+      Bun.spawn([process.execPath, "-e", "console.log('up'); await Bun.sleep(5000)"], { env, stdout: "pipe" });
+    // the stores are directories that are there: a value that names none is no store (macOS reads it from `ps`)
+    const withHome = sleeper({ ...process.env, CODEX_HOME: tmpdir() });
+    const without = sleeper(Object.fromEntries(Object.entries(process.env).filter(([key]) => key !== "CODEX_HOME")));
+    // a macOS home folder can hold a space; a variable after it ends the value
+    const spaced = sleeper({ ...process.env, CODEX_HOME: join(tmpdir(), "harness codex test"), AFTER_CODEX_HOME: "x" });
+    mkdirSync(join(tmpdir(), "harness codex test"), { recursive: true });
+    try {
+      // all have started (exec'd) before their environment is read
+      for (const child of [withHome, without, spaced]) await child.stdout.getReader().read();
+      expect(await processCodexHome(withHome.pid)).toBe(tmpdir());
+      expect(await processCodexHome(without.pid)).toBeNull();
+      expect(await processCodexHome(spaced.pid)).toBe(join(tmpdir(), "harness codex test"));
+    } finally { withHome.kill(); without.kill(); spaced.kill(); }
+  });
+
+  it.skipIf(process.platform !== "linux" && process.platform !== "darwin")("keeps a process's store under its pid and argv, and reads it again for other arguments", async () => {
+    const home = mkdtempSync(join(tmpdir(), "herdr-codex-home-"));
+    const child = Bun.spawn([process.execPath, "-e", "console.log('up'); await Bun.sleep(5000)"], { env: { ...process.env, CODEX_HOME: home }, stdout: "pipe" });
+    try {
+      await child.stdout.getReader().read();
+      expect(await processCodexHome(child.pid, ["codex", "--first"])).toBe(home);
+      // the store goes away: the same pid and argv are answered from what was read, without reading again
+      rmSync(home, { recursive: true, force: true });
+      expect(await processCodexHome(child.pid, ["codex", "--first"])).toBe(home);
+      // other arguments under that pid are another process as far as the cache knows: read again
+      expect(await processCodexHome(child.pid, ["codex", "--second"])).toBeNull();
+      // Even matching pid/argv must be re-read at the deadline, without a real 30-second sleep.
+      const expiredAt = Date.now() + 30_001;
+      const clock = spyOn(Date, "now").mockReturnValue(expiredAt);
+      try {
+        expect(await processCodexHome(child.pid, ["codex", "--first"])).toBeNull();
+      } finally { clock.mockRestore(); }
+    } finally { child.kill(); rmSync(home, { recursive: true, force: true }); }
+  });
+});
+
+describe("CODEX_HOME in a ps -E line", () => {
+  it("takes the last assignment, keeps spaces in it, and ends it at the next variable", () => {
+    expect(codexHomeInPsLine("node /opt/codex/bin/codex.js --model x PATH=/usr/bin CODEX_HOME=/Users/alice/Codex Profiles/work TERM=xterm")).toBe("/Users/alice/Codex Profiles/work");
+    expect(codexHomeInPsLine("codex CODEX_HOME=/tmp/arg HOME=/Users/alice CODEX_HOME=/Users/alice/.codex-work")).toBe("/Users/alice/.codex-work");
+    expect(codexHomeInPsLine("codex exec HOME=/Users/alice TERM=xterm")).toBeNull();
+    expect(codexHomeInPsLine("codex CODEX_HOME= HOME=/Users/alice")).toBeNull();
+  });
+});
 
 describe("Codex conversation records", () => {
   it("hides injected context, metadata and developer messages while preserving the real request", () => {

@@ -1,12 +1,14 @@
 import { describe, expect, it } from "bun:test";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { Markdown } from "../components/Markdown.tsx";
+import { loadKatex, Markdown } from "../components/Markdown.tsx";
 import { SettingsProvider } from "./settings.ts";
 import { FOLD_CODE_AFTER_LINES, FOLDED_CODE_LINES, foldCode, MAX_QUOTE_DEPTH, parseInline, parseMarkdown, safeMarkdownHref, type InlineNode, type ListBlock, type MarkdownBlock } from "./markdown.ts";
 
 describe("parseMarkdown", () => {
-  it("renders inline and display math while leaving fenced code untouched", () => {
+  it("renders inline and display math while leaving fenced code untouched", async () => {
+    // the chat fetches KaTeX with the first expression; a static render draws it once it is there
+    await loadKatex();
     const languages = Object.getOwnPropertyDescriptor(navigator, "languages");
     Object.defineProperty(navigator, "languages", { configurable: true, value: ["en"] });
     try {
@@ -266,9 +268,9 @@ describe("numbered lists as agents write them", () => {
     ]);
     const html = render("1. step\n   - [x] done\n   - [ ] open");
     // the box is named by the item's text, so a screen reader says "done, checkbox, checked"
-    const done = /<li class="markdown-task"><span class="markdown-task-box" role="checkbox" aria-checked="true" aria-disabled="true" aria-labelledby="([^"]+)"><svg[^]*?<\/svg><\/span><span id="([^"]+)"><span>done<\/span><\/span><\/li>/.exec(html);
+    const done = /<li class="markdown-task"><div class="markdown-item"><span class="markdown-task-box" role="checkbox" aria-checked="true" aria-disabled="true" aria-labelledby="([^"]+)"><svg[^]*?<\/svg><\/span><span id="([^"]+)"><span>done<\/span><\/span><\/div><\/li>/.exec(html);
     expect(done?.[1]).toBe(done?.[2]!);
-    const open = /<li class="markdown-task"><span class="markdown-task-box" role="checkbox" aria-checked="false" aria-disabled="true" aria-labelledby="([^"]+)"><\/span><span id="([^"]+)"><span>open<\/span><\/span><\/li>/.exec(html);
+    const open = /<li class="markdown-task"><div class="markdown-item"><span class="markdown-task-box" role="checkbox" aria-checked="false" aria-disabled="true" aria-labelledby="([^"]+)"><\/span><span id="([^"]+)"><span>open<\/span><\/span><\/div><\/li>/.exec(html);
     expect(open?.[1]).toBe(open?.[2]!);
     expect(done).not.toBeNull();
     expect(open).not.toBeNull();
@@ -308,7 +310,7 @@ describe("numbered lists as agents write them", () => {
     const source = "1. first\n\n   | a | b |\n   |---|---|\n   | 1 | 2 |\n\n1. second\n1. third";
     expect(lists(source)).toEqual([{ start: 1, items: 3 }]);
     const html = render(source);
-    expect(html).toContain('<ol class="markdown-list"><li><span>first</span><div class="markdown-block"><div class="markdown-table-wrap"><table>');
+    expect(html).toContain('<ol class="markdown-list"><li><div class="markdown-item"><span>first</span></div><div class="markdown-block"><div class="markdown-table-wrap"><table>');
     expect(html.match(/<ol/g)).toHaveLength(1);
   });
 
