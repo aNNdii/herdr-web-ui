@@ -387,6 +387,15 @@ export function composeWithComments(comments: readonly PaneComment[], text: stri
   return entries.join("\n\n");
 }
 
+/**
+ * Whether `text` has a line quoted as `composeWithComments` quotes: one starting with ">". A copy of
+ * a queued message keeps only its text, so this is what tells that it may carry comments, and must
+ * reach an agent only (never a shell, which would take the "> " for a redirect).
+ */
+export function hasQuotedLine(text: string): boolean {
+  return /^>/m.test(text);
+}
+
 /** Why comments stay in the composer instead of going with a message. */
 export type CommentsHeldBy = "no-agent" | "answer" | "command";
 

@@ -140,6 +140,8 @@ function SettingsWindow({ onClose, actions, updates, auth, herdrVersion, onEnabl
   latest.current = { query, phone, onClose };
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent): void => {
+      // an Escape that cancels an IME composition (the key bar editor's Character field) is the IME's
+      if (event.key === "Escape" && (event.isComposing || event.keyCode === 229)) return;
       if (event.key === "Escape") {
         event.preventDefault();
         // a search is cleared first; the next Escape closes

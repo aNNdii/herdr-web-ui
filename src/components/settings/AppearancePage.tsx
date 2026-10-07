@@ -6,13 +6,13 @@ import { LANGUAGE_NAMES, LANGUAGE_SETTINGS, useT } from "../../lib/i18n.ts";
 import { useSettings, type Palette } from "../../lib/settings.ts";
 import { Segmented, SettingsGroup, SettingsRow } from "./SettingsUi.tsx";
 
-const PALETTES: readonly Palette[] = ["amber", "report", "charcoal", "catppuccin"];
+const PALETTES: readonly Palette[] = ["amber", "report", "charcoal", "catppuccin", "lilac"];
 
 /** Settings → Appearance: the colours, the density, the sidebar's grouping and the language. */
 export function AppearancePage() {
   const { settings, resolvedTheme, resolvedLanguage, update } = useSettings();
   const t = useT();
-  const paletteName = (palette: Palette): string => t(palette === "report" ? "Dark report" : palette === "amber" ? "Amber" : palette === "catppuccin" ? "Catppuccin" : "Charcoal");
+  const paletteName = (palette: Palette): string => t(palette === "report" ? "Dark report" : palette === "amber" ? "Amber" : palette === "catppuccin" ? "Catppuccin" : palette === "lilac" ? "Lilac" : "Charcoal");
   return (
     <>
       <SettingsGroup title={t("Color")}>
@@ -20,7 +20,7 @@ export function AppearancePage() {
           <Segmented label={t("Mode")} value={settings.theme} onChange={(theme) => update({ theme })}
             options={[{ value: "dark", label: t("Dark") }, { value: "light", label: t("Light") }, { value: "system", label: t("System") }]} />
         } />
-        <SettingsRow label={t("Palette")} keywords="palette colors theme amber dark report charcoal catppuccin" stack control={
+        <SettingsRow label={t("Palette")} keywords="palette colors theme amber dark report charcoal catppuccin lilac lavender" stack control={
           // each preview carries its palette's tokens itself (src/styles.css keys them on data-theme and data-palette)
           <div className="palette-tiles" role="radiogroup" aria-label={t("Palette")}>
             {PALETTES.map((palette) => (
@@ -48,6 +48,10 @@ export function AppearancePage() {
         <SettingsRow label={t("Group sidebar by")} description={t("Folder groups by the full path on each PC")} keywords="sidebar grouping group workspace folder directory" control={
           <Segmented label={t("Group sidebar by")} value={settings.sidebarGrouping} onChange={(sidebarGrouping) => update({ sidebarGrouping })}
             options={[{ value: "workspace", label: t("Workspace") }, { value: "directory", label: t("Folder") }]} />
+        } />
+        <SettingsRow label={t("Sidebar rows")} description={t("Name each workspace on one line, or show what its agent is doing with the workspace under it")} keywords="sidebar rows one two lines workspace agent" control={
+          <Segmented label={t("Sidebar rows")} value={settings.sidebarRows} onChange={(sidebarRows) => update({ sidebarRows })}
+            options={[{ value: "one", label: t("One line") }, { value: "two", label: t("Two lines") }]} />
         } />
         <SettingsRow label={t("Language")} description={t("System follows the browser")} keywords="language english korean japanese chinese system" control={
           <select className="select" aria-label={t("Language")} value={settings.language} onChange={(event) => update({ language: event.target.value as typeof settings.language })}>

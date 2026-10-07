@@ -3,6 +3,7 @@ import { describe, expect, it } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { FONT_FAMILY_MAX_CHARS } from "./fontFamily.ts";
+import { DEFAULT_KEY_BAR_ITEMS, migrateKeyBarItems } from "./keyBar.ts";
 import { alertPrefs, CHAT_FONT_MAX, CHAT_FONT_MIN, CHAT_LANE_MAX_REM, CHAT_LANE_MIN, CHAT_WIDTHS, chatFontSize, chatLaneLength, chatLaneWidth, DEFAULT_SETTINGS, MARKDOWN_WIDTHS, QUICK_REPLIES_MAX, QUICK_REPLY_MAX_CHARS, quickReplyButtons, sanitizeSettings, terminalTheme, forgetPaneViews } from "./settings.ts";
 
 it("keeps the screen wake lock off until this device explicitly enables it", () => {
@@ -17,6 +18,14 @@ it("keeps the screen wake lock off until this device explicitly enables it", () 
   expect(sanitizeSettings({ terminalWheelSpeed: 99 }).terminalWheelSpeed).toBe(10);
   expect(sanitizeSettings({ terminalWheelSpeed: 0 }).terminalWheelSpeed).toBe(1);
   expect(sanitizeSettings({ terminalWheelSpeed: "3" }).terminalWheelSpeed).toBe(1);
+});
+
+it("keeps sidebar rows on one line unless two lines were chosen", () => {
+  expect(sanitizeSettings({}).sidebarRows).toBe("one");
+  expect(sanitizeSettings({ sidebarRows: "two" }).sidebarRows).toBe("two");
+  for (const sidebarRows of [null, true, "three", 2]) {
+    expect(sanitizeSettings({ sidebarRows }).sidebarRows).toBe("one");
+  }
 });
 
 it("defaults legacy records to workspace grouping and accepts only supported modes", () => {
@@ -38,6 +47,15 @@ describe("chat font size", () => {
     expect(sanitizeSettings({ chatFontSize: 15.6 }).chatFontSize).toBe(16);
     expect(sanitizeSettings({ chatFontSize: "18" }).chatFontSize).toBeNull();
     expect(sanitizeSettings({ terminalFontSize: 15 }).chatFontSize).toBeNull();
+  });
+
+  it("sizes the message box too: with a mouse at the transcript's size, on touch never under --fs-input", () => {
+    const css = readFileSync(join(import.meta.dir, "..", "components", "Composer.css"), "utf8");
+    const sizes = [...css.matchAll(/\.composer-text \{[^}]*?font-size: ([^;]+);/g)].map((match) => match[1]);
+    expect(sizes).toEqual([
+      "max(var(--fs-input), calc(var(--fs-chat) * var(--chat-scale, 1)))",
+      "calc(var(--fs-chat) * var(--chat-scale, 1))",
+    ]);
   });
 });
 
@@ -307,6 +325,7 @@ describe("palette", () => {
     expect(sanitizeSettings({ palette: "report" }).palette).toBe("report");
     expect(sanitizeSettings({ palette: "charcoal" }).palette).toBe("charcoal");
     expect(sanitizeSettings({ palette: "catppuccin" }).palette).toBe("catppuccin");
+    expect(sanitizeSettings({ palette: "lilac" }).palette).toBe("lilac");
     expect(sanitizeSettings({ palette: "pink" }).palette).toBe("amber");
   });
 
@@ -329,6 +348,8 @@ describe("palette", () => {
     { theme: "light", palette: "charcoal", layers: ['[data-theme="light"][data-palette="charcoal"]', paper, '[data-theme="light"]', base] },
     { theme: "dark", palette: "catppuccin", layers: ['[data-theme="dark"][data-palette="catppuccin"]', base] },
     { theme: "light", palette: "catppuccin", layers: ['[data-theme="light"][data-palette="catppuccin"]', '[data-theme="light"]', base] },
+    { theme: "dark", palette: "lilac", layers: ['[data-theme="dark"][data-palette="lilac"]', base] },
+    { theme: "light", palette: "lilac", layers: ['[data-theme="light"][data-palette="lilac"]', '[data-theme="light"]', base] },
   ] as const;
   const tokens = (layers: readonly string[]) => (name: string): string =>
     layers.map((selector) => block(selector).match(new RegExp(`--${name}: ([^;]+);`))?.[1]).find((value) => value !== undefined)!;
@@ -401,6 +422,28 @@ it("sanitizes input modes and shortcut overrides without accepting arbitrary com
   expect(sanitizeSettings({ terminalInputMode: "bad" }).terminalInputMode).toBe("auto");
   expect(sanitizeSettings({ terminalInputMode: "line" }).terminalInputMode).toBe("line");
   expect(sanitizeSettings({ shortcutOverrides: { palette: "p", settings: null, voice: "x", unknown: "x", "next-pane": "rm -rf" } }).shortcutOverrides).toEqual({ palette: "p", settings: null });
+});
+
+describe("key bar settings", () => {
+  it("migrates existing optional keys without restoring keys a new layout removed", () => {
+    expect(DEFAULT_SETTINGS.keyBarItems).toEqual(DEFAULT_KEY_BAR_ITEMS);
+    expect(sanitizeSettings({}).keyBarItems).toEqual(DEFAULT_KEY_BAR_ITEMS);
+    expect(sanitizeSettings({ keyBarExtras: ["home-end", "slash", "unknown"] }).keyBarItems).toEqual(migrateKeyBarItems(["home-end", "slash"]));
+    expect(sanitizeSettings({ keyBarExtras: [], keyBarItems: [] }).keyBarItems).toEqual([]);
+    expect(sanitizeSettings({ keyBarExtras: ["alt"], keyBarItems: [] }).keyBarItems).toEqual([]);
+    expect(sanitizeSettings({ keyBarExtras: [], keyBarItems: "bad" }).keyBarItems).toEqual(migrateKeyBarItems([]));
+  });
+
+  it("preserves a custom chord and new order through a saved settings round-trip and unrelated edits", () => {
+    const settings = sanitizeSettings({ keyBarExtras: ["alt"], keyBarItems: [
+      { type: "key", key: "ArrowLeft", modifiers: { ctrl: true, alt: true, shift: false } },
+      { type: "modifier", modifier: "shift" }, { type: "key", key: "Enter" },
+    ] });
+    const reloaded = sanitizeSettings(JSON.parse(JSON.stringify(settings)));
+    expect(reloaded.keyBarItems).toEqual(settings.keyBarItems);
+    expect(sanitizeSettings({ ...reloaded, theme: "light" }).keyBarItems).toEqual(settings.keyBarItems);
+    expect(settings.keyBarItems.map((item) => item.type === "modifier" ? item.modifier : item.key)).toEqual(["ArrowLeft", "shift", "Enter"]);
+  });
 });
 
 describe("default lens", () => {
