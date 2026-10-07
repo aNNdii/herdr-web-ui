@@ -2,9 +2,8 @@ import "./TerminalPage.css";
 
 import { useT } from "../../lib/i18n.ts";
 import { terminalFontStack } from "../../lib/fontFamily.ts";
-import { KEY_BAR_EXTRAS } from "../../lib/keys.ts";
 import { TERMINAL_FONT_MAX, TERMINAL_FONT_MIN, TERMINAL_WHEEL_SPEED_MAX, TERMINAL_WHEEL_SPEED_MIN, useSettings, type Settings } from "../../lib/settings.ts";
-import { EXTRA_KEY_CAPS } from "../KeyBar.tsx";
+import { KeyBarSettings } from "../KeyBarSettings.tsx";
 import { FontFamilyInput } from "./FontFamilyInput.tsx";
 import { SettingsGroup, SettingsRow, Stepper } from "./SettingsUi.tsx";
 
@@ -54,22 +53,9 @@ export function TerminalPage() {
             decreaseLabel={t("Slower wheel scrolling")} increaseLabel={t("Faster wheel scrolling")} onChange={(terminalWheelSpeed) => update({ terminalWheelSpeed })} />
         } />
       </SettingsGroup>
-      <SettingsGroup title={t("Key bar")} intro={t("Extra keys in the bar under the terminal on a touch screen. Esc, Tab, Ctrl, the arrows and ^C are always there.")}>
-        <SettingsRow label={t("Extra keys")} keywords="key bar extra keys touch alt tab home end page ctrl pipe tilde slash" stack control={
-          // drawn as the caps they put in the bar (KeyBar.css)
-          <div className="key-bar-extras" role="group" aria-label={t("Key bar")}>
-            {KEY_BAR_EXTRAS.map((extra) => {
-              const { cap, label } = EXTRA_KEY_CAPS[extra];
-              const on = settings.keyBarExtras.includes(extra);
-              return (
-                <button key={extra} type="button" aria-pressed={on} aria-label={label ? t(label) : undefined} title={label ? t(label) : undefined}
-                  onClick={() => update({ keyBarExtras: on ? settings.keyBarExtras.filter((chosen) => chosen !== extra) : [...settings.keyBarExtras, extra] })}>
-                  {cap}
-                </button>
-              );
-            })}
-          </div>
-        } />
+      <SettingsGroup title={t("Key bar")} intro={t("Keys, order and custom combinations for the terminal.")}>
+        {/* the touch key bar's editor (KeyBarSettings): its keys in order, added keys and combinations */}
+        <SettingsRow keywords="key bar keys order combination touch ctrl alt shift tab home end page pipe tilde slash" stack control={<KeyBarSettings />} />
       </SettingsGroup>
     </>
   );

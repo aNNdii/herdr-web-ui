@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import { parseMarkdown, type ListBlock, type MarkdownBlock } from "./markdown.ts";
-import { BLOCK_COMMENTS_PREFIX, BlockCommentStore, blockContent, blockTarget, commentCanSave, commentTarget, commentTyped, composeWithComments, draftComment, formPlace, isBlockComment, isMarkdownBlock, isPaneComment, isReplyComment, noteHost, notesOnPart, outgoingMessage, partSegments, quoteExcerpt, quoteFor, replyPart, replyParts, SELECTION_QUOTE_MAX, selectionTarget, textRange, type BlockComment, type CommentTarget } from "./blockComments.ts";
+import { BLOCK_COMMENTS_PREFIX, BlockCommentStore, blockContent, blockTarget, commentCanSave, commentTarget, commentTyped, composeWithComments, draftComment, formPlace, hasQuotedLine, isBlockComment, isMarkdownBlock, isPaneComment, isReplyComment, noteHost, notesOnPart, outgoingMessage, partSegments, quoteExcerpt, quoteFor, replyPart, replyParts, SELECTION_QUOTE_MAX, selectionTarget, textRange, type BlockComment, type CommentTarget } from "./blockComments.ts";
 import { fileAnchor, type FileComment, type FileTarget } from "./fileComments.ts";
 
 const TS = "2026-10-03T10:12:00Z";
@@ -322,6 +322,12 @@ describe("composeWithComments", () => {
       expect(composeWithComments(comments, text)).toBe(outgoingMessage(comments, text).message);
     }
     expect(composeWithComments([late, early], "typed")).toBe("> First\nearlier\n\n> Second\nlater\n\ntyped");
+  });
+  it("tells a composed message by its quoted lines, wherever they start, and plain text by none", () => {
+    expect(hasQuotedLine(composeWithComments([late, early], "typed"))).toBe(true);
+    expect(hasQuotedLine("typed first\n> then a quote")).toBe(true);
+    expect(hasQuotedLine("a > in the middle\nof plain text")).toBe(false);
+    expect(hasQuotedLine("plain")).toBe(false);
   });
   it("names the sent comments in reading order next to their ids", () => {
     const out = outgoingMessage([late, early], "typed");
