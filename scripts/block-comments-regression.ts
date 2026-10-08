@@ -1,7 +1,15 @@
 /**
- * Block comments on an agent's reply, made by selecting text: the highlight and a speech bubble per comment, the desktop
- * popover and the phone's sheet, a selection over several parts, with a real Codex transcript and an owned herdr pane.
- * Waits are bounded polls (`eventually`, `frames`), never fixed sleeps.
+ * Comments on an agent's reply in the chat, with a real Codex transcript and an owned herdr pane: a comment made by a
+ * mouse's drag over text (it opens as the mouse lets go) or by clicking or tapping a block, never by a Comment button
+ * (there is none: a keyboard or touch selection, a double or triple click open nothing), its pin's tip where it was
+ * clicked or the drag let go, else (a comment stored without a point) after the end of its text (the text highlighted),
+ * the popover beside the pin, to its right (a bottom sheet on a phone), a saved comment opened straight into its field
+ * (its text highlighted meanwhile) with Delete beside ↑, the keys and the focus, the composer's walk and send, the text
+ * moving under the pins, and the setting that turns comments off.
+ *
+ * One server, pane and browser per run. Each case starts from a fresh page with an empty comment store (or the
+ * comments it seeds), so a case runs alone: `BLOCK_COMMENTS_CASE=<name>[,<name>]` runs only those (unset: all).
+ * Waits are bounded polls (`eventually`, `frames`), never fixed sleeps. Serves `dist/`: build first.
  */
 import "./test-herdr.ts";
 import assert from "node:assert/strict";
@@ -9,12 +17,15 @@ import { Database } from "bun:sqlite";
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { chromium, type Locator, type Page } from "playwright-core";
+import { chromium, devices, type Browser, type BrowserContext, type BrowserContextOptions, type Locator, type Page } from "playwright-core";
 import { createServer } from "../server/index.ts";
 import { herdrRpc, workspaceClose, workspaceCreate } from "../server/herdr/client.ts";
+import { openSettingsPage } from "./settings-page.ts";
 
 const INTRO = "Intro paragraph about the state.";
 const LONG_PARAGRAPH = "A longer paragraph that runs across several lines on a phone, so its first line reaches the right edge where the comment button sits.";
+/** One word, no space to break at, that wraps anywhere (`.markdown` has `overflow-wrap: anywhere`): its first line fills the column to its right edge. */
+const CHECKSUM = `Checksum:${"0123456789abcdef".repeat(10)}`;
 const ANSWER = [
   INTRO,
   "",
@@ -26,28 +37,14 @@ const ANSWER = [
   "",
   LONG_PARAGRAPH,
   "",
+  CHECKSUM,
+  "",
   "```ts",
   "const a = 1;",
   "```",
-].join("\n");
-
-/** A reply with an inline and a display formula: what a selection in a formula, its highlight and its bubble's tail are measured on. */
-const MATH_ANSWER = [
-  "Energy relates to mass as \\(E = mc^2\\) in a vacuum.",
   "",
-  "\\[ a^2 + b^2 = c^2 \\]",
-].join("\n");
-
-/** A reply with a long code block (it folds) and a link, for selections in an unfolded block and for the editor's quote. */
-const LONG_CODE = Array.from({ length: 40 }, (_, n) => `line ${n + 1}`).join("\n");
-const LONG_ANSWER = [
-  "Intro paragraph about the state.",
-  "",
-  "See [docs](https://example.com).",
-  "",
-  "```text",
-  LONG_CODE,
-  "```",
+  // more than a view of text: the walk has to scroll to a comment, and a view of the end hides the intro
+  ...Array.from({ length: 14 }, (_, n) => `Step ${n + 1} of the rollout keeps the service up while it moves.\n`),
 ].join("\n");
 
 const root = mkdtempSync(join(tmpdir(), "herdr-web-ui-block-comments-"));
@@ -55,13 +52,11 @@ const codexHome = join(root, "codex-home");
 const thread = "01a0c7a1-56d9-7e20-9f08-f7a2d973bc12";
 mkdirSync(join(codexHome, "sessions"), { recursive: true });
 const transcript = join(codexHome, "sessions", `rollout-2026-10-04T00-00-00-${thread}.jsonl`);
-/** Writes the rollout: the user's question and `answer` as the final answer. */
-const writeTranscript = (answer: string): void => writeFileSync(transcript, [
+writeFileSync(transcript, [
   { type: "session_meta", payload: { id: thread, cwd: root } },
   { timestamp: "2026-10-04T10:00:00.000Z", type: "response_item", payload: { type: "message", role: "user", content: [{ type: "input_text", text: "Show me the plan." }] } },
-  { timestamp: "2026-10-04T10:00:05.000Z", type: "response_item", payload: { type: "message", role: "assistant", phase: "final_answer", content: [{ type: "output_text", text: answer }] } },
+  { timestamp: "2026-10-04T10:00:05.000Z", type: "response_item", payload: { type: "message", role: "assistant", phase: "final_answer", content: [{ type: "output_text", text: ANSWER }] } },
 ].map((row) => JSON.stringify(row)).join("\n"));
-writeTranscript(ANSWER);
 const db = new Database(join(codexHome, "state_5.sqlite"));
 db.exec("CREATE TABLE threads (id TEXT, rollout_path TEXT, cwd TEXT, archived INTEGER, agent_role TEXT, created_at INTEGER, updated_at INTEGER, source TEXT, first_user_message TEXT)");
 db.query("INSERT INTO threads VALUES (?, ?, ?, 0, NULL, 1, 1, 'cli', ?)").run(thread, transcript, root, "Show me the plan.");
@@ -69,55 +64,11 @@ db.close();
 const standIn = join(root, "codex");
 writeFileSync(standIn, "#!/bin/sh\nsleep 600\n");
 chmodSync(standIn, 0o755);
-const evidence = process.env.UI_EVIDENCE_DIR;
-if (evidence) mkdirSync(evidence, { recursive: true });
-let workspace: string | undefined;
-let server: ReturnType<typeof createServer> | undefined;
-let browser: Awaited<ReturnType<typeof chromium.launch>> | undefined;
 
-/** The comments' context bar: the first row of the message box, one for all the comments stored for the pane. The held row has a chip of its own (`.composer-queue-comments`). */
-const barOf = (page: Page): Locator => page.locator(".composer-surface > .composer-comments-bar");
-/** The bar's text: one button that says how many comments there are and walks to them. */
-const walkOf = (page: Page): Locator => barOf(page).locator("button.composer-comments-walk");
-/** The bar's X, which takes every comment at once. */
-const removeOf = (page: Page): Locator => barOf(page).locator("button.composer-comments-remove");
-/** What the walk button's name says ("3 comments on the reply"; waiting, "3 comments waiting. <why>"). */
-const labelOf = (page: Page): Promise<string | null> => walkOf(page).getAttribute("aria-label");
-/** The Comment button floating over a selection in the chat. */
-const floatOf = (page: Page): Locator => page.locator(".chat-view .comment-selection");
-/** The desktop editor: a popover in the chat view, where the Comment button was or under a bubble. It shows no quote. */
-const popoverOf = (page: Page): Locator => page.locator(".chat-view .comment-popover");
-/** The modal editor (a bottom sheet on a phone): for a touch screen, a window of 768px or less, and a part that is not in the chat. It quotes the selection. */
-const sheetOf = (page: Page): Locator => page.locator(".comment-editor");
-/** Every bubble in the chat: one per comment, in reading order (the DOM's order is the walk's). */
-const notesOf = (page: Page): Locator => page.locator(".chat-view .block-comment-row");
-/** The bubbles as read: the comment only (the excerpt is in the name, not drawn). */
-const noteTexts = async (page: Page): Promise<string[]> => (await notesOf(page).allTextContents()).map((text) => text.trim());
-/** The bubbles' accessible names: "Comment on “excerpt”: text" for a selection, the text itself for a comment on a whole part. */
-const noteNames = (page: Page): Promise<string[]> => notesOf(page).evaluateAll((nodes) => nodes.map((node) => node.getAttribute("aria-label") ?? node.textContent!.trim()));
-/** What a Playwright run has no more of than "a page of an earlier interface": nothing of it may exist (no "+", gutter, tile, pill, send count, and no excerpt drawn in a bubble). */
-const staleOf = (page: Page): Locator => page.locator(".block-comment-add, .chat-view .is-selected, .has-comment-gutter, .composer-comments-tile, .composer-comments-pill, .composer-send-count, .block-comment-quote");
-/**
- * What stays as it is when the comments' bar comes or goes: the controls row, and the distance from
- * the message's first line to it (the message gives up part of its top padding and of its floor for
- * the bar's own gap, so its box is shorter while the bar is there, and the space under its text is not).
- */
-async function messageLayout(page: Page): Promise<{ controls: number; below: number }> {
-  return page.evaluate(() => {
-    const text = document.querySelector<HTMLElement>(".composer-surface > .composer-text")!;
-    const controls = document.querySelector<HTMLElement>(".composer-surface .composer-controls-left")!.getBoundingClientRect().top;
-    const firstLine = text.getBoundingClientRect().top + parseFloat(getComputedStyle(text).paddingTop);
-    return { controls, below: controls - firstLine };
-  });
-}
-/** The controls row and the first line's distance to it are `wanted` (within 1px), polled: the message follows the bar in a layout effect. */
-async function assertMessageLayout(page: Page, wanted: { controls: number; below: number }, what: string): Promise<void> {
-  let seen = wanted;
-  await eventually(`the controls row and the message's first line to stay where they are ${what}`, async () => {
-    seen = await messageLayout(page);
-    return Math.abs(seen.controls - wanted.controls) <= 1 && Math.abs(seen.below - wanted.below) <= 1;
-  }).catch((error: Error) => { throw new Error(`${error.message} (controls ${seen.controls}px, line to controls ${seen.below}px; wanted ${wanted.controls}px, ${wanted.below}px)`); });
-}
+const DESKTOP: BrowserContextOptions = { viewport: { width: 1280, height: 800 } };
+const { defaultBrowserType: _webkit, ...iPhone } = devices["iPhone 13"]!;
+/** 390 × 844, a touch screen. */
+const PHONE: BrowserContextOptions = { ...iPhone, hasTouch: true };
 
 /** Polls `check` every 50 ms until it holds; throws at the deadline (no fixed sleeps). */
 async function eventually(what: string, check: () => Promise<boolean>, ms = 3000): Promise<void> {
@@ -128,8 +79,8 @@ async function eventually(what: string, check: () => Promise<boolean>, ms = 3000
   }
 }
 
-/** Waits `count` animation frames (the page's own updates run once per frame). */
-const frames = (page: Page, count = 3): Promise<void> => page.evaluate((n) => new Promise<void>((resolve) => {
+/** Waits `count` animation frames (the page's own updates run once per frame): for something that must not happen. */
+const frames = (page: Page, count = 6): Promise<void> => page.evaluate((n) => new Promise<void>((resolve) => {
   let left = n;
   const tick = (): void => {
     left -= 1;
@@ -144,21 +95,59 @@ const highlighted = (page: Page, name = "block-comment"): Promise<number> => pag
   const registry = (CSS as unknown as { highlights?: { get(key: string): { size: number } | undefined } }).highlights;
   return registry?.get(highlight)?.size ?? 0;
 }, name);
+
+/** The text the named CSS Custom Highlight paints, its ranges joined: beside its pin the popover quotes nothing, so what a
+ * new comment is on is read here (`block-comment-pending`). */
+const highlightText = (page: Page, name = "block-comment-pending"): Promise<string> => page.evaluate((highlight) => {
+  const registry = (CSS as unknown as { highlights?: { get(key: string): Iterable<AbstractRange> | undefined } }).highlights;
+  return [...(registry?.get(highlight) ?? [])].map((range) => range instanceof Range ? range.toString() : "").join(" ");
+}, name);
+
+/** The saved comments' pins in the chat, in the document's order (reading order). */
+const pinsOf = (page: Page): Locator => page.locator(".chat-view .comment-pin:not(.is-pending)");
+/** The provisional pin of the comment being written. */
+const pendingPinOf = (page: Page): Locator => page.locator(".chat-view .comment-pin.is-pending");
+/** The open comment's popover, wherever it is drawn. */
+const popoverOf = (page: Page): Locator => page.locator(".comment-popover");
+/** The popover beside its pin, in the chat's scrolling content. */
+const besidePinOf = (page: Page): Locator => page.locator(".chat-view .comment-popover");
+/** The popover as a dialog of its own (the shared modal: a bottom sheet on a phone), portalled to the body. */
+const dialogOf = (page: Page): Locator => page.locator(".modal-scrim > .modal.comment-popover");
+const fieldOf = (page: Page): Locator => popoverOf(page).getByRole("textbox", { name: "Comment", exact: true });
+const messageOf = (page: Page): Locator => page.getByRole("textbox", { name: "Message", exact: true });
+const partOf = (page: Page, text: string): Locator => page.locator(".chat-view p.is-commentable", { hasText: text });
+/** The comments' context bar above the message box, and its text, which walks to them. */
+const barOf = (page: Page): Locator => page.locator(".composer-surface > .composer-comments-bar");
+const walkOf = (page: Page): Locator => barOf(page).locator("button.composer-comments-walk");
+
+/** Whether the focused element matches `selector`. */
+const focusedMatches = (page: Page, selector: string): Promise<boolean> => page.evaluate((wanted) => document.activeElement?.matches(wanted) ?? false, selector);
+/** Waits for the open popover's field to take the focus (it does as the popover mounts). */
+const fieldFocused = (page: Page): Promise<void> => eventually("the popover's field to take the focus", () => focusedMatches(page, ".comment-popover textarea"));
+/** The open popover's Delete (a saved comment's, beside ↑), and its ✕ (a dialog's and a sheet's only). */
+const deleteOf = (page: Page): Locator => popoverOf(page).getByRole("button", { name: "Delete comment", exact: true });
+const closeOf = (page: Page): Locator => popoverOf(page).getByRole("button", { name: "Close", exact: true });
 /**
- * The highlight holds one range per part segment of every comment shown: by default one per bubble (a selection in one
- * part, or a comment on a whole part), `ranges` where some comment spans parts. Returns the number of bubbles.
+ * The comment whose text is up (the active or current highlight) in the chat, and whether the chat is in focus mode:
+ * `ranges` the ranges those highlights hold, `text` their text.
  */
-async function highlightMatchesNotes(page: Page, what: string, ranges?: number): Promise<number> {
-  let seen = [0, 0];
-  await eventually(`the highlight to match the bubbles: ${what}`, async () => {
-    seen = [await highlighted(page), ranges ?? (await notesOf(page).count())];
-    return seen[0] === seen[1];
-  }).catch((error: Error) => { throw new Error(`${error.message} (highlight ranges ${seen[0]}, wanted ${seen[1]})`); });
-  return notesOf(page).count();
+const upInChat = (page: Page): Promise<{ ranges: number; text: string; focus: boolean }> => page.evaluate(() => {
+  const registry = (CSS as unknown as { highlights: { get(key: string): Iterable<Range> | undefined } }).highlights;
+  const ranges = [...(registry.get("block-comment-active") ?? []), ...(registry.get("block-comment-current") ?? [])];
+  return { ranges: ranges.length, text: ranges.map((range) => range.toString()).join("\n"), focus: document.querySelector(".chat-view")?.hasAttribute("data-comment-focus") ?? false };
+});
+/** Polls until the text up in the chat (`upInChat`) includes `text`, the chat in focus mode. */
+async function assertUp(page: Page, text: string, what: string): Promise<void> {
+  let seen: unknown = null;
+  await eventually(`${what}: its text up, the chat in focus mode`, async () => {
+    const up = await upInChat(page);
+    seen = up;
+    return up.ranges > 0 && up.text.includes(text) && up.focus;
+  }).catch((error: Error) => { throw new Error(`${error.message} (${JSON.stringify(seen)})`); });
 }
 
-/** One comment as the store keeps it (`herdr-web-ui:block-comments:<pane>`); `until` is the last part a selection over several reaches. */
-interface StoredComment { id: string; anchor: string; comment: string; order: number[]; quote?: string; range?: [number, number]; until?: { anchor: string; end: number } }
+/** One comment as the store keeps it. */
+interface StoredComment { id: string; anchor: string; comment: string; quote?: string; point?: { x: number; y: number } }
 const storedOf = (page: Page): Promise<StoredComment[]> => page.evaluate(() => {
   const found: unknown[] = [];
   for (const key of Object.keys(localStorage)) {
@@ -166,206 +155,94 @@ const storedOf = (page: Page): Promise<StoredComment[]> => page.evaluate(() => {
   }
   return found as StoredComment[];
 });
-/**
- * The store with the comment written as `text` in the shape an earlier version kept: on its first part as a whole (no
- * quote, range or end part), its anchor without the selection's `@…` suffix, which has the end part's path and end offset
- * when the selection ran over several parts (`@6-3.1:5`), and its order without the selection's `-1, start`.
- */
-function legacyOf(data: { version: number; comments: StoredComment[] }, text: string): { version: number; comments: Omit<StoredComment, "quote" | "range" | "until">[] } {
-  return {
-    ...data,
-    comments: data.comments.map((entry) => {
-      if (entry.comment !== text) return entry;
-      const { quote: _quote, range: _range, until: _until, ...rest } = entry;
-      return { ...rest, anchor: rest.anchor.replace(/@\d+-[\d.]+(?::\d+)?$/, ""), order: rest.order.slice(0, -2) };
-    }),
-  };
-}
-/** Rewrites the page's stored comments with `legacyOf`; the page is to be reloaded after. */
-async function makeLegacy(page: Page, storeKey: string, text: string): Promise<void> {
-  const raw = await page.evaluate((key) => localStorage.getItem(key), storeKey);
-  assert.ok(raw !== null, "the comment was stored");
-  const legacy = legacyOf(JSON.parse(raw) as { version: number; comments: StoredComment[] }, text);
-  assert.equal(legacy.comments.filter((entry) => !("quote" in entry)).length, 1, "one comment was turned into the earlier shape");
-  await page.evaluate(([key, value]) => localStorage.setItem(key!, value!), [storeKey, JSON.stringify(legacy)]);
-}
-/** The quote the store holds for the comment written as `text`: what was selected, and what the message will carry. */
-const storedQuote = async (page: Page, text: string): Promise<string | undefined> => (await storedOf(page)).find((entry) => entry.comment === text)?.quote;
 
-/**
- * The ranges of the named highlight, as the text each covers, whether each lies inside one commentable part (never
- * across parts: the bubbles between would be painted), and whether any of them takes in a group of bubbles.
- */
-const rangesOf = (page: Page, name: string): Promise<{ texts: string[]; withinPart: boolean[]; paintsBubbles: boolean }> => page.evaluate((highlight) => {
-  const registry = (CSS as unknown as { highlights?: { get(key: string): Iterable<Range> | undefined } }).highlights;
-  const ranges = [...(registry?.get(highlight) ?? [])];
-  const partOf = (node: Node): Element | null => (node instanceof Element ? node : node.parentElement)?.closest(".is-commentable") ?? null;
-  const groups = [...document.querySelectorAll(".block-comment-notes")];
-  return {
-    texts: ranges.map((range) => range.toString()),
-    withinPart: ranges.map((range) => { const part = partOf(range.startContainer); return part !== null && part === partOf(range.endContainer); }),
-    paintsBubbles: ranges.some((range) => groups.some((group) => range.intersectsNode(group))),
-  };
-}, name);
-
-/** No rail, bar or tint on a commented part (the highlight is all there is), and none of the old tint variables. */
-async function assertNoRail(page: Page, what: string): Promise<void> {
-  const found = await page.evaluate(() => {
-    const marks: string[] = [];
-    for (const element of document.querySelectorAll(".chat-view .is-commentable, .chat-view .block-comment-notes")) {
-      const content = getComputedStyle(element, "::before").content;
-      if (content !== "none" && content !== "normal") marks.push(`${element.tagName}.${element.className} ::before ${content}`);
-    }
-    for (const element of document.querySelectorAll(".chat-view p.is-commented, .chat-view .markdown-item.is-commented")) {
-      const style = getComputedStyle(element);
-      if (style.backgroundColor !== "rgba(0, 0, 0, 0)" || style.boxShadow !== "none") marks.push(`${element.tagName}.${element.className} fill ${style.backgroundColor} shadow ${style.boxShadow}`);
-    }
-    const root = getComputedStyle(document.querySelector(".chat-view")!);
-    for (const name of ["--comment-tint", "--comment-bar-x", "--comment-edge"]) if (root.getPropertyValue(name).trim() !== "") marks.push(`${name} is still set`);
-    return marks;
-  });
-  assert.deepEqual(found, [], `${what}: nothing is drawn beside commented text`);
-}
-
-/** How far a bubble's tail may point from where its highlight ends (or starts, for a comment on a whole part), in px. */
-const TAIL_TOLERANCE_PX = 12;
-/** Where a tail points: at the end of `text` (a selection in a part), `"text start"` (a comment on a whole part: the text's first character, plus --space-3), or a formula's last/first row of glyphs. */
-type TailAt = { text: string } | "text start" | "formula end" | "formula start";
-/** The distance in px between the middle of `note`'s tail and the place `at` names in `part` (measured on the page's own boxes, not on the highlight's ranges). */
-async function tailGap(note: Locator, part: Locator, at: TailAt): Promise<number> {
-  return part.evaluate((node, arg) => {
-    const skipped = ".block-comment-notes, .block-comment-row, .markdown-code-header, button:not(.markdown-file), [aria-hidden='true']";
-    const walker = document.createTreeWalker(node, NodeFilter.SHOW_TEXT, {
-      acceptNode: (found) => {
-        const hit = found.parentElement?.closest(skipped);
-        return hit && node.contains(hit) ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT;
-      },
-    });
-    const nodes: Text[] = [];
-    let all = "";
+/** The center of the first `word` in `part`'s text, in client pixels, its line scrolled to the chat view's middle first. */
+async function wordPoint(part: Locator, word: string): Promise<{ x: number; y: number }> {
+  return part.evaluate((node, wanted) => {
+    const walker = document.createTreeWalker(node, NodeFilter.SHOW_TEXT);
     for (let next = walker.nextNode(); next; next = walker.nextNode()) {
-      nodes.push(next as Text);
-      all += (next as Text).data;
+      const at = (next as Text).data.indexOf(wanted);
+      if (at < 0) continue;
+      const range = document.createRange();
+      range.setStart(next, at);
+      range.setEnd(next, at + wanted.length);
+      const view = document.querySelector(".chat-view")!;
+      const box = view.getBoundingClientRect();
+      const first = range.getBoundingClientRect();
+      view.scrollBy({ top: first.top + first.height / 2 - (box.top + box.height / 2), behavior: "instant" });
+      const rect = range.getBoundingClientRect();
+      return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
     }
-    const glyph = (offset: number): DOMRect => {
+    throw new Error(`"${wanted}" is not in the part`);
+  }, word);
+}
+/** A point the pointer acted at, in client pixels, and the chat view's `scrollTop` then: where it is on the text after a scroll. */
+interface Pointed { x: number; y: number; scroll: number }
+const scrollOf = (page: Page): Promise<number> => page.locator(".chat-view").evaluate((node) => node.scrollTop);
+
+/** A plain click on `word` in `part`: the click that comments on the block. Returns where it clicked. */
+async function clickWord(page: Page, part: Locator, word: string): Promise<Pointed> {
+  const at = await wordPoint(part, word);
+  await page.mouse.click(at.x, at.y);
+  return { ...at, scroll: await scrollOf(page) };
+}
+
+/**
+ * A mouse's drag over `part`'s text from the start of `from` to the end of the first `to` after it, a real press, moves
+ * and release (one click): the selection opens its comment at once, without the Comment button. Returns where it let go.
+ */
+async function dragSelect(page: Page, part: Locator, from: string, to: string): Promise<Pointed> {
+  const [start, end] = await part.evaluate((node, text) => {
+    const walker = document.createTreeWalker(node, NodeFilter.SHOW_TEXT);
+    const glyph = (wanted: string, after: number, last: boolean): { rect: DOMRect; at: number } => {
       let seen = 0;
-      for (const piece of nodes) {
-        if (offset < seen + piece.length) {
+      for (let next = walker.nextNode(); next; next = walker.nextNode()) {
+        const data = (next as Text).data;
+        const at = data.indexOf(wanted, Math.max(0, after - seen));
+        if (at >= 0) {
+          const offset = last ? at + wanted.length - 1 : at;
           const range = document.createRange();
-          range.setStart(piece, offset - seen);
-          range.setEnd(piece, offset - seen + 1);
-          return range.getBoundingClientRect();
+          range.setStart(next, offset);
+          range.setEnd(next, offset + 1);
+          return { rect: range.getBoundingClientRect(), at: seen + at + wanted.length };
         }
-        seen += piece.length;
+        seen += data.length;
       }
-      throw new Error(`no text at offset ${offset}`);
+      throw new Error(`"${wanted}" is not in the part`);
     };
-    const space3 = parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--space-3"));
-    const rows = [...node.querySelectorAll(".katex-html > .base")];
-    let wanted: number;
-    if (arg.at === "formula end") wanted = [...rows.at(-1)!.getClientRects()].at(-1)!.right;
-    else if (arg.at === "formula start") wanted = rows[0]!.getClientRects()[0]!.left + space3;
-    else if (arg.at === "text start") wanted = glyph(all.search(/\S/)).left + space3;
-    else {
-      const start = all.indexOf(arg.at.text);
-      if (start < 0) throw new Error(`"${arg.at.text}" is not in the part: ${JSON.stringify(all)}`);
-      wanted = glyph(start + arg.at.text.length - 1).right;
-    }
-    const bubble = arg.bubble;
-    const tail = bubble.getBoundingClientRect().left + bubble.clientLeft + parseFloat(getComputedStyle(bubble, "::before").left);
-    return Math.abs(tail - wanted);
-  }, { bubble: await note.elementHandle(), at });
+    const view = document.querySelector(".chat-view")!;
+    const box = view.getBoundingClientRect();
+    const first = glyph(text.from, 0, false);
+    view.scrollBy({ top: first.rect.top + first.rect.height / 2 - (box.top + box.height / 2), behavior: "instant" });
+    walker.currentNode = node;
+    const head = glyph(text.from, 0, false);
+    walker.currentNode = node;
+    const tail = glyph(text.to, head.at, true);
+    return [{ x: head.rect.left + 1, y: head.rect.top + head.rect.height / 2 }, { x: tail.rect.right - 1, y: tail.rect.top + tail.rect.height / 2 }];
+  }, { from, to });
+  await page.mouse.move(start.x, start.y);
+  await page.mouse.down();
+  await page.mouse.move((start.x + end.x) / 2, (start.y + end.y) / 2, { steps: 4 });
+  await page.mouse.move(end.x, end.y, { steps: 4 });
+  await page.mouse.up();
+  return { ...end, scroll: await scrollOf(page) };
 }
-/** The tail of `note` points within `TAIL_TOLERANCE_PX` of `at` in `part`: polled, the bubbles are placed once per frame after a change. */
-async function assertTail(note: Locator, part: Locator, at: TailAt, what: string): Promise<void> {
-  let gap = Number.POSITIVE_INFINITY;
-  await eventually(`${what}: the bubble's tail to point within ${TAIL_TOLERANCE_PX}px of ${JSON.stringify(at)}`, async () => (gap = await tailGap(note, part, at)) <= TAIL_TOLERANCE_PX)
-    .catch((error: Error) => { throw new Error(`${error.message} (off by ${gap}px)`); });
+/** A finger's tap on `word` in `part`. */
+async function tapWord(page: Page, part: Locator, word: string): Promise<void> {
+  const at = await wordPoint(part, word);
+  await page.touchscreen.tap(at.x, at.y);
 }
 
 /**
- * What a bubble looks like, read against the tokens it is drawn with: a button card with the elevated fill and a
- * hairline edge, the tokens' radius and padding, its text colour and size, a tail, and no excerpt inside. The pointer is
- * moved off it and its transitions finished first.
+ * Selects text in `part` the way the keyboard (Shift+arrows) or a finger's long press leaves it: from `from` to the end
+ * of the first `to` after it (or of `from` alone), or, with `firstLine`, from `from` to the last character of the line
+ * it starts on. The selection is the page's, the selected text in the chat view's middle, then the event that ends the
+ * gesture: a finger's `pointerup` on a touch screen, else the `keyup` of the Shift key. Neither is a mouse's drag, so
+ * the selection opens nothing.
  */
-async function assertBubbleLook(page: Page, note: Locator, what: string): Promise<void> {
-  await page.mouse.move(1, 1);
-  const look = await note.evaluate(async (node) => {
-    await Promise.all(node.getAnimations().map((animation) => animation.finished));
-    const style = getComputedStyle(node);
-    const root = getComputedStyle(document.documentElement);
-    const probe = document.createElement("div");
-    document.body.append(probe);
-    const colour = (token: string): string => { probe.style.color = `var(${token})`; return getComputedStyle(probe).color; };
-    probe.style.backgroundColor = "var(--bg-elevated)";
-    const elevated = getComputedStyle(probe).backgroundColor;
-    const length = (token: string): string => root.getPropertyValue(token).trim();
-    const result = {
-      tag: node.tagName,
-      border: [style.borderTopWidth, style.borderRightWidth, style.borderBottomWidth, style.borderLeftWidth],
-      borderStyle: style.borderTopStyle,
-      borderColor: [style.borderTopColor, colour("--border")],
-      background: [style.backgroundColor, elevated],
-      color: [style.color, colour("--text")],
-      radius: [style.borderTopLeftRadius, length("--radius-md")],
-      padding: [style.paddingTop, style.paddingRight, style.paddingBottom, style.paddingLeft],
-      wantedPadding: [length("--space-1"), length("--space-2"), length("--space-1"), length("--space-2")],
-      fontSize: [style.fontSize, length("--fs-sm")],
-      tail: getComputedStyle(node, "::before").content,
-      title: node.getAttribute("title"),
-      quotes: node.querySelectorAll(".block-comment-quote, q").length,
-    };
-    probe.remove();
-    return result;
-  });
-  assert.equal(look.tag, "BUTTON", `${what}: the bubble is a button (keyboard, editing)`);
-  assert.deepEqual(look.border, ["1px", "1px", "1px", "1px"], `${what}: a hairline edge`);
-  assert.equal(look.borderStyle, "solid");
-  assert.equal(look.borderColor[0], look.borderColor[1], `${what}: the edge is --border`);
-  assert.equal(look.background[0], look.background[1], `${what}: the fill is --bg-elevated`);
-  assert.equal(look.color[0], look.color[1], `${what}: the text is --text`);
-  assert.equal(look.radius[0], look.radius[1], `${what}: the corners are --radius-md`);
-  assert.deepEqual(look.padding, look.wantedPadding, `${what}: the padding is --space-1 --space-2`);
-  assert.equal(look.fontSize[0], look.fontSize[1], `${what}: the text is --fs-sm`);
-  assert.notEqual(look.tail, "none", `${what}: the bubble has a tail`);
-  assert.equal(look.title, "Edit comment");
-  assert.equal(look.quotes, 0, `${what}: no excerpt is drawn in the bubble`);
-}
-
-/** The group of bubbles under `part` (a paragraph or a block's host, not a list item): right under it, the tail's room above each bubble, each bubble inside the part's width, stacked with room for the tails. */
-function assertBubbleGroup(part: Locator, what: string): Promise<void> {
-  return part.evaluate((node, label) => {
-    const group = node.nextElementSibling;
-    if (!(group instanceof HTMLElement) || !group.classList.contains("block-comment-notes")) throw new Error(`${label}: no bubbles under the part`);
-    const root = getComputedStyle(document.documentElement);
-    const space1 = parseFloat(root.getPropertyValue("--space-1"));
-    const rise = parseFloat(getComputedStyle(group).getPropertyValue("--tail-size")) * 0.71;
-    const area = group.getBoundingClientRect();
-    const gap = area.top - node.getBoundingClientRect().bottom;
-    const problems: string[] = [];
-    if (Math.abs(gap - (space1 + rise)) > 1.5) problems.push(`the group is ${gap}px under the part, wanted --space-1 + the tail's rise (${space1 + rise}px)`);
-    const bubbles = [...group.querySelectorAll(".block-comment-row")].map((bubble) => bubble.getBoundingClientRect());
-    for (const box of bubbles) {
-      if (box.left < area.left - 0.5 || box.right > area.right + 0.5) problems.push(`a bubble leaves the part's width (${box.left}-${box.right}px, part ${area.left}-${area.right}px)`);
-      if (box.width > 0.8 * area.width + 1) problems.push(`a bubble is wider than 80% of the part (${box.width}px of ${area.width}px)`);
-    }
-    for (let index = 1; index < bubbles.length; index++) {
-      const between = bubbles[index]!.top - bubbles[index - 1]!.bottom;
-      if (Math.abs(between - (space1 + rise)) > 1.5) problems.push(`bubbles ${index} and ${index + 1} are ${between}px apart, wanted --space-1 + the tail's rise (${space1 + rise}px)`);
-    }
-    return problems.map((problem) => `${label}: ${problem}`);
-  }, what).then((problems) => assert.deepEqual(problems, [], `${what}: the bubbles sit right under their part`));
-}
-
-/**
- * Selects text in `part` the way the end of a drag or a long press leaves it: a range over the
- * part's own text nodes (not its notes, header or buttons), made the page's selection, then the
- * `pointerup` that ends a gesture. `from` is where the text starts; with `to`, the selection runs
- * on to the end of the first `to` after it. The selected text is scrolled to the view's middle.
- */
-async function select(page: Page, part: Locator, from: string, to?: string): Promise<void> {
+async function select(part: Locator, from: string, { to, firstLine = false }: { to?: string; firstLine?: boolean } = {}): Promise<void> {
   await part.evaluate((node, text) => {
-    const skipped = ".block-comment-notes, .block-comment-row, .markdown-code-header, button:not(.markdown-file), [aria-hidden='true']";
+    const skipped = ".comment-pins, .markdown-code-header, button:not(.markdown-file), [aria-hidden='true']";
     const walker = document.createTreeWalker(node, NodeFilter.SHOW_TEXT, {
       acceptNode: (found) => {
         const hit = found.parentElement?.closest(skipped);
@@ -377,14 +254,6 @@ async function select(page: Page, part: Locator, from: string, to?: string): Pro
     for (let next = walker.nextNode(); next; next = walker.nextNode()) {
       nodes.push(next as Text);
       all += (next as Text).data;
-    }
-    const start = all.indexOf(text.from);
-    if (start < 0) throw new Error(`"${text.from}" is not in the part: ${JSON.stringify(all)}`);
-    let end = start + text.from.length;
-    if (text.to !== undefined) {
-      const at = all.indexOf(text.to, end);
-      if (at < 0) throw new Error(`"${text.to}" does not follow "${text.from}" in the part`);
-      end = at + text.to.length;
     }
     const point = (offset: number, atEnd: boolean): [Text, number] => {
       let seen = 0;
@@ -394,266 +263,1116 @@ async function select(page: Page, part: Locator, from: string, to?: string): Pro
       }
       throw new Error("no text node at the offset");
     };
+    const start = all.indexOf(text.from);
+    if (start < 0) throw new Error(`"${text.from}" is not in the part: ${JSON.stringify(all)}`);
+    const view = document.querySelector(".chat-view")!;
+    const box = view.getBoundingClientRect();
+    const glyph = (offset: number): DOMRect => {
+      const range = document.createRange();
+      range.setStart(...point(offset, false));
+      range.setEnd(...point(offset + 1, true));
+      return range.getBoundingClientRect();
+    };
+    const head = glyph(start);
+    view.scrollBy({ top: head.top + head.height / 2 - (box.top + box.height / 2), behavior: "instant" });
+    let end = start + text.from.length;
+    if (text.firstLine) {
+      const top = glyph(start).top;
+      end = start + 1;
+      while (end < all.length && Math.abs(glyph(end).top - top) < 2) end += 1;
+      while (all[end - 1] === " ") end -= 1;
+    } else if (text.to !== undefined) {
+      const at = all.indexOf(text.to, end);
+      if (at < 0) throw new Error(`"${text.to}" does not follow "${text.from}" in the part`);
+      end = at + text.to.length;
+    }
     const range = document.createRange();
     range.setStart(...point(start, false));
     range.setEnd(...point(end, true));
-    // the selected text in the middle of the chat view: a long block may be taller than the view
-    const view = document.querySelector(".chat-view")!;
-    const box = view.getBoundingClientRect();
-    const line = [...range.getClientRects()].filter((rect) => rect.width > 0 && rect.height > 0).at(-1) ?? range.getBoundingClientRect();
-    view.scrollBy({ top: line.top + line.height / 2 - (box.top + box.height / 2), behavior: "instant" });
     const selection = window.getSelection()!;
     selection.removeAllRanges();
     selection.addRange(range);
-    // released at the selection's end, as a drag to the right leaves it
-    node.dispatchEvent(new PointerEvent("pointerup", {
-      bubbles: true,
-      pointerType: matchMedia("(pointer: coarse)").matches ? "touch" : "mouse",
-      clientX: line.right,
-      clientY: line.top + line.height / 2,
-    }));
-  }, { from, to });
-}
-
-/**
- * Selects across parts of one reply the way the end of a drag leaves it: from `from` in `first` (its own text, as `select`
- * counts it) to the end of `to` in `last`, a later part. The page's selection, then the `pointerup` that ends a gesture, on
- * `last` at the selection's end, which is scrolled to the view's middle.
- */
-async function selectSpan(page: Page, first: Locator, from: string, last: Locator, to: string): Promise<void> {
-  await page.evaluate(({ start, stop, text }) => {
-    const skipped = ".block-comment-notes, .block-comment-row, .markdown-code-header, button:not(.markdown-file), [aria-hidden='true']";
-    const own = (root: Element): { nodes: Text[]; all: string } => {
-      const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
-        acceptNode: (found) => {
-          const hit = found.parentElement?.closest(skipped);
-          return hit && root.contains(hit) ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT;
-        },
-      });
-      const nodes: Text[] = [];
-      let all = "";
-      for (let next = walker.nextNode(); next; next = walker.nextNode()) {
-        nodes.push(next as Text);
-        all += (next as Text).data;
-      }
-      return { nodes, all };
-    };
-    const point = (found: { nodes: Text[] }, offset: number, atEnd: boolean): [Text, number] => {
-      let seen = 0;
-      for (const piece of found.nodes) {
-        if (offset < seen + piece.length || (atEnd && offset === seen + piece.length)) return [piece, offset - seen];
-        seen += piece.length;
-      }
-      throw new Error("no text node at the offset");
-    };
-    const head = own(start);
-    const tail = own(stop);
-    const at = head.all.indexOf(text.from);
-    const on = tail.all.indexOf(text.to);
-    if (at < 0) throw new Error(`"${text.from}" is not in the first part: ${JSON.stringify(head.all)}`);
-    if (on < 0) throw new Error(`"${text.to}" is not in the last part: ${JSON.stringify(tail.all)}`);
-    const range = document.createRange();
-    range.setStart(...point(head, at, false));
-    range.setEnd(...point(tail, on + text.to.length, true));
-    const view = document.querySelector(".chat-view")!;
-    const box = view.getBoundingClientRect();
     const line = [...range.getClientRects()].filter((rect) => rect.width > 0 && rect.height > 0).at(-1) ?? range.getBoundingClientRect();
-    view.scrollBy({ top: line.top + line.height / 2 - (box.top + box.height / 2), behavior: "instant" });
-    const selection = window.getSelection()!;
-    selection.removeAllRanges();
-    selection.addRange(range);
-    stop.dispatchEvent(new PointerEvent("pointerup", {
-      bubbles: true,
-      pointerType: matchMedia("(pointer: coarse)").matches ? "touch" : "mouse",
-      clientX: line.right,
-      clientY: line.top + line.height / 2,
-    }));
-  }, { start: await first.elementHandle(), stop: await last.elementHandle(), text: { from, to } });
+    if (matchMedia("(pointer: coarse)").matches) {
+      node.dispatchEvent(new PointerEvent("pointerup", { bubbles: true, pointerType: "touch", clientX: line.right, clientY: line.top + line.height / 2 }));
+    } else node.dispatchEvent(new KeyboardEvent("keyup", { bubbles: true, key: "Shift", shiftKey: false }));
+  }, { from, to, firstLine });
+}
+
+/** Writes `text` in the open popover's field and saves it with Ctrl+Enter; returns once the popover is gone. */
+async function saveTyped(page: Page, text: string): Promise<void> {
+  await fieldFocused(page);
+  await fieldOf(page).fill(text);
+  await page.keyboard.press("Control+Enter");
+  await popoverOf(page).waitFor({ state: "detached" });
+}
+
+/** A comment `text` on all of `part`, by a click on `word` in it; returns once its pin is there. */
+async function commentBlock(page: Page, part: Locator, word: string, text: string): Promise<void> {
+  const before = await pinsOf(page).count();
+  await clickWord(page, part, word);
+  await saveTyped(page, text);
+  await eventually(`the pin of "${text}"`, async () => (await pinsOf(page).count()) === before + 1);
 }
 
 /**
- * Selects text with the real mouse: by default right to left, pressing at the end of `to` (the first one
- * after `from`), dragging to the start of `from` and letting go there; `forward`, from the start of `from`
- * to the end of `to`. `part` may hold several parts (a list), the text counted is all of its own. Returns
- * both points (client pixels; the text is scrolled to the view's middle first, so they are the points the
- * mouse really used).
+ * A comment `text` on the selection `from`…`to` of `part`, made by a mouse's drag, then stored as an earlier version
+ * kept it, without a point (its pin after the end of its text), and the page reloaded to read it so; returns once its
+ * pin is there.
  */
-async function drag(page: Page, part: Locator, from: string, to: string, { forward = false }: { forward?: boolean } = {}): Promise<{ press: { x: number; y: number }; release: { x: number; y: number } }> {
-  const points = await part.evaluate((node, text) => {
-    const skipped = ".block-comment-notes, .block-comment-row, .markdown-code-header, button:not(.markdown-file), [aria-hidden='true']";
-    const walker = document.createTreeWalker(node, NodeFilter.SHOW_TEXT, {
-      acceptNode: (found) => {
-        const hit = found.parentElement?.closest(skipped);
-        return hit && node.contains(hit) ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT;
-      },
-    });
-    const nodes: Text[] = [];
-    let all = "";
-    for (let next = walker.nextNode(); next; next = walker.nextNode()) {
-      nodes.push(next as Text);
-      all += (next as Text).data;
+async function pointlessSelectionComment(page: Page, part: Locator, from: string, to: string, text: string): Promise<void> {
+  const before = await pinsOf(page).count();
+  await dragSelect(page, part, from, to);
+  await saveTyped(page, text);
+  await eventually(`the pin of "${text}"`, async () => (await pinsOf(page).count()) === before + 1);
+  await page.evaluate((wanted) => {
+    for (const key of Object.keys(localStorage).filter((name) => name.startsWith("herdr-web-ui:block-comments:"))) {
+      const data = JSON.parse(localStorage.getItem(key)!) as { comments: { comment: string; point?: unknown }[] };
+      for (const comment of data.comments) if (comment.comment === wanted) delete comment.point;
+      localStorage.setItem(key, JSON.stringify(data));
     }
-    const start = all.indexOf(text.from);
-    const after = all.indexOf(text.to, start + text.from.length);
-    if (start < 0 || after < 0) throw new Error(`"${text.from}"…"${text.to}" is not in the part: ${JSON.stringify(all)}`);
-    const end = after + text.to.length;
-    /** the box of the character at `offset` */
-    const glyph = (offset: number): DOMRect => {
-      let seen = 0;
-      for (const piece of nodes) {
-        if (offset < seen + piece.length) {
-          const range = document.createRange();
-          range.setStart(piece, offset - seen);
-          range.setEnd(piece, offset - seen + 1);
-          return range.getBoundingClientRect();
-        }
-        seen += piece.length;
-      }
-      throw new Error("no text node at the offset");
-    };
-    const view = document.querySelector(".chat-view")!;
-    const box = view.getBoundingClientRect();
-    const first = glyph(start);
-    view.scrollBy({ top: first.top + first.height / 2 - (box.top + box.height / 2), behavior: "instant" });
-    const head = glyph(start);
-    const tail = glyph(end - 1);
-    const atTail = { x: tail.right, y: tail.top + tail.height / 2 };
-    const atHead = { x: head.left, y: head.top + head.height / 2 };
-    return { press: atTail, release: atHead, wrapped: tail.top > head.bottom - 1 };
-  }, { from, to });
-  if (forward) [points.press, points.release] = [points.release, points.press];
-  assert.ok(points.wrapped, `the text "${from}"…"${to}" runs over two lines or more at this width`);
-  await page.mouse.move(points.press.x, points.press.y);
-  await page.mouse.down();
-  await page.mouse.move(points.release.x, points.release.y, { steps: 12 });
-  await page.mouse.up();
-  return { press: points.press, release: points.release };
+  }, text);
+  await page.reload();
+  await page.locator(".conn-live").waitFor();
+  await partOf(page, INTRO).waitFor();
+  await eventually(`the pin of "${text}" after the reload`, async () => (await pinsOf(page).count()) === before + 1);
+  assert.equal(await storedPoint(page, text), undefined, "stored without a point");
 }
 
+/** No Comment button anywhere: there is none, whatever selected text. */
+const assertNoButton = async (page: Page, what: string): Promise<void> => {
+  assert.equal(await page.locator(".comment-selection").count(), 0, `${what}: no Comment button`);
+};
+
 /**
- * Where the bar sits in the card: its edges against the content column (the message's text, and the
- * attachment tiles' left edge), the room above it (below the strip, or from the card's top) and between
- * it and the message's first line, the order of the rows in the DOM and on screen, its borders, and the
- * tokens those are drawn with.
+ * For each pin (or the provisional one, `pending`; only those whose name holds `named`), where its tip (its square top
+ * left corner) lies against the end of the last line of highlighted text nearest to it: `dx` from the line's right end,
+ * `dy` from the line's middle. Lines are measured as the pins are placed: the text nodes in a range, without controls or
+ * hidden text.
  */
-const barLayout = (page: Page): Promise<{
-  left: number; right: number; tile: number | null; fromEdge: number; above: number; below: number;
-  stripFirst: boolean; textAfter: boolean; borders: number[]; space: Record<string, number>;
-}> => page.evaluate(() => {
-  const surface = document.querySelector(".composer-surface")!;
-  const bar = surface.querySelector(":scope > .composer-comments-bar")!;
-  const text = surface.querySelector(":scope > .composer-text")!;
-  const strip = surface.querySelector(":scope > .composer-attachments");
-  const tile = strip?.querySelector(".composer-attachment") ?? null;
-  const outer = surface.getBoundingClientRect();
-  const innerLeft = outer.left + surface.clientLeft;
-  const innerTop = outer.top + surface.clientTop;
-  const box = bar.getBoundingClientRect();
-  const field = text.getBoundingClientRect();
-  const fieldStyle = getComputedStyle(text);
-  const style = getComputedStyle(bar);
-  const root = getComputedStyle(document.documentElement);
-  const follows = (a: Node, b: Node): boolean => (a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0;
-  return {
-    left: box.left - (field.left + parseFloat(fieldStyle.paddingLeft)),
-    right: field.right - parseFloat(fieldStyle.paddingRight) - box.right,
-    tile: tile ? box.left - tile.getBoundingClientRect().left : null,
-    fromEdge: box.left - innerLeft,
-    above: strip ? box.top - strip.getBoundingClientRect().bottom : box.top - innerTop,
-    below: field.top + parseFloat(fieldStyle.paddingTop) - box.bottom,
-    stripFirst: strip === null || (follows(strip, bar) && strip.getBoundingClientRect().bottom <= box.top + 1),
-    textAfter: follows(bar, text) && field.top >= box.bottom - 1,
-    borders: [style.borderTopWidth, style.borderRightWidth, style.borderBottomWidth, style.borderLeftWidth].map(parseFloat),
-    space: Object.fromEntries(["--space-2", "--space-3", "--space-4", "--space-5"].map((name) => [name, parseFloat(root.getPropertyValue(name))])),
+const pinOffsets = (page: Page, pending = false, named?: string): Promise<{ dx: number; dy: number }[]> => page.evaluate(({ isPending, named }) => {
+  const registry = (CSS as unknown as { highlights?: { get(key: string): Iterable<Range> | undefined } }).highlights;
+  const ranges = [...(registry?.get(isPending ? "block-comment-pending" : "block-comment") ?? [])];
+  const skipped = ".comment-pins, .markdown-code-header, button:not(.markdown-file), [aria-hidden='true'], .katex-mathml";
+  const lastLine = (range: Range): DOMRect | undefined => {
+    const container = range.commonAncestorContainer;
+    const nodes: Text[] = [];
+    if (container instanceof Text) nodes.push(container);
+    else {
+      const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT);
+      for (let next = walker.nextNode(); next; next = walker.nextNode()) if (range.intersectsNode(next)) nodes.push(next as Text);
+    }
+    let last: DOMRect | undefined;
+    for (const node of nodes) {
+      if (node.parentElement?.closest(skipped)) continue;
+      const piece = document.createRange();
+      piece.selectNodeContents(node);
+      if (node === range.startContainer) piece.setStart(node, range.startOffset);
+      if (node === range.endContainer) piece.setEnd(node, range.endOffset);
+      for (const rect of piece.getClientRects()) if (rect.width > 0 && rect.height > 0) last = rect;
+    }
+    return last;
   };
-});
+  const lines = ranges.map(lastLine).filter((line): line is DOMRect => line !== undefined);
+  const pins = [...document.querySelectorAll(isPending ? ".chat-view .comment-pin.is-pending" : ".chat-view .comment-pin:not(.is-pending)")]
+    .filter((pin) => named === undefined || (pin.getAttribute("aria-label") ?? "").includes(named));
+  return pins.map((pin) => {
+    const box = pin.getBoundingClientRect();
+    let best = { dx: Number.POSITIVE_INFINITY, dy: Number.POSITIVE_INFINITY };
+    for (const line of lines) {
+      const dx = box.left - line.right;
+      const dy = box.top - (line.top + line.height / 2);
+      if (Math.abs(dx - 4) + Math.abs(dy) < Math.abs(best.dx - 4) + Math.abs(best.dy)) best = { dx, dy };
+    }
+    return best;
+  });
+}, { isPending: pending, named });
+
+/** How far right of the end of its text a pin's tip may be: its gap (4px), and a little for rounding. */
+const PIN_REACH_PX = 8;
 /**
- * The bar is a box in the content column, below the attachments, with no rail: its edges are the column's
- * (`column`, a space token: the tiles' and the text's inset), `--space-2` below a strip or `--space-3`
- * from the card's top, `--space-2` above the message's first line, and no border.
+ * Every pin (or the provisional one; only those whose name holds `named`) without a point, a selection's made with the
+ * keyboard or a finger: its tip within `PIN_REACH_PX` right of its text's last line, at that line's middle: polled.
  */
-function assertBarLayout(layout: Awaited<ReturnType<typeof barLayout>>, where: string, { column, strip }: { column: string; strip: boolean }): void {
-  const near = (a: number, b: number): boolean => Math.abs(a - b) <= 1;
-  assert.ok(near(layout.left, 0) && near(layout.right, 0), `${where}: the bar's left and right edges are the content column's (${layout.left} / ${layout.right}px off)`);
-  assert.ok(near(layout.fromEdge, layout.space[column]!), `${where}: the column is ${column} in from the card (${layout.fromEdge}px, wanted ${layout.space[column]}px)`);
-  if (layout.tile !== null) assert.ok(near(layout.tile, 0), `${where}: the bar starts at the attachment tiles' left edge (${layout.tile}px off)`);
-  const wanted = layout.space[strip ? "--space-2" : "--space-3"]!;
-  assert.ok(near(layout.above, wanted), `${where}: the bar is ${strip ? "--space-2 below the attachments" : "--space-3 from the card's top"} (${layout.above}px, wanted ${wanted}px)`);
-  assert.ok(near(layout.below, layout.space["--space-2"]!), `${where}: the message's first line is --space-2 below the bar (${layout.below}px, wanted ${layout.space["--space-2"]}px)`);
-  assert.ok(layout.stripFirst, `${where}: the attachments come before the bar, in the DOM and on screen`);
-  assert.ok(layout.textAfter, `${where}: the message comes after the bar, in the DOM and on screen`);
-  assert.deepEqual(layout.borders, [0, 0, 0, 0], `${where}: the bar has no border, so no rail`);
+async function assertPinsAtText(page: Page, what: string, { pending = false, count, named }: { pending?: boolean; count?: number; named?: string } = {}): Promise<void> {
+  let seen: { dx: number; dy: number }[] = [];
+  await eventually(`${what}: each pin's tip within ${PIN_REACH_PX}px right of its text's last line, at its middle`, async () => {
+    seen = await pinOffsets(page, pending, named);
+    return seen.length > 0 && (count === undefined || seen.length === count) && seen.every(({ dx, dy }) => dx >= 0 && dx <= PIN_REACH_PX && Math.abs(dy) <= 2);
+  }).catch((error: Error) => { throw new Error(`${error.message} (offsets ${JSON.stringify(seen)})`); });
 }
 
-/** Where the Comment button is against the selection's last line and the chat view, in viewport pixels. */
-interface Placement {
-  button: { top: number; bottom: number; left: number; right: number; height: number };
-  view: { top: number; bottom: number; left: number; right: number };
-  line: { top: number; bottom: number };
+/** How far a pin's tip may lie from the point it was made at: rounding, the fractions' four decimals. */
+const TIP_SLACK_PX = 3;
+/** The tip (the square top left corner) of `pin`, in client pixels. */
+const tipOf = async (pin: Locator): Promise<{ x: number; y: number }> => {
+  const box = await pin.boundingBox();
+  if (box === null) throw new Error("the pin is not drawn");
+  return { x: box.x, y: box.y };
+};
+/** `pin`'s tip lies within `TIP_SLACK_PX` of `at`, where that point is now that the chat may have scrolled: polled. */
+async function assertTipAt(page: Page, pin: Locator, at: Pointed, what: string): Promise<void> {
+  let seen: unknown = null;
+  await eventually(`${what}: its pin's tip at (${at.x.toFixed(1)}, ${at.y.toFixed(1)})`, async () => {
+    const tip = await tipOf(pin).catch(() => null);
+    const y = at.y - ((await scrollOf(page)) - at.scroll);
+    seen = { tip, want: { x: at.x, y } };
+    return tip !== null && Math.abs(tip.x - at.x) <= TIP_SLACK_PX && Math.abs(tip.y - y) <= TIP_SLACK_PX;
+  }).catch((error: Error) => { throw new Error(`${error.message} (${JSON.stringify(seen)})`); });
 }
-const placementOf = (page: Page): Promise<Placement> => page.evaluate(() => {
-  const plain = (rect: DOMRect): { top: number; bottom: number; left: number; right: number; height: number } => ({ top: rect.top, bottom: rect.bottom, left: rect.left, right: rect.right, height: rect.height });
-  const button = document.querySelector(".chat-view .comment-selection")!.getBoundingClientRect();
+
+/** The bubble: a square top left corner (its tip), the other three round. */
+async function assertBubble(pin: Locator): Promise<void> {
+  const radii = await pin.evaluate((node) => {
+    const style = getComputedStyle(node);
+    return [style.borderTopLeftRadius, style.borderTopRightRadius, style.borderBottomRightRadius, style.borderBottomLeftRadius].map((value) => parseFloat(value));
+  });
+  assert.ok(radii[0] === 0 && radii.slice(1).every((radius) => radius >= 10), `the pin is a bubble with a square top left corner (${radii.join(", ")})`);
+}
+
+/** The popover beside its pin lies to the pin's right, 8px from it, its top level with the pin's top: polled. */
+async function assertBesideRight(page: Page, pin: Locator, what: string): Promise<void> {
+  let seen: unknown = null;
+  await eventually(`${what}: the popover right of its pin, top-aligned`, async () => {
+    const pinBox = await pin.boundingBox();
+    const place = page.locator(".chat-view .comment-popover-place");
+    const box = await place.boundingBox().catch(() => null);
+    const side = await place.getAttribute("data-side").catch(() => null);
+    seen = { pinBox, box, side };
+    return pinBox !== null && box !== null && side === "right" && Math.abs(box.x - (pinBox.x + pinBox.width + 8)) <= 1 && Math.abs(box.y - pinBox.y) <= 1;
+  }).catch((error: Error) => { throw new Error(`${error.message} (${JSON.stringify(seen)})`); });
+}
+
+/** The stored point of the comment whose text is `comment`. */
+const storedPoint = async (page: Page, comment: string): Promise<{ x: number; y: number } | undefined> =>
+  (await storedOf(page)).find((entry) => entry.comment === comment)?.point;
+
+/** Where a box lies against the chat view's visible box: whether it is inside it (1px of slack). */
+const inView = (page: Page, selector: string): Promise<boolean> => page.evaluate((wanted) => {
+  const node = document.querySelector(wanted);
   const view = document.querySelector(".chat-view")!;
-  const box = view.getBoundingClientRect();
-  const range = window.getSelection()!.getRangeAt(0);
-  const line = [...range.getClientRects()].filter((rect) => rect.width > 0 && rect.height > 0).at(-1)!;
-  // the view's padding box: what the button is placed in
-  return {
-    button: plain(button),
-    view: { top: box.top + view.clientTop, bottom: box.top + view.clientTop + view.clientHeight, left: box.left + view.clientLeft, right: box.left + view.clientLeft + view.clientWidth },
-    line: { top: line.top, bottom: line.bottom },
-  };
-});
-const insideView = ({ button, view }: Placement): boolean => button.left >= view.left - 0.5 && button.right <= view.right + 0.5 && button.top >= view.top - 0.5 && button.bottom <= view.bottom + 0.5;
+  if (node === null) return false;
+  const box = node.getBoundingClientRect();
+  const outer = view.getBoundingClientRect();
+  const top = outer.top + view.clientTop;
+  return box.height > 0 && box.top >= top - 1 && box.bottom <= top + view.clientHeight + 1;
+}, selector);
 
-/**
- * Makes the comment `text` on the selection `from`…`to` of `part`: select, the floating button, the
- * editor, type, Save. With a mouse in a wide window the editor is the popover (no quote: the returned quote is what the
- * store then holds); `sheet` (a window of 768px or less) or `touch` (taps instead of clicks) give the modal, and the
- * returned quote is the one it showed.
- */
-async function comment(page: Page, part: Locator, from: string, text: string, { to, touch = false, sheet = false }: { to?: string; touch?: boolean; sheet?: boolean } = {}): Promise<string> {
-  await select(page, part, from, to);
-  const button = floatOf(page);
-  await button.waitFor();
-  if (touch) await button.tap();
-  else await button.click();
-  const modal = touch || sheet;
-  const editor = modal ? sheetOf(page) : popoverOf(page);
-  await editor.waitFor();
-  const shown = modal ? await editor.locator(".comment-editor-plain").innerText() : null;
-  await editor.getByRole("textbox", { name: "Comment" }).fill(text);
-  if (touch) await editor.getByRole("button", { name: "Save", exact: true }).tap();
-  else await editor.getByRole("button", { name: "Save", exact: true }).click();
-  await editor.waitFor({ state: "hidden" });
-  return shown ?? (await storedQuote(page, text)) ?? "";
+/** The chat view's scroll position stays put for a few frames in a row: a smooth scroll has ended. */
+async function scrollSettled(page: Page): Promise<void> {
+  let last = -1;
+  let still = 0;
+  await eventually("the chat view to stop scrolling", async () => {
+    await frames(page, 2);
+    const now = await page.locator(".chat-view").evaluate((node) => node.scrollTop);
+    still = now === last ? still + 1 : 0;
+    last = now;
+    return still >= 3;
+  }, 5000);
 }
 
-/**
- * What the walk stands on: how many bubbles are `is-current`, the first one's index among the bubbles
- * of the chat (the DOM's order, the walk's), whether it has the focus, how many ranges the current highlight holds,
- * whether the first of them lies inside the chat view, and whether the bubble does (the walk shows both).
- */
-const currentOf = (page: Page): Promise<{ count: number; index: number; noteFocused: boolean; marked: number; inView: boolean; bubbleInView: boolean }> => page.evaluate(() => {
-  const notes = [...document.querySelectorAll(".chat-view .block-comment-row")];
-  const current = notes.filter((note) => note.classList.contains("is-current"));
-  const note = current[0];
-  const registry = (CSS as unknown as { highlights?: { get(key: string): Iterable<Range> & { size: number } | undefined } }).highlights;
-  const marks = registry?.get("block-comment-current");
-  const range = marks === undefined ? undefined : [...marks][0];
-  const view = document.querySelector(".chat-view")!.getBoundingClientRect();
-  const box = range?.getBoundingClientRect();
-  const bubble = note?.getBoundingClientRect();
-  return {
-    count: current.length,
-    index: note === undefined ? -1 : notes.indexOf(note),
-    noteFocused: note !== undefined && note === document.activeElement,
-    marked: marks?.size ?? 0,
-    inView: box !== undefined && box.height > 0 && box.top >= view.top - 1 && box.bottom <= view.bottom + 1,
-    bubbleInView: bubble !== undefined && bubble.height > 0 && bubble.top >= view.top - 1 && bubble.bottom <= view.bottom + 1,
-  };
-});
+/** The context and page of a case: the pane's chat, its reply drawn. `errors` collects the page's, `sent` the texts it submitted to the pane. */
+interface Opened { page: Page; context: BrowserContext; url: string; errors: string[]; sent: string[]; close: () => Promise<void> }
+type Open = (options: BrowserContextOptions, seed?: { comments?: readonly object[]; settings?: Record<string, unknown> }) => Promise<Opened>;
+type Case = (open: Open) => Promise<void>;
+
+/** A stored comment on a reply that is not in the chat: its turn is not loaded. The walk reaches it with no pin. */
+const UNLOADED = {
+  id: "unloaded-1",
+  anchor: "2026-01-01T00:00:00.000Z:0:0",
+  order: [Date.parse("2026-01-01T00:00:00.000Z"), 0, 0],
+  block: { type: "paragraph", lines: [[{ type: "text", value: "A reply from a turn the chat has not loaded." }]] },
+  comment: "Is this still true?",
+};
+
+const cases: Record<string, Case> = {
+  async selection(open) {
+    const { page, errors, close } = await open(DESKTOP);
+    const intro = partOf(page, INTRO);
+    // a mouse's drag: the comment opens as it lets go, no Comment button, the provisional pin's tip where it let go
+    const release = await dragSelect(page, intro, "paragraph", "state");
+    await pendingPinOf(page).waitFor();
+    await besidePinOf(page).waitFor();
+    await fieldFocused(page);
+    assert.equal(await page.locator(".chat-view .comment-selection").count(), 0, "a mouse's drag needs no Comment button");
+    await assertTipAt(page, pendingPinOf(page), release, "the provisional pin of a dragged selection");
+    await assertBubble(pendingPinOf(page));
+    await assertBesideRight(page, pendingPinOf(page), "a dragged selection's new comment");
+    await fieldOf(page).fill("Say which state.");
+    await page.keyboard.press("Control+Enter");
+    await popoverOf(page).waitFor({ state: "detached" });
+    await eventually("one pin", async () => (await pinsOf(page).count()) === 1 && (await pendingPinOf(page).count()) === 0);
+    await assertTipAt(page, pinsOf(page).first(), release, "a dragged selection's saved comment");
+    assert.ok((await storedPoint(page, "Say which state.")) !== undefined, "the comment keeps where the drag let go");
+    assert.equal(await page.locator(".chat-transcript [data-comment-id], .chat-transcript .comment-pins, .chat-transcript .comment-popover").count(), 0, "no comment element is drawn inside the transcript, under the text");
+    assert.ok(!((await page.locator(".chat-transcript").first().textContent()) ?? "").includes("Say which state."), "the comment's text is not drawn in the transcript");
+    assert.ok((await highlighted(page)) > 0, "the selected text is highlighted");
+    const stored = await storedOf(page);
+    assert.deepEqual(stored.map((entry) => [entry.comment, entry.quote]), [["Say which state.", "paragraph about the state"]]);
+    assert.equal(await pinsOf(page).first().getAttribute("aria-label"), "Comment on “paragraph about the state”: Say which state.");
+    await pinsOf(page).first().click();
+    await besidePinOf(page).waitFor();
+    await assertBesideRight(page, pinsOf(page).first(), "a saved comment opened by its pin");
+    await fieldFocused(page);
+    assert.equal(await fieldOf(page).inputValue(), "Say which state.", "the pin opens the comment in its field");
+    await page.mouse.move(2, 2);
+    await assertUp(page, "paragraph about the state", "a selection's comment opened by its pin");
+    await page.keyboard.press("Escape");
+    await popoverOf(page).waitFor({ state: "detached" });
+    console.log("PASS selection: a mouse's drag opens the popover at once, right of a provisional bubble whose tip is where it let go, the field focused; Ctrl+Enter leaves one pin there, no card");
+
+    // a keyboard's selection (no drag) opens nothing, and there is no Comment button for it
+    const long = partOf(page, "A longer paragraph");
+    await select(long, "longer", { to: "several" });
+    await frames(page, 10);
+    assert.equal(await popoverOf(page).count(), 0, "a keyboard selection opens nothing");
+    await assertNoButton(page, "a keyboard selection");
+    await page.evaluate(() => window.getSelection()?.removeAllRanges());
+    console.log("PASS selection: a keyboard selection opens nothing, and no Comment button shows");
+
+    /** A drag of the mouse from `start` to `end` (client pixels): opens a new comment beside its provisional pin, never a button; closed again. */
+    const dragOpens = async (start: { x: number; y: number }, end: { x: number; y: number }, what: string): Promise<string> => {
+      await page.mouse.move(start.x, start.y);
+      await page.mouse.down();
+      await page.mouse.move((start.x + end.x) / 2, (start.y + end.y) / 2, { steps: 4 });
+      await page.mouse.move(end.x, end.y, { steps: 4 });
+      await page.mouse.up();
+      await besidePinOf(page).waitFor().catch(() => { throw new Error(`${what}: no popover opened`); });
+      await pendingPinOf(page).waitFor();
+      await fieldFocused(page);
+      await assertNoButton(page, what);
+      assert.equal(await popoverOf(page).locator(".comment-popover-quote").count(), 0, `${what}: beside its pin the popover quotes nothing`);
+      const quote = await highlightText(page);
+      await page.keyboard.press("Escape");
+      await popoverOf(page).waitFor({ state: "detached" });
+      return quote;
+    };
+    /** Where `word` starts (or ends, `end`) in `part`, in client pixels, without scrolling. */
+    const edge = (part: Locator, word: string, end = false): Promise<{ x: number; y: number; right: number; bottom: number }> => part.evaluate((node, wanted) => {
+      const walker = document.createTreeWalker(node, NodeFilter.SHOW_TEXT);
+      for (let next = walker.nextNode(); next; next = walker.nextNode()) {
+        const at = (next as Text).data.indexOf(wanted.word);
+        if (at < 0) continue;
+        const offset = wanted.end ? at + wanted.word.length - 1 : at;
+        const range = document.createRange();
+        range.setStart(next, offset);
+        range.setEnd(next, offset + 1);
+        const rect = range.getBoundingClientRect();
+        const box = node.getBoundingClientRect();
+        return { x: wanted.end ? rect.right - 1 : rect.left + 1, y: rect.top + rect.height / 2, right: box.right, bottom: box.bottom };
+      }
+      throw new Error(`"${wanted.word}" is not in the part`);
+    }, { word, end });
+    const docs = partOf(page, "See docs");
+    await docs.evaluate((node) => node.scrollIntoView({ block: "center" }));
+    // let go past the end of the line, in the empty space right of it
+    const see = await edge(docs, "See");
+    const seeLine = await docs.evaluate((node) => {
+      const range = document.createRange();
+      range.selectNodeContents(node);
+      const rects = [...range.getClientRects()].filter((rect) => rect.width > 0);
+      return { right: Math.max(...rects.map((rect) => rect.right)), y: rects[0]!.top + rects[0]!.height / 2 };
+    });
+    assert.ok((await dragOpens(see, { x: seeLine.right + 120, y: seeLine.y }, "a drag let go past the end of its line")).includes("See docs"));
+    // let go in the margin under a paragraph, before the next block
+    await intro.evaluate((node) => node.scrollIntoView({ block: "center" }));
+    const introStart = await edge(intro, "Intro");
+    const gap = await intro.evaluate((node) => {
+      const box = node.getBoundingClientRect();
+      const next = node.closest(".markdown-block, p")!.nextElementSibling!.getBoundingClientRect();
+      return { x: box.left + box.width / 3, y: (box.bottom + next.top) / 2, room: next.top - box.bottom };
+    });
+    assert.ok(gap.room >= 4, `a margin lies under the paragraph (${gap.room}px)`);
+    assert.ok((await dragOpens(introStart, gap, "a drag let go in the margin under its paragraph")).includes("Intro"));
+    // across two paragraphs: one comment on both
+    await long.evaluate((node) => node.scrollIntoView({ block: "center" }));
+    const across = await dragOpens(await edge(long, "longer"), await edge(partOf(page, "Checksum"), "Checksum", true), "a drag across two paragraphs");
+    assert.ok(across.includes("several lines") && across.includes("Checksum"), `the quote holds both paragraphs (${across})`);
+    console.log("PASS selection: a drag let go past the end of its line, in the margin under its paragraph, or across two paragraphs opens the popover at once, never a Comment button");
+    assert.deepEqual(errors, []);
+    await close();
+  },
+
+  async "block-click"(open) {
+    const { page, errors, close } = await open(DESKTOP);
+    const long = partOf(page, "A longer paragraph");
+    // a pointer over a block frames it (a tint and two box shadows, BlockComments.css), only while no popover is open
+    const framed = (): Promise<boolean> => long.evaluate((node) => getComputedStyle(node.closest(".is-commentable") ?? node).boxShadow !== "none");
+    await long.hover();
+    await eventually("the hovered paragraph to be framed", framed);
+    const clicked = await clickWord(page, long, "several");
+    await besidePinOf(page).waitFor();
+    assert.equal(await framed(), false, "no frame on the block while its popover is open");
+    await fieldFocused(page);
+    assert.equal(await fieldOf(page).inputValue(), "", "a new comment's field starts empty");
+    assert.equal(await popoverOf(page).getByRole("button", { name: "Close", exact: true }).count(), 0, "a comment being written beside its pin has no ✕");
+    await pendingPinOf(page).waitFor();
+    // the provisional bubble's tip is where the paragraph was clicked, not at its end; the popover right of it
+    await assertTipAt(page, pendingPinOf(page), clicked, "the provisional pin of a clicked block");
+    await assertBubble(pendingPinOf(page));
+    await assertBesideRight(page, pendingPinOf(page), "a clicked block's new comment");
+    await fieldOf(page).fill("Too long for a phone?");
+    await page.keyboard.press("Control+Enter");
+    await popoverOf(page).waitFor({ state: "detached" });
+    await eventually("the block comment's pin", async () => (await pinsOf(page).count()) === 1);
+    const stored = await storedOf(page);
+    assert.equal(stored.length, 1);
+    assert.equal(stored[0]!.quote, undefined, "a block click comments on the whole block, no quote");
+    assert.ok(stored[0]!.point !== undefined && stored[0]!.point.x > 0 && stored[0]!.point.x < 1, `the comment keeps where it was clicked (${JSON.stringify(stored[0]!.point)})`);
+    await assertTipAt(page, pinsOf(page).first(), clicked, "a clicked block's saved comment");
+    await assertBubble(pinsOf(page).first());
+
+    // the same block clicked again elsewhere: its comment, to edit, its pin where it was first put
+    await clickWord(page, long, "paragraph");
+    await besidePinOf(page).waitFor();
+    await assertTipAt(page, pinsOf(page).first(), clicked, "a block clicked again elsewhere");
+    await assertBesideRight(page, pinsOf(page).first(), "a clicked block's comment opened again");
+    assert.deepEqual((await storedOf(page)).map((entry) => entry.point), [stored[0]!.point], "the second click moves no point");
+    await fieldFocused(page);
+    assert.equal(await fieldOf(page).inputValue(), "Too long for a phone?", "the click opens the comment in its field");
+    assert.equal(await closeOf(page).count(), 0, "a saved comment beside its pin has no ✕");
+    assert.equal(await deleteOf(page).count(), 1, "its Delete is in view");
+    await assertUp(page, "A longer paragraph", "a block's comment opened by a click");
+    await page.keyboard.press("Escape");
+    await popoverOf(page).waitFor({ state: "detached" });
+    console.log("PASS block-click: a pointer over a paragraph frames it, and the frame goes while a popover is open; a click on a paragraph opens a new comment right of a provisional bubble whose tip is where it was clicked; saved, the pin stays there; clicked again elsewhere, its comment opens in its field, its text up, the pin unmoved");
+
+    // with a popover open, a press outside it only closes it: a click on another block opens nothing there, and the
+    // next click does
+    const step = partOf(page, "Step 3 of the rollout");
+    const closedOnly = async (what: string): Promise<void> => {
+      await popoverOf(page).waitFor({ state: "detached" });
+      await frames(page, 10);
+      assert.equal(await popoverOf(page).count(), 0, `${what}: no popover opens`);
+      assert.equal(await pendingPinOf(page).count(), 0, `${what}: no provisional pin`);
+    };
+    await clickWord(page, partOf(page, INTRO), "Intro");
+    await fieldFocused(page);
+    await clickWord(page, step, "rollout");
+    await closedOnly("a click on another block with a new comment open");
+    await clickWord(page, step, "rollout");
+    await besidePinOf(page).waitFor();
+    await pendingPinOf(page).waitFor();
+    assert.ok((await highlightText(page)).includes("Step 3"), "the next click opens a comment on the block");
+    // a saved comment's popover the same
+    await pinsOf(page).first().click();
+    await fieldFocused(page);
+    assert.equal(await fieldOf(page).inputValue(), "Too long for a phone?", "a press on a pin switches straight to its comment");
+    await clickWord(page, step, "rollout");
+    await closedOnly("a click on another block with a saved comment open");
+    // a drag that starts while a popover is open closes it and opens its own selection's comment at once
+    await clickWord(page, partOf(page, INTRO), "Intro");
+    await fieldFocused(page);
+    await dragSelect(page, step, "Step", "rollout");
+    await besidePinOf(page).waitFor();
+    await pendingPinOf(page).waitFor();
+    await fieldFocused(page);
+    assert.equal(await popoverOf(page).count(), 1, "one popover: the drag's");
+    assert.ok((await highlightText(page)).includes("Step 3 of the rollout"), "the drag's new comment is on its selection");
+    await page.keyboard.press("Escape");
+    await popoverOf(page).waitFor({ state: "detached" });
+    console.log("PASS block-click: with a popover open (new or saved), a click on another block only closes it, nothing opens, and the next click opens a comment; a drag closes it and opens its selection's comment at once; a press on a pin switches to its comment");
+    assert.deepEqual(errors, []);
+    await close();
+  },
+
+  async "edit-delete"(open) {
+    const { page, errors, close } = await open(DESKTOP);
+    await commentBlock(page, partOf(page, INTRO), "Intro", "First note.");
+    await commentBlock(page, partOf(page, "A longer paragraph"), "several", "Second note.");
+    const first = pinsOf(page).first();
+    assert.equal(await first.getAttribute("aria-label"), `Comment on “${INTRO}”: First note.`, "pins are in reading order");
+
+    // the pin opens the comment straight into its field, the caret at its end: no view to read first, no ⋯ menu
+    await first.click();
+    await besidePinOf(page).waitFor();
+    await fieldFocused(page);
+    assert.equal(await fieldOf(page).inputValue(), "First note.", "the pin opens the field with the comment");
+    assert.deepEqual(await fieldOf(page).evaluate((node: HTMLTextAreaElement) => [node.selectionStart, node.selectionEnd]), [11, 11], "the caret at its end");
+    assert.equal(await popoverOf(page).getByRole("button", { name: "More", exact: true }).count(), 0, "no ⋯ menu");
+    assert.equal(await closeOf(page).count(), 0, "no ✕ beside its pin");
+    // beside its pin a saved comment is its field alone, as in Claude: the highlighted text beside it is what it is on
+    assert.equal(await popoverOf(page).locator(".comment-popover-quote").count(), 0, "a saved comment beside its pin quotes nothing");
+    // its text stays up while the field has the focus, the pointer off the pin: the other comment's mark goes (focus mode)
+    await page.mouse.move(2, 2);
+    await assertUp(page, INTRO, "a saved comment opened by its pin, the focus in its field");
+    assert.ok(!(await upInChat(page)).text.includes("A longer paragraph"), "only the open comment is up");
+    // Delete is in view, at the left of the field's footer, ↑ at its right
+    assert.ok(await deleteOf(page).isVisible(), "Delete is in view, without a menu");
+    const footer = await popoverOf(page).evaluate((node) => {
+      const bin = node.querySelector(".comment-popover-delete")!.getBoundingClientRect();
+      const save = node.querySelector(".comment-popover-save")!.getBoundingClientRect();
+      const box = node.querySelector(".comment-popover-edit")!.getBoundingClientRect();
+      return { bin: bin.left - box.left, save: box.right - save.right, row: Math.abs(bin.top - save.top) };
+    });
+    assert.ok(footer.bin < 12 && footer.save < 12 && footer.row < 1, `Delete at the box's bottom left, ↑ at its bottom right (${JSON.stringify(footer)})`);
+    await fieldOf(page).fill("First note, changed.");
+    await page.keyboard.press("Control+Enter");
+    await popoverOf(page).waitFor({ state: "detached" });
+    await eventually("the pin's name to follow the edit", async () => (await pinsOf(page).first().getAttribute("aria-label")) === `Comment on “${INTRO}”: First note, changed.`);
+    console.log("PASS edit-delete: a pin opens its comment in the field, caret at the end, no ⋯ or ✕, its text up while the field has the focus; saved, the pin's name changes");
+
+    await pinsOf(page).first().click();
+    await besidePinOf(page).waitFor();
+    await fieldFocused(page);
+    await deleteOf(page).click();
+    await popoverOf(page).waitFor({ state: "detached" });
+    await eventually("one pin left", async () => (await pinsOf(page).count()) === 1);
+    await eventually("the focus on the next pin", () => pinsOf(page).first().evaluate((node) => node === document.activeElement && node.getAttribute("aria-label")!.endsWith("Second note.")));
+    assert.deepEqual((await storedOf(page)).map((entry) => entry.comment), ["Second note."]);
+
+    await pinsOf(page).first().click();
+    await besidePinOf(page).waitFor();
+    await deleteOf(page).click();
+    await eventually("no pin left", async () => (await pinsOf(page).count()) === 0);
+    await eventually("the focus on the composer", () => focusedMatches(page, ".composer-text"));
+    assert.deepEqual(await storedOf(page), []);
+    await eventually("no highlight left", async () => (await highlighted(page)) === 0 && (await upInChat(page)).ranges === 0 && !(await upInChat(page)).focus);
+    console.log("PASS edit-delete: Delete beside ↑ takes the comment and its pin at once; the focus goes to the next pin, then to the composer");
+    assert.deepEqual(errors, []);
+    await close();
+  },
+
+  async escape(open) {
+    const { page, errors, close } = await open(DESKTOP);
+    const intro = partOf(page, INTRO);
+    await clickWord(page, intro, "Intro");
+    await besidePinOf(page).waitFor();
+    await fieldFocused(page);
+    await page.keyboard.press("Escape");
+    await popoverOf(page).waitFor({ state: "detached" });
+    await eventually("the provisional pin to go with it", async () => (await pendingPinOf(page).count()) === 0);
+
+    await clickWord(page, intro, "Intro");
+    await fieldFocused(page);
+    await fieldOf(page).fill("Not lost");
+    await page.keyboard.press("Escape");
+    await frames(page);
+    assert.equal(await popoverOf(page).count(), 1, "Escape leaves a popover with text typed in it");
+    // a click outside it, on text that is not a reply's
+    await clickWord(page, page.locator(".chat-turn-user"), "plan");
+    await frames(page);
+    assert.equal(await popoverOf(page).count(), 1, "a click outside leaves it too");
+    assert.equal(await fieldOf(page).inputValue(), "Not lost");
+    assert.ok(await focusedMatches(page, ".comment-popover textarea"), "and puts the focus back in its field");
+    // another block clicked: the open one keeps its place, and the focus goes back to its field
+    await clickWord(page, partOf(page, "A longer paragraph"), "several");
+    await fieldFocused(page);
+    assert.equal(await fieldOf(page).inputValue(), "Not lost");
+    assert.equal(await pinsOf(page).count(), 0);
+    console.log("PASS escape: Escape closes an untouched popover; with text typed it stays open on Escape, a click outside (the focus back in its field) and another block's click");
+
+    // a saved comment opened by its pin: no ✕ beside it; unchanged, Escape and a click outside close it, and its text goes down
+    await page.keyboard.press("Control+Enter");
+    await popoverOf(page).waitFor({ state: "detached" });
+    await eventually("its pin", async () => (await pinsOf(page).count()) === 1);
+    const pin = pinsOf(page).first();
+    await pin.click();
+    await fieldFocused(page);
+    assert.equal(await closeOf(page).count(), 0, "a saved comment beside its pin has no ✕");
+    await page.keyboard.press("Escape");
+    await popoverOf(page).waitFor({ state: "detached" });
+    await pin.click();
+    await fieldFocused(page);
+    await page.mouse.move(2, 2);
+    await assertUp(page, INTRO, "a saved comment opened again");
+    await clickWord(page, page.locator(".chat-turn-user"), "plan");
+    await popoverOf(page).waitFor({ state: "detached" });
+    await eventually("its text to go down as it closes", async () => (await upInChat(page)).ranges === 0 && !(await upInChat(page)).focus);
+    // changed: Escape and a click outside keep it, each putting the focus back in its field
+    await pin.click();
+    await fieldFocused(page);
+    await page.keyboard.type(" More.");
+    await page.keyboard.press("Escape");
+    await frames(page);
+    assert.equal(await popoverOf(page).count(), 1, "Escape keeps a changed comment");
+    assert.ok(await focusedMatches(page, ".comment-popover textarea"), "the focus stays in its field");
+    await deleteOf(page).focus();
+    await page.keyboard.press("Escape");
+    await fieldFocused(page);
+    assert.equal(await popoverOf(page).count(), 1, "Escape from its Delete keeps it too, the focus back in the field");
+    await clickWord(page, page.locator(".chat-turn-user"), "plan");
+    await frames(page);
+    assert.equal(await popoverOf(page).count(), 1, "a click outside keeps a changed comment");
+    assert.ok(await focusedMatches(page, ".comment-popover textarea"), "and puts the focus back in its field");
+    assert.equal(await fieldOf(page).inputValue(), "Not lost More.");
+    await assertUp(page, INTRO, "a changed comment kept open");
+    // its change undone, it is unchanged again: Escape closes it
+    await fieldOf(page).fill("Not lost");
+    await page.keyboard.press("Escape");
+    await popoverOf(page).waitFor({ state: "detached" });
+    assert.deepEqual((await storedOf(page)).map((entry) => entry.comment), ["Not lost"]);
+    console.log("PASS escape: a saved comment beside its pin has no ✕; unchanged, Escape and a click outside close it and its text goes down; changed, both keep it with the focus back in the field");
+    assert.deepEqual(errors, []);
+    await close();
+  },
+
+  async "double-click"(open) {
+    const { page, errors, close } = await open(DESKTOP);
+    const selected = (): Promise<string | undefined> => page.evaluate(() => window.getSelection()?.toString().trim());
+    const at = await wordPoint(partOf(page, "A longer paragraph"), "several");
+    // the double click's first click alone: it opens a new comment on the paragraph
+    await page.mouse.move(at.x, at.y);
+    await page.mouse.down({ clickCount: 1 });
+    await page.mouse.up({ clickCount: 1 });
+    await besidePinOf(page).waitFor();
+    await pendingPinOf(page).waitFor();
+    // its second click selects the word, and the untouched new comment closes
+    await page.mouse.down({ clickCount: 2 });
+    await page.mouse.up({ clickCount: 2 });
+    await eventually("the popover the first click opened to close", async () => (await popoverOf(page).count()) === 0 && (await pendingPinOf(page).count()) === 0);
+    assert.equal(await selected(), "several", "the word is selected");
+    // the word it selected is no mouse's drag: it is there to copy, and nothing opens for it, no Comment button either
+    await frames(page, 10);
+    assert.equal(await popoverOf(page).count(), 0, "a double click's word selection opens no comment");
+    assert.equal(await pendingPinOf(page).count(), 0);
+    await assertNoButton(page, "a double click's word selection");
+    assert.equal(await selected(), "several", "the word stays selected");
+    console.log("PASS double-click: a double click opens a new comment with its first click, then selects a word and leaves no popover; the word selection opens nothing, no Comment button");
+
+    // a triple click selects the paragraph, to copy: nothing opens, nothing shows
+    await page.evaluate(() => window.getSelection()?.removeAllRanges());
+    const intro = await wordPoint(partOf(page, INTRO), "about");
+    await page.mouse.move(intro.x, intro.y);
+    for (const clickCount of [1, 2, 3]) {
+      await page.mouse.down({ clickCount });
+      await page.mouse.up({ clickCount });
+    }
+    await frames(page, 10);
+    assert.equal(await selected(), INTRO, "the paragraph is selected");
+    assert.equal(await popoverOf(page).count(), 0, "a triple click opens no comment");
+    assert.equal(await pendingPinOf(page).count(), 0);
+    await assertNoButton(page, "a triple click's selection");
+    console.log("PASS double-click: a triple click selects the paragraph to copy; nothing opens and no Comment button shows");
+
+    // a double click inside an open untouched popover (a word typed in its field) selects that word, and the popover stays
+    await page.evaluate(() => window.getSelection()?.removeAllRanges());
+    await clickWord(page, partOf(page, INTRO), "Intro");
+    await besidePinOf(page).waitFor();
+    await fieldFocused(page);
+    const field = await fieldOf(page).boundingBox();
+    assert.ok(field !== null);
+    await page.mouse.dblclick(field.x + 4, field.y + field.height / 2);
+    await frames(page);
+    assert.equal(await besidePinOf(page).count(), 1, "the popover stays open");
+    console.log("PASS double-click: a double click inside an untouched popover keeps the popover");
+    assert.deepEqual(errors, []);
+    await close();
+  },
+
+  async keyboard(open) {
+    const { page, errors, close } = await open(DESKTOP);
+    await commentBlock(page, partOf(page, INTRO), "Intro", "Keys one.");
+    await commentBlock(page, partOf(page, "A longer paragraph"), "several", "Keys two.");
+    // the mouse off the pins (the last one was drawn under it), so only the keyboard brings a comment's text up
+    await page.mouse.move(2, 2);
+    // from the transcript's last control, Tab goes on to the pins, in reading order
+    await page.evaluate(() => {
+      const stops = [...document.querySelectorAll<HTMLElement>(".chat-transcript a[href], .chat-transcript button:not(:disabled), .chat-transcript summary, .chat-transcript [tabindex]")]
+        .filter((node) => node.tabIndex >= 0 && node.getClientRects().length > 0 && getComputedStyle(node).visibility !== "hidden");
+      stops.at(-1)!.focus();
+    });
+    const focusedName = (): Promise<string | null> => page.evaluate(() => document.activeElement?.matches(".comment-pin") ? document.activeElement.getAttribute("aria-label") : null);
+    await page.keyboard.press("Tab");
+    assert.equal(await focusedName(), `Comment on “${INTRO}”: Keys one.`, "Tab reaches the first pin");
+    await page.keyboard.press("Tab");
+    assert.equal(await focusedName(), `Comment on “${LONG_PARAGRAPH.slice(0, 31)}…”: Keys two.`, "then the second");
+    await page.keyboard.press("Shift+Tab");
+    assert.equal(await focusedName(), `Comment on “${INTRO}”: Keys one.`);
+    await page.keyboard.press("Enter");
+    await besidePinOf(page).waitFor();
+    await fieldFocused(page);
+    assert.equal(await fieldOf(page).inputValue(), "Keys one.", "Enter on a pin opens its comment in the field");
+    // the pin's keyboard focus moved into the field: the comment's text stays up while its popover is open
+    await assertUp(page, INTRO, "a pin opened with Enter, the focus in its field");
+    assert.ok(!(await upInChat(page)).text.includes("A longer paragraph"), "only the open comment is up");
+    await page.keyboard.press("Escape");
+    await popoverOf(page).waitFor({ state: "detached" });
+    await eventually("the focus back on the pin", async () => (await focusedName()) === `Comment on “${INTRO}”: Keys one.`);
+    console.log("PASS keyboard: Tab reaches the pins in reading order, Enter opens one in its field, its text up, Escape closes it with the focus back on its pin");
+
+    // saved changed (a new id): the same pin stays, and the focus goes back to it
+    const pinBefore = await page.evaluateHandle(() => document.activeElement);
+    await page.keyboard.press("Enter");
+    await fieldFocused(page);
+    await page.keyboard.type(" Edited.");
+    await page.keyboard.press("ControlOrMeta+Enter");
+    await popoverOf(page).waitFor({ state: "detached" });
+    await eventually("the focus back on the edited comment's pin", async () => (await focusedName()) === `Comment on “${INTRO}”: Keys one. Edited.`);
+    assert.ok(await page.evaluate((node) => node === document.activeElement && (node as Element).isConnected, pinBefore), "the edited comment keeps its pin element");
+    console.log("PASS keyboard: an edit saved with Cmd/Ctrl+Enter keeps its pin, with the focus back on it");
+
+    // the popover beside a pin comes right after that pin in the tab order: Shift+Tab from it goes back to its own pin,
+    // Tab from its own pin into it, and Tab out of it on to the next pin (not past the remaining pins)
+    await page.keyboard.press("Enter");
+    await besidePinOf(page).waitFor();
+    await fieldFocused(page);
+    assert.ok(await page.evaluate(() => {
+      const place = document.querySelector(".chat-view .comment-popover-place");
+      return place?.previousElementSibling?.matches(".comment-pin") === true && place.nextElementSibling?.matches(".comment-pin") === true;
+    }), "the popover's place lies between its pin and the next one");
+    await page.keyboard.press("Shift+Tab");
+    assert.equal(await focusedName(), `Comment on “${INTRO}”: Keys one. Edited.`, "Shift+Tab from the popover goes back to its own pin");
+    assert.equal(await besidePinOf(page).count(), 1, "the popover stays open");
+    await page.keyboard.press("Tab");
+    assert.ok(await focusedMatches(page, ".comment-popover *"), "Tab from its pin goes into the popover");
+    // its field, then Delete, then out: ↑ is disabled while the comment is unchanged, so Tab passes it
+    const stops: string[] = [];
+    for (let step = 0; step < 6 && await focusedMatches(page, ".comment-popover, .comment-popover *"); step++) {
+      stops.push(await page.evaluate(() => document.activeElement?.getAttribute("aria-label") ?? ""));
+      await page.keyboard.press("Tab");
+    }
+    assert.deepEqual(stops, ["Comment", "Delete comment"], "Tab goes through the field and Delete, past the disabled ↑");
+    assert.equal(await focusedName(), `Comment on “${LONG_PARAGRAPH.slice(0, 31)}…”: Keys two.`, "Tab out of the popover goes on to the next pin");
+    // changed, ↑ is a stop too
+    await page.keyboard.press("Shift+Tab");
+    await page.keyboard.press("Shift+Tab");
+    await fieldFocused(page);
+    await page.keyboard.type(" Edited.");
+    assert.equal(await page.locator(".comment-popover-save").isEnabled(), true, "a change enables ↑");
+    const changed: string[] = [];
+    for (let step = 0; step < 6 && await focusedMatches(page, ".comment-popover, .comment-popover *"); step++) {
+      changed.push(await page.evaluate(() => document.activeElement?.getAttribute("aria-label") ?? ""));
+      await page.keyboard.press("Tab");
+    }
+    assert.deepEqual(changed, ["Comment", "Delete comment", "Save comment"], "with a change, Tab goes through the field, Delete and ↑");
+    console.log("PASS keyboard: the popover sits after its own pin in the tab order: Shift+Tab goes back to that pin, Tab through its field, Delete (and ↑ once changed) out to the next pin");
+    assert.deepEqual(errors, []);
+    await close();
+  },
+
+  async walk(open) {
+    // a view shorter than the reply: the walk scrolls to the intro from the end
+    const { page, context, url, errors, close } = await open({ viewport: { width: 1280, height: 720 } }, { comments: [UNLOADED] });
+    await commentBlock(page, partOf(page, INTRO), "Intro", "Walk here.");
+    const scrolls = await page.locator(".chat-view").evaluate((node) => {
+      node.scrollTop = node.scrollHeight;
+      return node.scrollHeight - node.clientHeight;
+    });
+    assert.ok(scrolls > 200, `the chat scrolls (${scrolls}px)`);
+    await scrollSettled(page);
+    assert.equal(await inView(page, ".chat-view .comment-pin:not(.is-pending)"), false, "the pin is out of view before the walk");
+
+    await walkOf(page).click();
+    await besidePinOf(page).waitFor();
+    assert.equal(await fieldOf(page).inputValue(), "Walk here.", "the walk opens a comment in its field, to edit");
+    assert.equal(await deleteOf(page).count(), 1, "with its Delete");
+    assert.equal(await page.locator(".chat-view .comment-pin.is-current").count(), 1, "its pin is the current one");
+    assert.equal(await page.locator(".chat-view .comment-pin.is-current").getAttribute("aria-label"), `Comment on “${INTRO}”: Walk here.`);
+    // the walk's smooth scroll and the popover's own scroll into view do not cut each other short: once settled, the
+    // text, its pin and the popover are all on screen
+    await scrollSettled(page);
+    assert.ok(await inView(page, ".chat-view .comment-pin.is-current"), "the pin is in view");
+    assert.ok(await inView(page, ".chat-view .comment-popover"), "the popover is in view");
+    assert.ok(await page.evaluate(() => {
+      const marks = (CSS as unknown as { highlights: { get(key: string): Iterable<Range> | undefined } }).highlights.get("block-comment-current");
+      const range = marks === undefined ? undefined : [...marks][0];
+      const view = document.querySelector(".chat-view")!.getBoundingClientRect();
+      const box = range?.getBoundingClientRect();
+      return box !== undefined && box.height > 0 && box.top >= view.top - 1 && box.bottom <= view.bottom + 1;
+    }), "its text, the current highlight, is in view");
+    await fieldFocused(page);
+    await assertUp(page, INTRO, "the walk's stop, the focus in its field");
+    // Escape closes it and hands the focus to the walk control, which walks on with Enter
+    await page.keyboard.press("Escape");
+    await popoverOf(page).waitFor({ state: "detached" });
+    await eventually("the walk control to take the focus", () => walkOf(page).evaluate((node) => node === document.activeElement));
+    assert.equal(await page.locator(".chat-view .comment-pin.is-current").count(), 0, "the mark goes");
+    console.log("PASS walk: the comments bar opens the next comment's popover in its field, its pin current, its text up, scrolled into view without the two scrolls fighting");
+
+    await page.keyboard.press("Enter");
+    await dialogOf(page).waitFor();
+    await fieldFocused(page);
+    assert.equal(await fieldOf(page).inputValue(), "Is this still true?", "the dialog opens the comment in its field");
+    assert.equal(await dialogOf(page).locator(".comment-popover-quote").innerText(), "A reply from a turn the chat has not loaded.", "it quotes its block");
+    assert.equal(await closeOf(page).count(), 1, "a dialog keeps ✕");
+    assert.equal(await deleteOf(page).count(), 1, "and Delete");
+    // ✕ follows the popover's rule: a change typed keeps the dialog, the focus back in its field
+    await fieldOf(page).fill("Is this still true? Check.");
+    await closeOf(page).click();
+    await frames(page);
+    assert.equal(await dialogOf(page).count(), 1, "✕ keeps a changed comment's dialog");
+    assert.ok(await focusedMatches(page, ".comment-popover textarea"), "and puts the focus back in its field");
+    await fieldOf(page).fill("Is this still true?");
+    await page.keyboard.press("Escape");
+    await dialogOf(page).waitFor({ state: "detached" });
+    await eventually("the walk control to take the focus back", () => walkOf(page).evaluate((node) => node === document.activeElement));
+    console.log("PASS walk: a comment whose turn is not loaded opens as a dialog, and gives the focus back to the walk control");
+
+    // the dialog open again (the walk goes round: the pin, then the dialog), and its comment deleted in another tab: it closes
+    await page.keyboard.press("Enter");
+    await besidePinOf(page).waitFor();
+    await fieldFocused(page);
+    await page.keyboard.press("Escape");
+    await eventually("the walk control to take the focus", () => walkOf(page).evaluate((node) => node === document.activeElement));
+    await page.keyboard.press("Enter");
+    await dialogOf(page).waitFor();
+    const other = await context.newPage();
+    await other.goto(url);
+    await other.evaluate((id) => {
+      const key = Object.keys(localStorage).find((name) => name.startsWith("herdr-web-ui:block-comments:"))!;
+      const data = JSON.parse(localStorage.getItem(key)!) as { comments: { id: string }[] };
+      localStorage.setItem(key, JSON.stringify({ ...data, comments: data.comments.filter((comment) => comment.id !== id) }));
+    }, UNLOADED.id);
+    await dialogOf(page).waitFor({ state: "detached" });
+    await other.close();
+    assert.equal(await pinsOf(page).count(), 1, "the other comment stays");
+    console.log("PASS walk: the dialog of a comment deleted in another tab closes");
+    assert.deepEqual(errors, []);
+    await close();
+  },
+
+  async reflow(open) {
+    const { page, errors, close } = await open(DESKTOP);
+    await pointlessSelectionComment(page, partOf(page, INTRO), "paragraph", "about", "Reflow one.");
+    const long = partOf(page, "A longer paragraph");
+    const clicked = await clickWord(page, long, "several");
+    await saveTyped(page, "Reflow two.");
+    await eventually("both pins", async () => (await pinsOf(page).count()) === 2);
+    const clickedPin = page.locator(".chat-view .comment-pin:not(.is-pending)[aria-label*='Reflow two.']");
+    await assertPinsAtText(page, "the selection's pin before the font size changes", { named: "Reflow one.", count: 1 });
+    await assertTipAt(page, clickedPin, clicked, "the clicked block's pin before the font size changes");
+    const before = await pinsOf(page).evaluateAll((pins) => pins.map((pin) => pin.getBoundingClientRect().left));
+    /** the clicked pin's tip lies inside its paragraph's text box, at the fractions it was made at */
+    const insideItsBlock = async (what: string): Promise<void> => {
+      const point = (await storedPoint(page, "Reflow two."))!;
+      let seen: unknown = null;
+      await eventually(`${what}: the clicked pin inside its paragraph, at its point`, async () => {
+        const tip = await tipOf(clickedPin);
+        const box = await long.evaluate((node) => {
+          const range = document.createRange();
+          range.selectNodeContents(node);
+          const rects = [...range.getClientRects()].filter((rect) => rect.width > 0 && rect.height > 0);
+          return { left: Math.min(...rects.map((r) => r.left)), top: Math.min(...rects.map((r) => r.top)), right: Math.max(...rects.map((r) => r.right)), bottom: Math.max(...rects.map((r) => r.bottom)) };
+        });
+        const want = { x: box.left + point.x * (box.right - box.left), y: box.top + point.y * (box.bottom - box.top) };
+        seen = { tip, box, want };
+        return tip.x >= box.left && tip.x <= box.right && tip.y >= box.top && tip.y <= box.bottom
+          && Math.abs(tip.x - want.x) <= TIP_SLACK_PX && Math.abs(tip.y - want.y) <= TIP_SLACK_PX;
+      }).catch((error: Error) => { throw new Error(`${error.message} (${JSON.stringify(seen)})`); });
+    };
+    await insideItsBlock("before the font size changes");
+    await page.keyboard.press("ControlOrMeta+Shift+Comma");
+    await openSettingsPage(page, "Chat");
+    const bigger = page.getByRole("button", { name: "Increase chat font size", exact: true });
+    for (let step = 0; step < 4; step++) await bigger.click();
+    await page.keyboard.press("Escape");
+    await page.locator(".settings-dialog").waitFor({ state: "detached" });
+    await eventually("the pins to move with the text", async () => {
+      const after = await pinsOf(page).evaluateAll((pins) => pins.map((pin) => pin.getBoundingClientRect().left));
+      return after.some((left, index) => Math.abs(left - before[index]!) > 4);
+    });
+    await assertPinsAtText(page, "the selection's pin after the font size changed", { named: "Reflow one.", count: 1 });
+    await insideItsBlock("after the font size changed");
+    // a narrower window rewraps the paragraph over more lines: the clicked pin keeps its place on it
+    await page.setViewportSize({ width: 820, height: 800 });
+    await insideItsBlock("after the window narrowed");
+    await assertPinsAtText(page, "the selection's pin after the window narrowed", { named: "Reflow one.", count: 1 });
+    console.log("PASS reflow: with a larger chat font and a narrower window a selection's pin stored without a point stays at the end of its text, and a clicked block's pin inside its paragraph, at its point");
+    assert.deepEqual(errors, []);
+    await close();
+  },
+
+  async acknowledged(open) {
+    const { page, errors, sent, close } = await open(DESKTOP);
+    await commentBlock(page, partOf(page, INTRO), "Intro", "Ack me.");
+    await pinsOf(page).first().click();
+    await besidePinOf(page).waitFor();
+    // the message box focused without a press outside the popover, so only the send's acknowledgement can close it
+    const message = messageOf(page);
+    await message.focus();
+    await message.fill("Please look.");
+    await page.keyboard.press("Enter");
+    await eventually("the message to be sent", async () => sent.length === 1, 5000);
+    assert.ok(sent[0]!.includes("Ack me.") && sent[0]!.includes("Please look."), "the comment goes with the message");
+    await popoverOf(page).waitFor({ state: "detached" });
+    await eventually("the sent comment's pin to go", async () => (await pinsOf(page).count()) === 0);
+    console.log("PASS acknowledged: a saved comment's popover open, unchanged, when its comment is sent closes as the send is acknowledged");
+
+    await clickWord(page, partOf(page, "A longer paragraph"), "several");
+    await fieldFocused(page);
+    await fieldOf(page).fill("Still typing");
+    await message.focus();
+    await message.fill("Second message.");
+    await page.keyboard.press("Enter");
+    await fieldFocused(page);
+    await frames(page);
+    assert.equal(sent.length, 1, "nothing goes while a comment is being written");
+    assert.equal(await fieldOf(page).inputValue(), "Still typing", "the popover stays with its text");
+    await page.keyboard.press("Control+Enter");
+    await popoverOf(page).waitFor({ state: "detached" });
+    await eventually("its pin", async () => (await pinsOf(page).count()) === 1);
+    console.log("PASS acknowledged: with text typed in a popover, a send stays and gives the field the focus; saving makes its pin");
+
+    // a saved comment being edited, with a change typed: the send is held back the same way (the Send guard), so its
+    // comment is never acknowledged under the edit; the popover keeps the change, and saving it replaces the comment
+    const [saved] = await storedOf(page);
+    await pinsOf(page).first().click();
+    await besidePinOf(page).waitFor();
+    await fieldFocused(page);
+    await fieldOf(page).fill("Still typing, changed");
+    await message.focus();
+    await message.fill("Third message.");
+    await page.keyboard.press("Enter");
+    await fieldFocused(page);
+    await frames(page);
+    assert.equal(sent.length, 1, "nothing goes while a saved comment's edit is typed: the send is held back, not acknowledged under it");
+    assert.equal(await fieldOf(page).inputValue(), "Still typing, changed", "the edit stays with its text");
+    assert.deepEqual((await storedOf(page)).map((entry) => entry.comment), ["Still typing"], "the comment is still stored as it was");
+    await page.keyboard.press("Control+Enter");
+    await popoverOf(page).waitFor({ state: "detached" });
+    await eventually("its pin again", async () => (await pinsOf(page).count()) === 1);
+    const edited = await storedOf(page);
+    assert.deepEqual(edited.map((entry) => entry.comment), ["Still typing, changed"]);
+    assert.notEqual(edited[0]!.id, saved!.id, "saved as a new comment (a new id)");
+    assert.equal(await message.inputValue(), "Third message.", "the message waits in the box");
+    console.log("PASS acknowledged: editing a saved comment holds a send back too; the popover keeps the typed change, and saving it makes a new comment with its pin");
+    assert.deepEqual(errors, []);
+    await close();
+  },
+
+  async phone(open) {
+    const { page, errors, close } = await open(PHONE);
+    const intro = partOf(page, INTRO);
+    await tapWord(page, intro, "Intro");
+    await dialogOf(page).waitFor();
+    assert.equal(await besidePinOf(page).count(), 0, "on a phone the popover is the sheet");
+    const sheet = await dialogOf(page).evaluate((node) => ({ bottom: node.getBoundingClientRect().bottom, height: window.innerHeight }));
+    assert.ok(Math.abs(sheet.bottom - sheet.height) <= 2, `the sheet sits at the bottom of the viewport (${sheet.bottom} of ${sheet.height})`);
+    await fieldFocused(page);
+    await fieldOf(page).fill("Phone note");
+    await dialogOf(page).getByRole("button", { name: "Save comment", exact: true }).tap();
+    await dialogOf(page).waitFor({ state: "detached" });
+    await eventually("its pin", async () => (await pinsOf(page).count()) === 1);
+    console.log("PASS phone: a tap on a block opens the sheet at the bottom of the viewport; saved, its pin");
+
+    // a tap on the pin opens the sheet with the comment in its field, but raises no keyboard: the field is not focused
+    // (the sheet is), until a tap into it starts editing. The sheet quotes, keeps ✕, and has Delete; the text stays up
+    await pinsOf(page).first().tap();
+    await dialogOf(page).waitFor();
+    await eventually("the sheet to hold the focus", () => focusedMatches(page, ".modal.comment-popover"));
+    await frames(page);
+    assert.ok(await focusedMatches(page, ".modal.comment-popover"), "the sheet, not its field, keeps the focus");
+    assert.equal(await fieldOf(page).inputValue(), "Phone note", "the field holds the comment");
+    assert.equal(await dialogOf(page).locator(".comment-popover-quote").count(), 1, "the sheet quotes what it is on");
+    assert.equal(await closeOf(page).count(), 1, "the sheet keeps ✕");
+    assert.ok(await deleteOf(page).isVisible(), "Delete is in view");
+    const bin = await deleteOf(page).boundingBox();
+    assert.ok(bin !== null && bin.width >= 40 && bin.height >= 40, `Delete is a full touch target (${JSON.stringify(bin)})`);
+    await assertUp(page, INTRO, "a pin tapped open on a phone");
+    await fieldOf(page).tap();
+    await fieldFocused(page);
+    await closeOf(page).tap();
+    await dialogOf(page).waitFor({ state: "detached" });
+    console.log("PASS phone: a tap on a pin opens the sheet with the comment in its field, unfocused (no keyboard), quoting it, with ✕ and Delete; a tap into the field focuses it");
+
+    // an untouched sheet closes on a tap on its scrim, and the tap's click does not open another on the block under it
+    await tapWord(page, partOf(page, "A longer paragraph"), "several");
+    await dialogOf(page).waitFor();
+    await fieldFocused(page);
+    const overBlock = await page.evaluate(() => {
+      const sheetTop = document.querySelector(".modal.comment-popover")!.getBoundingClientRect().top;
+      const view = document.querySelector(".chat-view")!.getBoundingClientRect();
+      for (const part of document.querySelectorAll(".chat-view p.is-commentable")) {
+        const box = part.getBoundingClientRect();
+        const y = box.top + Math.min(box.height, 20) / 2;
+        if (box.height > 0 && y > view.top + 8 && y < sheetTop - 8) return { x: box.left + Math.min(box.width, 60) / 2, y };
+      }
+      return null;
+    });
+    assert.ok(overBlock !== null, "a paragraph lies under the scrim, above the sheet");
+    assert.ok(await page.evaluate(({ x, y }) => document.elementFromPoint(x, y)?.matches(".modal-scrim") ?? false, overBlock), "the tap lands on the scrim");
+    await page.touchscreen.tap(overBlock.x, overBlock.y);
+    await eventually("the sheet to close", async () => (await dialogOf(page).count()) === 0);
+    await frames(page, 10);
+    assert.equal(await popoverOf(page).count(), 0, "the scrim's tap opens no sheet on the block under it");
+    assert.equal(await pendingPinOf(page).count(), 0);
+    console.log("PASS phone: a tap on the scrim closes an untouched sheet and opens none on the block under it");
+
+    // a touch selection (a long press and its handles) opens nothing, and there is no Comment button for it: a tap on a
+    // block is the way to comment on a phone
+    await select(partOf(page, "Checksum"), "Checksum", { firstLine: true });
+    await frames(page, 10);
+    assert.equal(await popoverOf(page).count(), 0, "a touch selection opens nothing");
+    await assertNoButton(page, "a touch selection");
+    await page.evaluate(() => window.getSelection()?.removeAllRanges());
+    console.log("PASS phone: a touch selection opens nothing, and no Comment button shows");
+
+    // a tap at the end of a first line that reaches the column's right edge: its pin is kept inside the view, hit area and all
+    const lineEnd = await partOf(page, "Checksum").evaluate((node) => {
+      node.scrollIntoView({ block: "center" });
+      const range = document.createRange();
+      range.selectNodeContents(node);
+      const first = [...range.getClientRects()].find((rect) => rect.width > 0)!;
+      return { x: first.right - 3, y: first.top + first.height / 2 };
+    });
+    await page.touchscreen.tap(lineEnd.x, lineEnd.y);
+    await dialogOf(page).waitFor();
+    await fieldOf(page).fill("Edge note");
+    await dialogOf(page).getByRole("button", { name: "Save comment", exact: true }).tap();
+    await dialogOf(page).waitFor({ state: "detached" });
+    await eventually("both pins", async () => (await pinsOf(page).count()) === 2);
+    const edge = await page.evaluate(() => {
+      const view = document.querySelector<HTMLElement>(".chat-view")!;
+      const pins = [...document.querySelectorAll<HTMLElement>(".chat-view .comment-pin:not(.is-pending)")];
+      const right = view.getBoundingClientRect().left + view.clientLeft + view.clientWidth;
+      const hits = pins.map((pin) => {
+        const after = getComputedStyle(pin, "::before");
+        return { width: parseFloat(after.width), height: parseFloat(after.height) };
+      });
+      return { right, rights: pins.map((pin) => pin.getBoundingClientRect().right), hits, scrollWidth: view.scrollWidth, clientWidth: view.clientWidth };
+    });
+    const clamped = Math.max(...edge.rights);
+    assert.ok(clamped <= edge.right && clamped >= edge.right - 40, `a pin is clamped at the right edge (${clamped} of ${edge.right})`);
+    assert.ok(edge.hits.every((hit) => hit.width >= 44 && hit.height >= 44), `each pin's hit area is at least 44 × 44 (${JSON.stringify(edge.hits)})`);
+    assert.equal(edge.scrollWidth, edge.clientWidth, "no pin or hit area pans the chat sideways");
+    console.log("PASS phone: a pin at the right edge stays inside the view with its 44 × 44 hit area, and the chat does not pan sideways");
+
+    // with the message box focused, a tap on a block only puts the keyboard away
+    await messageOf(page).tap();
+    await eventually("the message box to have the focus", () => focusedMatches(page, ".composer-text"));
+    await tapWord(page, partOf(page, "A longer paragraph"), "several");
+    await frames(page, 10);
+    assert.equal(await popoverOf(page).count(), 0, "a tap with the composer focused opens nothing");
+    console.log("PASS phone: with the composer focused, a tap on a block opens nothing");
+    assert.deepEqual(errors, []);
+    await close();
+  },
+
+  async setting(open) {
+    const { page, context, url, errors, sent, close } = await open(DESKTOP);
+    await commentBlock(page, partOf(page, INTRO), "Intro", "Setting one.");
+    // the store as it holds the intro's comment alone: what another tab writes back below
+    const written = await page.evaluate(() => {
+      const key = Object.keys(localStorage).find((name) => name.startsWith("herdr-web-ui:block-comments:"))!;
+      return { key, value: localStorage.getItem(key)! };
+    });
+    await commentBlock(page, partOf(page, "A longer paragraph"), "several", "Setting two.");
+    // a new comment being written when comments are turned off: it goes too, unsaved
+    await clickWord(page, partOf(page, "Step 1 of the rollout"), "rollout");
+    await fieldFocused(page);
+    await fieldOf(page).fill("Unsaved thought");
+    await page.keyboard.press("ControlOrMeta+Shift+Comma");
+    await openSettingsPage(page, "Chat");
+    const toggle = page.locator(".settings-dialog").getByRole("switch", { name: "Comments", exact: true });
+    // a press in a dialog over the chat is that dialog's own: the popover with text typed beneath it neither takes the
+    // focus back into its field nor holds the press's default back (a select would not open, a drag select nothing)
+    await page.evaluate(() => {
+      (window as unknown as { pressPrevented: boolean[] }).pressPrevented = [];
+      document.addEventListener("mousedown", (event) => {
+        setTimeout(() => (window as unknown as { pressPrevented: boolean[] }).pressPrevented.push(event.defaultPrevented));
+      });
+    });
+    await toggle.focus();
+    await page.locator(".settings-dialog h2, .settings-dialog h3").first().click();
+    await frames(page, 2);
+    assert.deepEqual(await page.evaluate(() => (window as unknown as { pressPrevented: boolean[] }).pressPrevented), [false], "a press in Settings keeps its default with a comment typed beneath");
+    assert.equal(await focusedMatches(page, ".comment-popover textarea"), false, "the focus does not go back to the comment beneath Settings");
+    await toggle.click();
+    const confirm = page.getByRole("alertdialog");
+    await confirm.waitFor();
+    assert.equal(await confirm.getByRole("heading").first().innerText(), "Delete 2 comments?", "the question names how many");
+    await confirm.getByRole("button", { name: "Cancel", exact: true }).click();
+    await confirm.waitFor({ state: "detached" });
+    assert.equal(await toggle.getAttribute("aria-checked"), "true", "Cancel keeps comments on");
+    assert.equal((await storedOf(page)).length, 2, "and the comments");
+    assert.equal(await fieldOf(page).inputValue(), "Unsaved thought", "and the popover being written in");
+    await toggle.click();
+    await confirm.waitFor();
+    await confirm.getByRole("button", { name: "Turn off and delete", exact: true }).click();
+    await confirm.waitFor({ state: "detached" });
+    assert.equal(await toggle.getAttribute("aria-checked"), "false");
+    await eventually("the focus back on the Comments switch", () => toggle.evaluate((node) => node === document.activeElement));
+    await page.keyboard.press("Escape");
+    await page.locator(".settings-dialog").waitFor({ state: "detached" });
+    await eventually("no pin", async () => (await page.locator(".comment-pin").count()) === 0);
+    assert.equal(await popoverOf(page).count(), 0, "the popover being written in is gone");
+    assert.equal(await page.locator(".chat-view[data-comments]").count(), 0, "the chat is no comment surface any more");
+    assert.equal(await barOf(page).count(), 0, "no comments bar");
+    assert.deepEqual(await page.evaluate(() => Object.keys(localStorage).filter((key) => key.startsWith("herdr-web-ui:block-comments:"))), [], "no comment is stored, the unsaved one not either");
+    await select(partOf(page, INTRO), "paragraph", { to: "state" });
+    await frames(page);
+    assert.equal(await page.locator(".comment-selection").count(), 0, "a selection has no Comment button");
+    await page.evaluate(() => window.getSelection()?.removeAllRanges());
+    await dragSelect(page, partOf(page, INTRO), "paragraph", "state");
+    await frames(page, 10);
+    assert.equal(await popoverOf(page).count(), 0, "a mouse's drag opens nothing");
+    await clickWord(page, partOf(page, "A longer paragraph"), "several");
+    await frames(page);
+    assert.equal(await popoverOf(page).count(), 0, "a click on a block opens nothing");
+    console.log("PASS setting: turning comments off asks about the 2 comments; Cancel keeps them and the popover being written; confirmed, no popover, pin, Comment button, bar or stored comment is left, the typed one unsaved");
+
+    await page.keyboard.press("ControlOrMeta+Shift+Comma");
+    await openSettingsPage(page, "Chat");
+    await toggle.click();
+    assert.equal(await toggle.getAttribute("aria-checked"), "true");
+    await toggle.click();
+    await frames(page);
+    assert.equal(await page.getByRole("alertdialog").count(), 0, "with no comments nothing is asked");
+    assert.equal(await toggle.getAttribute("aria-checked"), "false");
+    console.log("PASS setting: with no comment stored, turning comments off asks nothing");
+
+    // no comment stored, but one being written with text typed: turning comments off would lose it, so it asks about it
+    await toggle.click();
+    assert.equal(await toggle.getAttribute("aria-checked"), "true");
+    await page.keyboard.press("Escape");
+    await page.locator(".settings-dialog").waitFor({ state: "detached" });
+    await clickWord(page, partOf(page, INTRO), "Intro");
+    await fieldFocused(page);
+    await fieldOf(page).fill("Typed only");
+    await page.keyboard.press("ControlOrMeta+Shift+Comma");
+    await openSettingsPage(page, "Chat");
+    await toggle.click();
+    await confirm.waitFor();
+    assert.equal(await confirm.getByRole("heading").first().innerText(), "Delete 1 comment?", "the comment being written is the one asked about");
+    await confirm.getByRole("button", { name: "Cancel", exact: true }).click();
+    await confirm.waitFor({ state: "detached" });
+    assert.equal(await toggle.getAttribute("aria-checked"), "true", "Cancel keeps comments on");
+    assert.equal(await fieldOf(page).inputValue(), "Typed only", "and the text typed");
+    await toggle.click();
+    await confirm.waitFor();
+    await confirm.getByRole("button", { name: "Turn off and delete", exact: true }).click();
+    await confirm.waitFor({ state: "detached" });
+    assert.equal(await toggle.getAttribute("aria-checked"), "false");
+    await eventually("the focus back on the Comments switch", () => toggle.evaluate((node) => node === document.activeElement));
+    await page.keyboard.press("Escape");
+    await page.locator(".settings-dialog").waitFor({ state: "detached" });
+    assert.equal(await popoverOf(page).count(), 0, "the popover being written in is gone");
+    assert.deepEqual(await storedOf(page), [], "nothing is stored");
+    console.log("PASS setting: with only a comment being written, turning comments off asks about 1 comment; Cancel keeps it, confirmed it goes and the focus is back on the switch");
+
+    // comments off here, and another tab that still has them on writes one: it stays stored, untouched, but this tab
+    // shows no highlight, pin or bar for it, and a message sent here carries no quote
+    const other = await context.newPage();
+    await other.goto(url);
+    await other.evaluate(({ key, value }) => localStorage.setItem(key, value), written);
+    await other.close();
+    await eventually("the other tab's comment to be stored", async () => (await storedOf(page)).length === 1);
+    await frames(page, 10);
+    assert.equal(await highlighted(page), 0, "its text is not highlighted");
+    assert.equal(await page.locator(".chat-view .is-commented").count(), 0, "no part is marked commented");
+    assert.equal(await page.locator(".comment-pin").count(), 0, "no pin");
+    assert.equal(await barOf(page).count(), 0, "no comments bar");
+    const before = sent.length;
+    await messageOf(page).fill("Off message.");
+    await page.keyboard.press("Enter");
+    await eventually("the message to be sent", async () => sent.length === before + 1, 5000);
+    assert.equal(sent.at(-1), "Off message.", "the message goes alone, without the stored comment or its quote");
+    assert.deepEqual((await storedOf(page)).map((entry) => entry.comment), ["Setting one."], "the other tab's comment stays stored, untouched");
+    console.log("PASS setting: with comments off, a comment another tab stores shows no highlight, pin or bar, and a sent message carries no quote; it stays stored");
+    assert.deepEqual(errors, []);
+    await close();
+  },
+};
+
+const wanted = process.env.BLOCK_COMMENTS_CASE?.split(",").map((name) => name.trim()).filter((name) => name !== "") ?? Object.keys(cases);
+const unknown = wanted.filter((name) => !(name in cases));
+if (unknown.length > 0) throw new Error(`unknown BLOCK_COMMENTS_CASE: ${unknown.join(", ")} (known: ${Object.keys(cases).join(", ")})`);
+
+let workspace: string | undefined;
+let server: ReturnType<typeof createServer> | undefined;
+let browser: Browser | undefined;
+const failed: string[] = [];
 
 try {
   const created = await workspaceCreate({ cwd: root, label: "herdr-web-ui-test-block-comments" });
@@ -668,1114 +1387,44 @@ try {
   }
   await herdrRpc("pane.report_agent", { pane_id: pane, source: "manual", agent: "codex", state: "idle", agent_session_path: transcript });
   server = createServer({ port: 0, hostname: "127.0.0.1", token: "", stateDir: join(root, "state"), codexHome });
-  const origin = `http://127.0.0.1:${server.port}`;
-  const url = `${origin}/?pane=${encodeURIComponent(pane)}`;
-  const storeKey = `herdr-web-ui:block-comments:${pane}`;
-  browser = await chromium.launch({ executablePath: process.env.CHROME_PATH ?? "/opt/google/chrome/chrome", headless: true, args: ["--no-sandbox"] });
-  const errors: string[] = [];
-  /** Opens the pane's chat in a new context, with `comments` stored for it and `settings` set beforehand, and records every submitted text. `ready` is the paragraph that tells the reply is drawn. */
-  const open = async (options: Parameters<NonNullable<typeof browser>["newContext"]>[0], comments?: unknown, settings: Record<string, unknown> = {}, ready = INTRO): Promise<{ page: Page; sent: string[] }> => {
-    // evidence for a PR is drawn at twice the resolution; the layout is the same
-    const context = await browser!.newContext({ deviceScaleFactor: evidence ? 2 : 1, ...options });
+  const url = `http://127.0.0.1:${server.port}/?pane=${encodeURIComponent(pane)}`;
+  const launched = await chromium.launch({ executablePath: process.env.CHROME_PATH ?? "/opt/google/chrome/chrome", headless: true, args: ["--no-sandbox"] });
+  browser = launched;
+  /** A fresh context on the pane's chat, its reply drawn, with `seed`'s comments stored and settings set beforehand. */
+  const open: Open = async (options, seed = {}) => {
+    const context = await launched.newContext(options);
     await context.route("https://example.com/**", (route) => route.abort());
     const page = await context.newPage();
-    await page.addInitScript(({ id, stored, preset }) => {
-      localStorage.setItem("herdr-web-ui:settings", JSON.stringify({ language: "en", ...preset }));
+    await page.addInitScript(({ id, comments, settings }) => {
+      // seeded once: a reload keeps what the page has done since
+      if (localStorage.getItem("herdr-web-ui:settings") === null) localStorage.setItem("herdr-web-ui:settings", JSON.stringify({ language: "en", ...settings }));
       localStorage.setItem(`herdr-web-ui:view:${id}`, "chat");
-      if (stored !== undefined) localStorage.setItem(`herdr-web-ui:block-comments:${id}`, JSON.stringify(stored));
-    }, { id: pane, stored: comments, preset: settings });
+      const key = `herdr-web-ui:block-comments:${id}`;
+      if (comments.length > 0 && localStorage.getItem(key) === null) localStorage.setItem(key, JSON.stringify({ version: 1, comments }));
+    }, { id: pane, comments: seed.comments ?? [], settings: seed.settings ?? {} });
     page.setDefaultTimeout(10_000);
+    const errors: string[] = [];
     page.on("pageerror", (error) => errors.push(error.message));
     const sent: string[] = [];
     page.on("websocket", (socket) => socket.on("framesent", ({ payload }) => {
       try {
-        const frame = JSON.parse(String(payload));
-        if (frame.type === "submit") sent.push(frame.text);
+        const frame = JSON.parse(String(payload)) as { type?: string; text?: string };
+        if (frame.type === "submit" && typeof frame.text === "string") sent.push(frame.text);
       } catch { /* not JSON */ }
     }));
     await page.goto(url);
     await page.locator(".conn-live").waitFor();
-    await page.locator("p.is-commentable", { hasText: ready }).waitFor();
-    return { page, sent };
+    await partOf(page, INTRO).waitFor();
+    return { page, context, url, errors, sent, close: () => context.close() };
   };
-
-  // ── desktop ──
-  {
-    const { page, sent } = await open({ viewport: { width: 1280, height: 800 } });
-    const intro = page.locator("p.is-commentable", { hasText: "Intro paragraph about the state." });
-    const nested = page.locator(".markdown-list .markdown-list .markdown-item.is-commentable", { hasText: "check the logs" });
-    const long = page.locator("p.is-commentable", { hasText: "A longer paragraph" });
-    const code = page.locator(".markdown-block.is-commentable", { has: page.locator(".markdown-code") });
-    const popover = popoverOf(page);
-    const sheet = sheetOf(page);
-    const field = popover.getByRole("textbox", { name: "Comment" });
-    const message = page.getByRole("textbox", { name: "Message", exact: true });
-    assert.equal(await page.locator(".chat-turn-user .is-commentable").count(), 0, "a user message is not commentable");
-    // the controls row and the message's first line with no comment: they stay when the comments' bar comes, and when it goes
-    const messageFree = await messageLayout(page);
-
-    // a part has no button of its own and no hover: nothing of the old interface exists, and the pointer on a part lights nothing
-    assert.equal(await staleOf(page).count(), 0, "no + , gutter class, chosen part, tile, pill or send count exists");
-    await intro.hover();
-    await frames(page);
-    assert.equal(await intro.evaluate((node) => getComputedStyle(node).backgroundColor), "rgba(0, 0, 0, 0)", "a part under the pointer is not tinted");
-    assert.equal(await staleOf(page).count(), 0, "hovering a part shows no +");
-    assert.equal(await floatOf(page).count(), 0, "no Comment button without a selection");
-    console.log("PASS desktop: nothing of the old + , hover or gutter exists, and a hovered part shows nothing");
-
-    // a selection in the user's own message is not a comment; one in a reply is, once it ends, with a button above its end
-    await select(page, page.locator(".chat-turn-user .chat-bubble"), "Show me");
-    await frames(page, 4);
-    assert.equal(await floatOf(page).count(), 0, "a selection in the user's message offers no Comment button");
-    await select(page, long, "so its first line");
-    await floatOf(page).waitFor();
-    const above = await placementOf(page);
-    assert.ok(above.button.bottom <= above.line.top, `with a mouse the button is above the selection's last line (button bottom ${above.button.bottom}px, line top ${above.line.top}px)`);
-    assert.ok(insideView(above), `the button is inside the chat view: ${JSON.stringify(above)}`);
-    assert.equal(await floatOf(page).innerText(), "Comment");
-    if (evidence) await page.screenshot({ path: join(evidence, "block-comments-desktop-selection.png"), clip: { x: above.view.left, y: Math.max(0, above.line.top - 90), width: above.view.right - above.view.left, height: 200 } });
-    await page.evaluate(() => window.getSelection()!.removeAllRanges());
-    await floatOf(page).waitFor({ state: "detached" });
-    console.log("PASS desktop: a selection in a reply shows the Comment button above it, inside the view; one in a user message does not; a collapsed selection takes it away");
-
-    // a real drag, right to left over two lines: the button is at the release, above the line the pointer let go on
-    await page.setViewportSize({ width: 700, height: 800 });
-    const { release } = await drag(page, long, "runs across", "comment button sits.");
-    await floatOf(page).waitFor();
-    await frames(page);
-    const dragged = await page.evaluate((point) => {
-      const button = document.querySelector(".chat-view .comment-selection")!.getBoundingClientRect();
-      const lines = [...window.getSelection()!.getRangeAt(0).getClientRects()].filter((rect) => rect.width > 0 && rect.height > 0);
-      const under = lines.filter((rect) => rect.top <= point.y && point.y <= rect.bottom).sort((a, b) => a.height - b.height)[0]!;
-      return { centre: button.left + button.width / 2, bottom: button.bottom, underTop: under.top, lastTop: lines.at(-1)!.top };
-    }, release);
-    assert.ok(Math.abs(dragged.centre - release.x) <= 24, `the button is centred on the release (button centre ${dragged.centre}px, release ${release.x}px)`);
-    assert.ok(dragged.bottom <= dragged.underTop, `the button is above the line the release is on (button bottom ${dragged.bottom}px, line top ${dragged.underTop}px)`);
-    assert.ok(dragged.underTop < dragged.lastTop, `that line is not the selection's last line (${dragged.underTop}px, last ${dragged.lastTop}px): the button follows the pointer, not the selection's end`);
-    // the same selection does not move the button
-    const settled = await floatOf(page).boundingBox();
-    await frames(page, 6);
-    assert.deepEqual(await floatOf(page).boundingBox(), settled, "the button does not jump while the selection is unchanged");
-    // 700px is a narrow window (768px or less): the editor is the modal with the quote, not the popover, and no selection is shown pending
-    await floatOf(page).click();
-    await sheet.waitFor();
-    assert.equal(await popover.count(), 0, "a narrow window gets the modal, not the popover");
-    assert.equal(await highlighted(page, "block-comment-pending"), 0, "the modal quotes the selection: nothing is highlighted as pending");
-    assert.match(await sheet.locator(".comment-editor-plain").innerText(), /runs across[\s\S]*comment button sits\./);
-    await sheet.getByRole("button", { name: "Cancel", exact: true }).click();
-    await sheet.waitFor({ state: "hidden" });
-    await page.evaluate(() => window.getSelection()!.removeAllRanges());
-    await floatOf(page).waitFor({ state: "detached" });
-    await page.setViewportSize({ width: 1280, height: 800 });
-    console.log("PASS desktop: a mouse drag from right to left over two lines puts the Comment button at the release, above its line, and it stays put");
-
-    // a real drag forward over two list items (one comment over both): the button follows the pointer, to the line it let go on in the second
-    const list = page.locator(".markdown-list").first();
-    const across = await drag(page, list, "Run the migration", "Restart the server", { forward: true });
-    await floatOf(page).waitFor();
-    await frames(page);
-    const over = await page.evaluate((point) => {
-      const button = document.querySelector(".chat-view .comment-selection")!.getBoundingClientRect();
-      const lines = [...window.getSelection()!.getRangeAt(0).getClientRects()].filter((rect) => rect.width > 0 && rect.height > 0);
-      const under = lines.filter((rect) => rect.top <= point.y && point.y <= rect.bottom).sort((a, b) => a.height - b.height)[0]!;
-      return { centre: button.left + button.width / 2, bottom: button.bottom, underTop: under.top, firstTop: lines[0]!.top };
-    }, across.release);
-    assert.ok(Math.abs(over.centre - across.release.x) <= 24, `the button is centred on the release (button centre ${over.centre}px, release ${across.release.x}px)`);
-    assert.ok(over.underTop > over.firstTop, `the release is on a later line than the selection's first (${over.underTop}px, first ${over.firstTop}px)`);
-    assert.ok(over.bottom <= over.underTop && over.underTop - over.bottom <= 24, `the button is just above the line the release is on, not the first item's (button bottom ${over.bottom}px, line top ${over.underTop}px)`);
-    await page.evaluate(() => window.getSelection()!.removeAllRanges());
-    await floatOf(page).waitFor({ state: "detached" });
-    console.log("PASS desktop: a mouse drag over two list items puts the Comment button on the line under the release, in the second item");
-
-    // the popover: with a mouse in a wide window a comment is written in a small card where the Comment button was, with no
-    // quote; the selected text stays visible as the pending highlight
-    await select(page, intro, "the state");
-    await floatOf(page).waitFor();
-    const buttonBox = (await floatOf(page).boundingBox())!;
-    await floatOf(page).click();
-    await popover.waitFor();
-    await floatOf(page).waitFor({ state: "detached" });
-    assert.equal(await sheet.count(), 0, "a mouse in a wide window gets the popover, not the modal");
-    assert.equal(await popover.getAttribute("role"), "dialog");
-    assert.equal(await popover.getAttribute("aria-label"), "Comment");
-    assert.equal(await popover.getAttribute("aria-modal"), null, "the popover is not modal");
-    assert.equal(await page.locator(".modal-scrim").count(), 0, "no scrim: the chat stays usable");
-    assert.equal(await popover.locator(".comment-editor-plain, .comment-editor-block, .modal-title").count(), 0, "the popover quotes nothing: the selection is the highlight");
-    assert.equal(await popover.getByRole("button", { name: "Delete", exact: true }).count(), 0, "a new comment has nothing to delete");
-    await popover.getByRole("button", { name: "Cancel", exact: true }).waitFor();
-    await popover.getByRole("button", { name: "Save", exact: true }).waitFor();
-    await frames(page);
-    const card = await popover.evaluate((node) => {
-      const view = document.querySelector(".chat-view")!;
-      const area = view.getBoundingClientRect();
-      const box = node.getBoundingClientRect();
-      return {
-        left: box.left, top: box.top, right: box.right, bottom: box.bottom, width: box.width,
-        absolute: getComputedStyle(node).position === "absolute",
-        inView: node.parentElement === view,
-        view: { left: area.left + view.clientLeft, right: area.left + view.clientLeft + view.clientWidth, top: area.top + view.clientTop, bottom: area.top + view.clientTop + view.clientHeight },
-        space2: parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--space-2")),
-      };
-    });
-    assert.ok(card.absolute && card.inView, "the popover is absolute inside the scrolling chat view, so it scrolls with the text");
-    assert.ok(Math.abs(card.left - buttonBox.x) <= 2 && Math.abs(card.top - buttonBox.y) <= 2, `the popover's top-left is where the button's was (popover ${card.left},${card.top}px, button ${buttonBox.x},${buttonBox.y}px)`);
-    assert.ok(Math.abs(card.width - Math.min(360, card.view.right - card.view.left - 2 * card.space2)) <= 1, `the popover is min(360px, the view's width minus 2 × --space-2) wide (${card.width}px)`);
-    assert.ok(card.left >= card.view.left + card.space2 - 1 && card.right <= card.view.right - card.space2 + 1 && card.top >= card.view.top - 1 && card.bottom <= card.view.bottom + 1, `the popover lies inside the view: ${JSON.stringify(card)}`);
-    // the selection shows as a highlight while the field has the browser's own selection
-    assert.equal(await highlighted(page, "block-comment-pending"), 1, "the pending highlight holds the selected text while the popover is open");
-    assert.deepEqual((await rangesOf(page, "block-comment-pending")).texts, ["the state"]);
-    assert.equal(await highlighted(page), 1, "the base highlight (tint and underline) shows it too");
-    await eventually("the field to have the focus, the caret at its end", () => field.evaluate((node) => node === document.activeElement && (node as HTMLTextAreaElement).selectionStart === (node as HTMLTextAreaElement).value.length));
-    assert.equal(await field.getAttribute("placeholder"), "Write a comment…");
-    // the field starts one line high, grows with what is typed, and scrolls past its cap; the popover grows away from its anchor
-    const lineHeight = await field.evaluate((node) => parseFloat(getComputedStyle(node).lineHeight));
-    const empty = (await field.boundingBox())!.height;
-    const cardTop = (await popover.boundingBox())!.y;
-    assert.ok(empty < 2 * lineHeight, `the empty field is one line high (${empty}px)`);
-    await field.fill("one\ntwo\nthree");
-    const three = (await field.boundingBox())!.height;
-    assert.ok(three >= empty + 2 * lineHeight - 1, `three lines grow the field (${empty} → ${three}px)`);
-    await frames(page, 2);
-    assert.ok(Math.abs((await popover.boundingBox())!.y - cardTop) <= 1, "the popover grows away from its anchor: its top stays where it was");
-    await field.fill(Array.from({ length: 20 }, (_, n) => `line ${n}`).join("\n"));
-    const capped = await field.evaluate((node) => ({ height: node.getBoundingClientRect().height, scrolls: node.scrollHeight > node.clientHeight }));
-    assert.ok(capped.height <= 4 * lineHeight + 20 && capped.scrolls, `twenty lines stop at four and scroll (${capped.height}px)`);
-    await field.fill("Second thought");
-    assert.ok((await field.boundingBox())!.height < 2 * lineHeight, "the field shrinks back with its text");
-    if (evidence) {
-      const box = (await popover.boundingBox())!;
-      await page.screenshot({ path: join(evidence, "block-comments-popover.png"), clip: { x: Math.max(0, box.x - 40), y: Math.max(0, box.y - 60), width: Math.min(box.width + 80, 1280), height: box.height + 120 } });
+  for (const name of wanted) {
+    try {
+      await cases[name]!(open);
+      console.log(`PASS case ${name}`);
+    } catch (error) {
+      failed.push(name);
+      console.log(`FAIL case ${name}: ${error instanceof Error ? error.stack ?? error.message : String(error)}`);
     }
-    console.log("PASS desktop: a new comment opens a popover where the button was, with no quote, the selection highlighted as pending, its field growing with its text up to a cap");
-    // Cmd/Ctrl+Enter saves; the selection and the pending highlight go, and the focus goes to the composer
-    await field.press("Control+Enter");
-    await popover.waitFor({ state: "hidden" });
-    await floatOf(page).waitFor({ state: "detached" });
-    assert.equal(await page.evaluate(() => window.getSelection()!.isCollapsed), true, "saving a comment lets the selection go");
-    assert.equal(await highlighted(page, "block-comment-pending"), 0, "the pending highlight goes with the popover");
-    await eventually("the focus to go to the composer", () => page.evaluate(() => document.activeElement?.classList.contains("composer-text") === true));
-
-    // the comments' bar comes below nothing (no file) above the message, and the controls and the first line keep their places
-    await barOf(page).waitFor();
-    await assertMessageLayout(page, messageFree, "with the comments' bar there");
-
-    // a saved comment: the text highlighted, a speech bubble under its part with the comment only, the bar counting it
-    await page.locator("p.is-commented", { hasText: "Intro paragraph" }).waitFor();
-    assert.equal(await notesOf(page).count(), 1);
-    assert.equal(await staleOf(page).count(), 0, "no excerpt is drawn in the bubble, and nothing of the old interface exists");
-    assert.deepEqual(await noteTexts(page), ["Second thought"]);
-    assert.deepEqual(await noteNames(page), ["Comment on “the state”: Second thought"], "the excerpt is in the bubble's name");
-    assert.equal(await highlightMatchesNotes(page, "one comment"), 1);
-    assert.deepEqual((await rangesOf(page, "block-comment")).texts, ["the state"]);
-    assert.equal(await labelOf(page), "1 comment on the reply");
-    await assertTail(notesOf(page).first(), intro, { text: "the state" }, "the first comment");
-    await assertNoRail(page, "one comment");
-    console.log("PASS desktop: saving makes a speech bubble with the comment, the text is highlighted, the bar counts it, nothing is drawn beside the text");
-
-    // a second selection in the same paragraph is its own comment: two bubbles, in reading order whichever was written first
-    assert.equal(await comment(page, intro, "Intro paragraph", "First thought"), "Intro paragraph");
-    assert.equal(await page.locator("p.is-commented").count(), 1, "still one commented paragraph");
-    assert.deepEqual(await noteTexts(page), ["First thought", "Second thought"], "the bubbles follow the text's order, not the order they were written in");
-    assert.deepEqual(await noteNames(page), ["Comment on “Intro paragraph”: First thought", "Comment on “the state”: Second thought"]);
-    assert.equal(await page.locator("p.is-commented + .block-comment-notes .block-comment-row").count(), 2, "both bubbles are in the paragraph's one group");
-    assert.equal(await highlightMatchesNotes(page, "two comments in one paragraph"), 2);
-    assert.equal(await labelOf(page), "2 comments on the reply");
-    // each tail points at where its own text ends, though the first ends early in the line: the bubble moved right under it
-    await assertTail(notesOf(page).nth(0), intro, { text: "Intro paragraph" }, "the first of two");
-    await assertTail(notesOf(page).nth(1), intro, { text: "the state" }, "the second of two");
-    await assertBubbleGroup(intro, "two bubbles under a paragraph");
-    await assertBubbleLook(page, notesOf(page).first(), "the first bubble");
-    console.log("PASS desktop: two selections in one paragraph are two comments and two bubbles, in reading order, each tail at its own highlight's end");
-
-    // hovering a bubble brings its comment's text up (the active highlight), and leaving takes it down
-    await notesOf(page).first().hover();
-    await eventually("the active highlight to hold the hovered comment's text", async () => (await highlighted(page, "block-comment-active")) === 1);
-    assert.deepEqual((await rangesOf(page, "block-comment-active")).texts, ["Intro paragraph"]);
-    await page.mouse.move(1, 1);
-    await eventually("the active highlight to empty", async () => (await highlighted(page, "block-comment-active")) === 0);
-    console.log("PASS desktop: a hovered bubble strengthens its comment's highlight, and only its own");
-
-    // Escape gives a new comment up: nothing is stored, the popover and the pending highlight go, the focus goes to the composer
-    await select(page, long, "so its first line");
-    await floatOf(page).waitFor();
-    await floatOf(page).click();
-    await popover.waitFor();
-    await field.fill("not this");
-    assert.equal(await highlighted(page, "block-comment-pending"), 1);
-    // Escape pressed with the focus elsewhere (the message box) is not the popover's
-    await message.focus();
-    await page.keyboard.press("Escape");
-    await frames(page, 3);
-    assert.equal(await popover.count(), 1, "Escape outside the popover leaves it open");
-    assert.equal(await field.inputValue(), "not this");
-    await field.focus();
-    await page.keyboard.press("Escape");
-    await popover.waitFor({ state: "hidden" });
-    assert.equal((await storedOf(page)).length, 2, "a comment given up is not stored");
-    assert.equal(await highlighted(page, "block-comment-pending"), 0, "the pending highlight goes with the popover");
-    await eventually("the focus to go to the composer", () => page.evaluate(() => document.activeElement?.classList.contains("composer-text") === true));
-    console.log("PASS desktop: Escape from inside the popover gives the comment up; from outside it does not");
-
-    // the same on a nested list item (its bubble sits in the item's own box), a code block and a longer paragraph
-    assert.equal(await comment(page, nested, "check the logs", "Also the exit code"), "check the logs");
-    assert.equal(await comment(page, code, "const a = 1", "Use let"), "const a = 1");
-    assert.equal(await comment(page, long, "longer paragraph", "Temporary"), "longer paragraph");
-    assert.equal(await page.locator(".is-commented").count(), 4);
-    assert.equal(await notesOf(page).count(), 5);
-    assert.deepEqual(await noteTexts(page), ["First thought", "Second thought", "Also the exit code", "Temporary", "Use let"]);
-    assert.equal(await highlightMatchesNotes(page, "five comments"), 5);
-    assert.equal(await staleOf(page).count(), 0);
-    await assertNoRail(page, "five comments");
-
-    // a bubble sits right under its part, inside its width, each tail at its highlight's end, whatever the kind of part
-    await assertBubbleGroup(intro, "paragraph");
-    await assertBubbleGroup(page.locator(".markdown-block.is-commented", { has: page.locator(".markdown-code") }), "code block");
-    await assertTail(notesOf(page).nth(2), nested, { text: "check the logs" }, "a list item at depth 2");
-    await assertTail(notesOf(page).nth(3), long, { text: "longer paragraph" }, "a long paragraph");
-    await assertTail(notesOf(page).nth(4), code, { text: "const a = 1" }, "a code block");
-    for (const [index, name] of ["Comment on “Intro paragraph”: First thought", "Comment on “the state”: Second thought", "Comment on “check the logs”: Also the exit code", "Comment on “longer paragraph”: Temporary", "Comment on “const a = 1”: Use let"].entries()) {
-      assert.equal(await notesOf(page).nth(index).getAttribute("aria-label"), name);
-    }
-    console.log("PASS desktop: bubbles sit right under a paragraph, a list item and a code block, inside their width, each tail at its text's end");
-    if (evidence) await page.screenshot({ path: join(evidence, "block-comments-desktop.png") });
-    if (evidence) {
-      // the composer as a whole: the context bar first in the box
-      const card = (await page.locator(".composer").boundingBox())!;
-      await page.screenshot({ path: join(evidence, "block-comments-desktop-composer.png"), clip: { x: card.x, y: Math.max(0, card.y - 8), width: card.width, height: card.height + 16 } });
-    }
-
-    // a click on a bubble edits its comment in the popover under it: no quote, Delete, the comment with the caret at its end
-    const firstBubble = notesOf(page).first();
-    await firstBubble.click();
-    await popover.waitFor();
-    assert.equal(await sheet.count(), 0, "a mouse in a wide window edits in the popover");
-    await eventually("the field to hold the comment with the caret at its end", () => field.evaluate((node) => node === document.activeElement && (node as HTMLTextAreaElement).value === "First thought" && (node as HTMLTextAreaElement).selectionStart === 13));
-    assert.equal(await popover.getByRole("button", { name: "Delete", exact: true }).count(), 1, "an existing comment can be deleted from its popover");
-    assert.equal(await popover.locator(".comment-editor-plain, .comment-editor-block").count(), 0, "no quote here either");
-    assert.equal(await highlighted(page, "block-comment-pending"), 0, "an edited comment has its own highlight: nothing is pending");
-    const under = { bubble: (await firstBubble.boundingBox())!, card: (await popover.boundingBox())! };
-    assert.ok(Math.abs(under.card.x - under.bubble.x) <= 2 && Math.abs(under.card.y - (under.bubble.y + under.bubble.height + 4)) <= 2, `the popover opens 4px under the bubble, left-aligned with it (bubble ${JSON.stringify(under.bubble)}, popover ${JSON.stringify(under.card)})`);
-    // pressing the bubble of an untouched popover closes it, and once more opens it
-    await firstBubble.click();
-    await popover.waitFor({ state: "hidden" });
-    await firstBubble.click();
-    await popover.waitFor();
-    await eventually("the field to hold the comment", async () => (await field.inputValue()) === "First thought");
-    await field.fill("First thought, briefly");
-    await popover.getByRole("button", { name: "Save", exact: true }).click();
-    await popover.waitFor({ state: "hidden" });
-    await eventually("the edited bubble", async () => (await noteTexts(page))[0] === "First thought, briefly");
-    assert.equal((await noteNames(page))[0], "Comment on “Intro paragraph”: First thought, briefly");
-    await eventually("the focus to go back to the bubble", () => firstBubble.evaluate((node) => node === document.activeElement));
-    assert.equal(await highlightMatchesNotes(page, "after an edit"), 5);
-    // Escape gives an edit up and the focus goes back to the bubble
-    await firstBubble.click();
-    await popover.waitFor();
-    await field.fill("not kept");
-    await page.keyboard.press("Escape");
-    await popover.waitFor({ state: "hidden" });
-    assert.equal((await noteTexts(page))[0], "First thought, briefly", "Escape gives the edit up");
-    await eventually("the focus to go back to the bubble", () => firstBubble.evaluate((node) => node === document.activeElement));
-    console.log("PASS desktop: a bubble opens the popover under it with Delete, a second press closes it, Save keeps the edit and Escape gives it up, the focus returns to the bubble");
-
-    // a press outside closes the popover while nothing is typed; with text typed it stays, and so does the text
-    const outside = page.locator(".chat-turn-user .chat-bubble");
-    await firstBubble.click();
-    await popover.waitFor();
-    await outside.click();
-    await popover.waitFor({ state: "hidden" });
-    await firstBubble.click();
-    await popover.waitFor();
-    await field.fill("kept text");
-    await outside.click();
-    await frames(page, 3);
-    assert.equal(await popover.count(), 1, "a press outside leaves a popover with text typed in it open");
-    assert.equal(await field.inputValue(), "kept text", "nothing typed is lost");
-    // a press on another bubble only puts the focus back in the field: the text stays and nothing else opens
-    await notesOf(page).last().click();
-    await frames(page, 3);
-    assert.equal(await popover.count(), 1, "another bubble does not replace a popover with text in it");
-    assert.equal(await field.inputValue(), "kept text");
-    await eventually("the focus to go back to the field", () => field.evaluate((node) => node === document.activeElement));
-    await popover.getByRole("button", { name: "Cancel", exact: true }).click();
-    await popover.waitFor({ state: "hidden" });
-    assert.equal((await noteTexts(page))[0], "First thought, briefly", "Cancel keeps the comment as it was");
-    console.log("PASS desktop: a press outside closes an untouched popover and leaves one with text typed in it, text and all");
-
-    // a narrow window (768px or less) opens the modal from a bubble too, with the quote; the popover is for a mouse in a wide window
-    await page.setViewportSize({ width: 700, height: 800 });
-    await firstBubble.click();
-    await sheet.waitFor();
-    assert.equal(await popover.count(), 0, "a narrow window gets the modal, not the popover");
-    assert.equal(await sheet.locator(".comment-editor-plain").innerText(), "Intro paragraph");
-    assert.equal(await sheet.getByRole("textbox", { name: "Comment" }).inputValue(), "First thought, briefly");
-    await sheet.getByRole("button", { name: "Cancel", exact: true }).click();
-    await sheet.waitFor({ state: "hidden" });
-    await page.setViewportSize({ width: 1280, height: 800 });
-    console.log("PASS desktop: in a window of 768px or less a bubble opens the modal with the quote");
-
-    // the context bar: the box's first row, a count of the comments, no tile, no pill, no badge on Send
-    const walk = walkOf(page);
-    const bar = barOf(page);
-    assert.equal(await walk.innerText(), "5 comments on the reply");
-    assert.equal(await labelOf(page), "5 comments on the reply");
-    assert.equal(await walk.getAttribute("title"), "5 comments on the reply\nGo to the next comment");
-    assert.equal(await page.locator(".composer-controls .composer-comments-chip").count(), 0, "the control row holds no comment chip");
-    assert.equal(await page.locator(".composer-attachments").count(), 0, "with no file there is no strip, and the comments are not in one");
-    assert.equal(await bar.evaluate((node) => node.classList.contains("is-going")), true, "with an agent the comments go with the next message");
-    const barBox = (await bar.boundingBox())!;
-    const surfaceBox = (await page.locator(".composer-surface").boundingBox())!;
-    const textBox = (await message.boundingBox())!;
-    assert.ok(barBox.y >= surfaceBox.y - 1 && barBox.y + barBox.height <= textBox.y + 1, `with no file the bar is the box's first row, above the message (bar ${barBox.y}–${barBox.y + barBox.height}px, message from ${textBox.y}px)`);
-    assertBarLayout(await barLayout(page), "desktop", { column: "--space-5", strip: false });
-    const sendButton = page.getByRole("button", { name: /^Send message/ });
-    assert.equal(await sendButton.getAttribute("title"), "Send message · Comments to send: 5");
-    // going: an accent icon; the text is the text colour (the bar has no rail)
-    const textColor = (): Promise<string> => walk.evaluate((node) => getComputedStyle(node).color);
-    const goingText = await textColor();
-    const goingIcon = await walk.locator("svg").evaluate((node) => getComputedStyle(node).color);
-    // a slash command is not sent with comments: the bar says "waiting" in words (and dims), and goes back once the command is gone
-    await message.fill("/help");
-    await eventually("the bar to wait", () => bar.evaluate((node) => node.classList.contains("is-waiting")));
-    assert.equal(await walk.innerText(), "5 comments waiting");
-    assert.equal(await labelOf(page), "5 comments waiting. Comments stay here: they are not sent with a command.");
-    assert.equal(await walk.getAttribute("title"), "5 comments waiting\nComments stay here: they are not sent with a command.\nGo to the next comment");
-    assert.notEqual(await textColor(), goingText, "waiting, the text is dimmer");
-    assert.notEqual(await walk.locator("svg").evaluate((node) => getComputedStyle(node).color), goingIcon, "waiting, the icon is not the accent");
-    await message.fill("");
-    await eventually("the bar to stop waiting", () => bar.evaluate((node) => !node.classList.contains("is-waiting")));
-    assert.equal(await labelOf(page), "5 comments on the reply");
-    assert.equal(await textColor(), goingText, "going again, the text colour is back");
-    console.log("PASS desktop: the context bar is a box in the content column, counts the comments, says waiting in words for a command, and no tile, pill or send count exists");
-
-    // with a file attached the bar is below its strip, not above it: the tiles first, then the box, then the message (a held upload keeps the tile)
-    await page.route("**/api/pane/image", () => { /* never answered: the tile stays uploading until it is removed */ });
-    await page.locator(".composer-surface input[type='file']").setInputFiles({ name: "shot.png", mimeType: "image/png", buffer: Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGNgYGD4DwABBAEAX+XDSwAAAABJRU5ErkJggg==", "base64") });
-    await page.locator(".composer-surface > .composer-attachments .composer-attachment").waitFor();
-    await frames(page);
-    assertBarLayout(await barLayout(page), "desktop with a file", { column: "--space-5", strip: true });
-    await page.getByRole("button", { name: "Remove shot.png", exact: true }).click();
-    await page.locator(".composer-surface > .composer-attachments").waitFor({ state: "detached" });
-    await page.unroute("**/api/pane/image");
-    await frames(page);
-    assertBarLayout(await barLayout(page), "desktop, the file gone", { column: "--space-5", strip: false });
-    console.log("PASS desktop: with a file the bar sits below the attachment strip, in the content column, and goes back to the card's top without it");
-
-    // the bar walks to the bubbles, one per tap, round again; the bubble is current and focused, its text has the current highlight, and the view shows both
-    await page.emulateMedia({ reducedMotion: "reduce" });
-    await page.setViewportSize({ width: 1280, height: 380 });
-    await page.locator(".chat-view").evaluate((node) => { node.scrollTop = 0; });
-    assert.deepEqual(await currentOf(page), { count: 0, index: -1, noteFocused: false, marked: 0, inView: false, bubbleInView: false }, "no bubble is current before the walk");
-    const stops = [0, 1, 2, 3, 4, 0];
-    for (const [tap, index] of stops.entries()) {
-      await walk.click();
-      await eventually(`tap ${tap + 1} to mark bubble ${index} current, focus it and show its text and itself`, async () => {
-        const now = await currentOf(page);
-        return now.count === 1 && now.index === index && now.noteFocused && now.marked === 1 && now.inView && now.bubbleInView;
-      });
-    }
-    // the current bubble: an accent border (its tail's too) and icon, the elevated fill kept, no tint
-    const currentLook = await page.locator(".block-comment-row.is-current").evaluate(async (node) => {
-      await Promise.all(node.getAnimations().map((animation) => animation.finished));
-      const style = getComputedStyle(node);
-      const probe = document.createElement("div");
-      document.body.append(probe);
-      const colour = (token: string): string => { probe.style.color = `var(${token})`; return getComputedStyle(probe).color; };
-      probe.style.backgroundColor = "var(--bg-elevated)";
-      const result = {
-        border: style.borderTopColor, accent: colour("--accent"), edge: colour("--border"),
-        background: style.backgroundColor, elevated: getComputedStyle(probe).backgroundColor,
-        icon: getComputedStyle(node.querySelector("svg")!).color,
-        tail: getComputedStyle(node, "::before").borderTopColor,
-      };
-      probe.remove();
-      return result;
-    });
-    assert.equal(currentLook.border, currentLook.accent, "the current bubble's border is --accent");
-    assert.notEqual(currentLook.border, currentLook.edge, "it is not the resting edge");
-    assert.equal(currentLook.tail, currentLook.accent, "its tail follows");
-    assert.equal(currentLook.icon, currentLook.accent, "its icon is --accent");
-    assert.equal(currentLook.background, currentLook.elevated, "it keeps the elevated fill: no tint");
-    // Escape on the focused note ends it (and the current highlight) and hands the focus back to the walk button, so the keyboard walks on from there
-    const walkFocused = (): Promise<boolean> => walk.evaluate((node) => node === document.activeElement);
-    await page.keyboard.press("Escape");
-    await eventually("Escape to end the current note and its highlight", async () => { const now = await currentOf(page); return now.count === 0 && now.marked === 0; });
-    await eventually("Escape to focus the walk button again", walkFocused);
-    // the walk stopped at note 0 after the six taps, so the keyboard goes on with notes 1 and 2
-    for (const index of [1, 2]) {
-      await page.keyboard.press("Enter");
-      await eventually(`Enter on the walk button to mark note ${index} current and focus it`, async () => { const now = await currentOf(page); return now.count === 1 && now.index === index && now.noteFocused && now.marked === 1; });
-      await page.keyboard.press("Escape");
-      await eventually(`Escape after the keyboard walk to focus the walk button again (step ${index})`, async () => (await currentOf(page)).count === 0 && (await walkFocused()));
-    }
-    // a click anywhere else ends it too
-    await walk.click();
-    await eventually("a note to be current again", async () => (await currentOf(page)).count === 1);
-    await page.locator(".chat-turn-user .chat-bubble").click();
-    await eventually("a click elsewhere to end the current note and its highlight", async () => { const now = await currentOf(page); return now.count === 0 && now.marked === 0; });
-    await page.setViewportSize({ width: 1280, height: 800 });
-    await page.emulateMedia({ reducedMotion: null });
-    console.log("PASS desktop: the bar walks the chat one note per tap, marking the current note and its text, until Escape or a click elsewhere");
-
-    // the popover of an existing comment: Delete is a quiet ghost button on the left, Save the primary one, and deleting leaves the focus on the message
-    await page.locator(".block-comment-row", { hasText: "Temporary" }).click();
-    await popover.waitFor();
-    const del = popover.getByRole("button", { name: "Delete", exact: true });
-    assert.equal(await del.evaluate((node) => node.classList.contains("btn-ghost") && !node.classList.contains("btn-danger")), true, "Delete is a ghost button");
-    assert.equal(await popover.getByRole("button", { name: "Save", exact: true }).evaluate((node) => node.classList.contains("btn-primary")), true, "Save is the primary button");
-    const footer = await popover.locator(".comment-popover-actions button").evaluateAll((nodes) => nodes.map((node) => ({ name: node.textContent, left: node.getBoundingClientRect().left })));
-    assert.deepEqual(footer.map((button) => button.name), ["Delete", "Cancel", "Save"], "Delete, then Cancel and Save");
-    assert.ok(footer[0]!.left < footer[1]!.left - 40, "Delete stands apart on the left");
-    if (evidence) {
-      const box = (await popover.boundingBox())!;
-      await page.screenshot({ path: join(evidence, "block-comments-popover-edit.png"), clip: { x: Math.max(0, box.x - 40), y: Math.max(0, box.y - 80), width: Math.min(box.width + 80, 1280), height: box.height + 120 } });
-    }
-    // a danger button elsewhere (a confirm, Remove PC) stays one under the pointer, not the neutral grey of the others
-    await page.evaluate(() => {
-      const button = document.createElement("button");
-      button.className = "btn btn-danger";
-      button.id = "danger-probe";
-      button.textContent = "Remove";
-      button.style.cssText = "position:fixed;left:8px;top:8px;z-index:100000";
-      document.body.append(button);
-    });
-    const probe = page.locator("#danger-probe");
-    const rest = await probe.evaluate((node) => getComputedStyle(node).borderColor);
-    await probe.hover();
-    await eventually("the pointer to be on the danger button", () => probe.evaluate((node) => node.matches(":hover")));
-    // let its transition finish before reading the colour
-    await probe.evaluate((node) => Promise.all(node.getAnimations().map((animation) => animation.finished)).then(() => undefined));
-    assert.equal(await probe.evaluate((node) => getComputedStyle(node).borderColor), rest, "a danger button keeps its danger border on hover");
-    await probe.evaluate((node) => node.remove());
-    await del.click();
-    await popover.waitFor({ state: "hidden" });
-    assert.equal(await labelOf(page), "4 comments on the reply");
-    assert.equal(await highlightMatchesNotes(page, "after a delete"), 4);
-    assert.equal(await page.evaluate(() => document.activeElement?.classList.contains("composer-text")), true, "deleting a comment from its popover leaves the focus on the message (the bubble is gone), not on the page");
-    console.log("PASS desktop: edit and delete from the popover under a bubble");
-
-    // the agent starts again while a comment is being written: the popover and the draft stay, and
-    // the code block is not rebuilt as the reply turns live and final again
-    await page.locator(".markdown-code").evaluate((node) => { (node as HTMLElement).dataset.kept = "yes"; });
-    await select(page, intro, "about");
-    await floatOf(page).waitFor();
-    await floatOf(page).click();
-    await popover.waitFor();
-    await field.fill("half a thought");
-    await herdrRpc("pane.report_agent", { pane_id: pane, source: "manual", agent: "codex", state: "working", agent_session_path: transcript });
-    await page.locator(".chat-turn-agent .is-commentable").first().waitFor({ state: "detached" });
-    assert.equal(await field.inputValue(), "half a thought", "the draft survives the reply turning live");
-    await popover.getByRole("button", { name: "Cancel", exact: true }).click();
-    await popover.waitFor({ state: "hidden" });
-    await herdrRpc("pane.report_agent", { pane_id: pane, source: "manual", agent: "codex", state: "idle", agent_session_path: transcript });
-    await page.locator("p.is-commentable", { hasText: "Intro paragraph" }).waitFor();
-    assert.equal(await page.locator(".markdown-code").evaluate((node) => (node as HTMLElement).dataset.kept), "yes", "the code block is the same element after live and back");
-    assert.equal(await highlightMatchesNotes(page, "after the reply turned live and final again"), 4);
-    assert.equal(await notesOf(page).count(), 4);
-    console.log("PASS desktop: a reply turning live keeps the open popover, its code block and the highlights");
-
-    // a narrow window: the button of a selection at a line's right end still lies inside the view
-    await page.setViewportSize({ width: 820, height: 800 });
-    await select(page, long, "right edge where the comment button sits.");
-    await floatOf(page).waitFor();
-    const narrow = await placementOf(page);
-    assert.ok(insideView(narrow), `the button stays inside a narrow view: ${JSON.stringify(narrow)}`);
-    await page.evaluate(() => window.getSelection()!.removeAllRanges());
-    await floatOf(page).waitFor({ state: "detached" });
-    await page.setViewportSize({ width: 1280, height: 800 });
-    console.log("PASS desktop: in a narrow window the button stays inside the view");
-
-    await page.reload();
-    await page.locator(".conn-live").waitFor();
-    await page.locator("p.is-commented").first().waitFor();
-    assert.equal(await labelOf(page), "4 comments on the reply");
-    assert.equal(await page.locator(".is-commented").count(), 3);
-    assert.equal(await notesOf(page).count(), 4);
-    assert.equal(await highlightMatchesNotes(page, "after a reload"), 4);
-    await assertTail(notesOf(page).first(), intro, { text: "Intro paragraph" }, "after a reload");
-    await assertNoRail(page, "after a reload");
-    console.log("PASS desktop: comments, their highlights and their bubbles' tails survive a reload");
-
-    await message.fill("Thanks");
-    await sendButton.click();
-    await bar.waitFor({ state: "detached" });
-    assert.equal(await page.locator(".is-commented").count(), 0);
-    assert.equal(await highlighted(page), 0, "sent comments leave no highlight");
-    assert.equal(await page.locator(".composer-attachments").count(), 0);
-    assert.ok(sent.some((text) => text === "> Intro paragraph\nFirst thought, briefly\n\n> the state\nSecond thought\n\n> check the logs\nAlso the exit code\n\n> const a = 1\nUse let\n\nThanks"), `sent: ${JSON.stringify(sent)}`);
-    console.log("PASS desktop: send carries each comment's selected text quoted, in reading order, then clears them");
-
-    // the X takes every comment at once: no undo, no question; the bar goes with them and the message box has the focus
-    await comment(page, intro, "Intro paragraph", "One more");
-    await comment(page, long, "longer paragraph", "And another");
-    await eventually("both comments to be counted", async () => (await labelOf(page)) === "2 comments on the reply");
-    await removeOf(page).click();
-    await bar.waitFor({ state: "detached" });
-    assert.equal(await page.locator(".composer-comments-undo, .composer-comments-bar.is-undo").count(), 0, "no undo takes the bar's place");
-    await eventually("every note to leave the chat", async () => (await notesOf(page).count()) === 0 && (await page.locator(".is-commented, .is-current").count()) === 0);
-    await eventually("the highlight to go with the notes", async () => (await highlighted(page)) === 0);
-    assert.equal(await page.locator(".composer-attachments").count(), 0, "no strip is left behind");
-    assert.equal(await page.evaluate(() => document.activeElement?.classList.contains("composer-text")), true, "the X had the focus: the message box takes it");
-    assert.equal(await page.evaluate((key) => localStorage.getItem(key), storeKey), null, "the stored comments are gone too");
-    await assertMessageLayout(page, messageFree, "after the bar is gone");
-    console.log("PASS desktop: the bar's X removes every comment and the bar at once, with no undo, and the message box takes the focus");
-    await page.context().close();
-  }
-
-  // ── a selection over several parts is ONE comment: highlighted in every part, quoted whole, its bubble under the last part ──
-  {
-    const { page, sent } = await open({ viewport: { width: 1280, height: 800 } });
-    const popover = popoverOf(page);
-    const field = popover.getByRole("textbox", { name: "Comment" });
-    const message = page.getByRole("textbox", { name: "Message", exact: true });
-    const intro = page.locator("p.is-commentable", { hasText: INTRO });
-    const second = page.locator(".markdown-item.is-commentable", { hasText: "Restart the server" });
-    const middle = page.locator(".markdown-item.is-commentable", { hasText: "Run the migration" });
-    const long = page.locator("p.is-commentable", { hasText: "A longer paragraph" });
-    /** Whether the part's next sibling is a group of bubbles: its own bubbles hang there. */
-    const hasGroup = (part: Locator): Promise<boolean> => part.evaluate((node) => node.nextElementSibling?.classList.contains("block-comment-notes") ?? false);
-
-    // a triple click selects a paragraph and runs on to the start of the next part: still a comment on that one paragraph
-    await long.click({ clickCount: 3, position: { x: 40, y: 10 } });
-    await floatOf(page).waitFor();
-    await floatOf(page).click();
-    await popover.waitFor();
-    assert.deepEqual((await rangesOf(page, "block-comment-pending")).texts, [LONG_PARAGRAPH], "a triple click falls back to the paragraph it started in: one pending range");
-    await field.fill("Whole paragraph");
-    await popover.getByRole("button", { name: "Save", exact: true }).click();
-    await popover.waitFor({ state: "hidden" });
-    const whole = (await storedOf(page)).find((entry) => entry.comment === "Whole paragraph")!;
-    assert.equal(whole.until, undefined, "a triple click's end, at the start of the next part, makes no end part");
-    assert.equal(whole.quote, LONG_PARAGRAPH);
-    assert.deepEqual(whole.range, [0, LONG_PARAGRAPH.length]);
-    assert.equal(await page.locator(".is-commented").count(), 1, "only the paragraph is commented");
-    assert.equal(await hasGroup(long), true, "its bubble hangs under it");
-    await assertTail(notesOf(page).first(), long, { text: "button sits." }, "a triple-clicked paragraph");
-    console.log("PASS desktop: a triple click on a paragraph is a comment on that paragraph alone");
-
-    // one selection from the middle of the intro over the first list item, to the start of the second item: one comment
-    await selectSpan(page, intro, "about", second, "Restart");
-    await floatOf(page).waitFor();
-    const lines = await page.evaluate(() => window.getSelection()!.toString());
-    assert.match(lines, /about the state\.[\s\S]*Run the migration[\s\S]*Restart/, "the selection spans three parts");
-    await floatOf(page).click();
-    await popover.waitFor();
-    const pending = await rangesOf(page, "block-comment-pending");
-    assert.deepEqual([...pending.texts].sort(), ["Restart", "Run the migration", "about the state."].sort(), "the pending highlight: the paragraph from the start, the item whole, the second item up to the end");
-    assert.deepEqual(pending.withinPart, [true, true, true], "each pending range lies in one part");
-    assert.equal(pending.paintsBubbles, false, "no pending range takes in a group of bubbles");
-    assert.equal(await highlighted(page), 4, "the base highlight: the paragraph's comment and the three segments");
-    if (evidence) await page.screenshot({ path: join(evidence, "block-comments-desktop-spanning.png") });
-    await field.fill("Spans parts");
-    await popover.getByRole("button", { name: "Save", exact: true }).click();
-    await popover.waitFor({ state: "hidden" });
-    await assertNoRail(page, "a spanning comment");
-    // one comment: its quote is every part's selected text, its range is in the first part, its end in the last
-    const spanning = (await storedOf(page)).find((entry) => entry.comment === "Spans parts")!;
-    assert.deepEqual(spanning.quote?.split("\n"), ["about the state.", "Run the migration", "Restart"], "the quote is the whole selection, one line break between the parts");
-    assert.deepEqual(spanning.range, [INTRO.indexOf("about"), INTRO.length], "the range is in the first part, to its end");
-    assert.equal(spanning.until?.end, "Restart".length, "the end part is the second item, up to the end of the selection");
-    assert.equal((await storedOf(page)).length, 2, "one comment for the whole selection");
-    // the bubble hangs under the last part; the parts covered all count as commented, and none of the highlights crosses a part
-    assert.equal(await notesOf(page).count(), 2);
-    assert.equal(await second.locator(".block-comment-notes .block-comment-row").count(), 1, "the bubble hangs under the part where the selection ends");
-    assert.equal(await middle.locator(".block-comment-notes").count(), 0, "a part in between has no bubble");
-    assert.equal(await hasGroup(intro), false, "the part where it starts has none of its own");
-    assert.equal(await page.locator(".is-commented").count(), 4, "the paragraph, both items and the long paragraph are commented");
-    assert.equal(await highlightMatchesNotes(page, "a spanning comment and a single one", 4), 2);
-    const saved = await rangesOf(page, "block-comment");
-    assert.deepEqual([...saved.texts].sort(), [LONG_PARAGRAPH, "Restart", "Run the migration", "about the state."].sort());
-    assert.ok(saved.withinPart.every(Boolean), "each range lies in one part");
-    assert.equal(saved.paintsBubbles, false, "no range takes in a group of bubbles");
-    assert.deepEqual(await noteTexts(page), ["Spans parts", "Whole paragraph"], "the spanning comment sorts by where it starts");
-    const names = await noteNames(page);
-    assert.ok(names[0]!.startsWith("Comment on “about the state. Run the migr") && names[0]!.endsWith("…”: Spans parts"), `the name of the spanning bubble carries an excerpt of the whole selection: ${names[0]}`);
-    await assertTail(notesOf(page).first(), second, { text: "Restart" }, "the spanning comment, under the last part");
-    await assertBubbleLook(page, notesOf(page).first(), "the spanning bubble");
-    assert.equal(await labelOf(page), "2 comments on the reply");
-    // hovering its bubble strengthens all three segments
-    await notesOf(page).first().hover();
-    await eventually("the active highlight to hold the three segments", async () => (await highlighted(page, "block-comment-active")) === 3);
-    await page.mouse.move(1, 1);
-    await eventually("the active highlight to empty", async () => (await highlighted(page, "block-comment-active")) === 0);
-    console.log("PASS desktop: a selection over a paragraph and two list items is one comment, highlighted in each part, with its bubble and tail under the last");
-
-    // its bubble edits it in the popover; the walk stops on it, marking all three segments, with the bubble in view
-    await notesOf(page).first().click();
-    await popover.waitFor();
-    await eventually("the field to hold the comment", async () => (await field.inputValue()) === "Spans parts");
-    assert.equal(await highlighted(page, "block-comment-pending"), 0, "an edit has its comment's own highlight");
-    await popover.getByRole("button", { name: "Cancel", exact: true }).click();
-    await popover.waitFor({ state: "hidden" });
-    await walkOf(page).click();
-    await eventually("the walk to stand on the spanning comment: its three segments current, its bubble focused and in view", async () => {
-      const now = await currentOf(page);
-      return now.count === 1 && now.index === 0 && now.noteFocused && now.marked === 3 && now.inView && now.bubbleInView;
-    });
-    await walkOf(page).click();
-    await eventually("the walk to go on to the paragraph's comment", async () => { const now = await currentOf(page); return now.count === 1 && now.index === 1 && now.noteFocused && now.marked === 1 && now.bubbleInView; });
-    await page.keyboard.press("Escape");
-    console.log("PASS desktop: a spanning comment edits from its bubble, and the walk marks all its parts and shows its bubble");
-
-    await page.reload();
-    await page.locator(".conn-live").waitFor();
-    await page.locator("p.is-commented").first().waitFor();
-    assert.equal(await notesOf(page).count(), 2);
-    assert.equal(await second.locator(".block-comment-notes .block-comment-row").count(), 1, "after a reload the bubble is under the last part again");
-    assert.equal(await highlightMatchesNotes(page, "after a reload", 4), 2);
-    await assertTail(notesOf(page).first(), second, { text: "Restart" }, "after a reload");
-    const stored = JSON.parse((await page.evaluate((key) => localStorage.getItem(key), storeKey))!) as { version: number; comments: StoredComment[] };
-    console.log("PASS desktop: a spanning comment survives a reload under its last part");
-
-    // sent in reading order: the spanning comment first (it starts in the intro), every part's line quoted
-    await message.fill("Thanks");
-    await page.getByRole("button", { name: /^Send message/ }).click();
-    await barOf(page).waitFor({ state: "detached" });
-    assert.ok(sent.some((text) => text === `> about the state.\n> Run the migration\n> Restart\nSpans parts\n\n> ${LONG_PARAGRAPH}\nWhole paragraph\n\nThanks`), `sent: ${JSON.stringify(sent)}`);
-    console.log("PASS desktop: the message quotes every part of a spanning selection, a > before each line");
-    await page.context().close();
-
-    // the last part changed (the reply was written again): the bubble moves under the first part and the highlight is clamped to it
-    writeTranscript(ANSWER.replace("2. Restart the server", "2. Restart it"));
-    {
-      const changed = await open({ viewport: { width: 1280, height: 800 } }, stored);
-      await changed.page.locator("p.is-commented").first().waitFor();
-      const here = changed.page.locator("p.is-commentable", { hasText: INTRO });
-      assert.equal(await here.evaluate((node) => node.nextElementSibling?.querySelectorAll(".block-comment-row").length ?? 0), 1, "the bubble moved under the first part");
-      assert.deepEqual(await noteTexts(changed.page), ["Spans parts", "Whole paragraph"]);
-      assert.equal(await changed.page.locator(".markdown-item.is-commented").count(), 0, "the items are not covered any more");
-      await highlightMatchesNotes(changed.page, "a spanning comment whose last part changed", 2);
-      assert.deepEqual([...(await rangesOf(changed.page, "block-comment")).texts].sort(), [LONG_PARAGRAPH, "about the state."].sort(), "the highlight is clamped to the first part, from where the selection starts");
-      await assertTail(notesOf(changed.page).first(), here, { text: "about the state." }, "a comment whose last part changed");
-      console.log("PASS desktop: a spanning comment whose last part changed hangs under its first part, highlighted there only");
-      await changed.page.context().close();
-    }
-    writeTranscript(ANSWER);
-
-    // a comment of an earlier version made from it (on the first part as a whole, no end part): the transform strips a spanning anchor too
-    {
-      const old = await open({ viewport: { width: 1280, height: 800 } }, legacyOf(stored, "Spans parts"));
-      await old.page.locator("p.is-commented").first().waitFor();
-      const here = old.page.locator("p.is-commentable", { hasText: INTRO });
-      assert.deepEqual(await noteTexts(old.page), ["Spans parts", "Whole paragraph"]);
-      assert.equal(await old.page.locator(".markdown-item.is-commented").count(), 0, "a comment on a whole part covers only that part");
-      assert.equal(await notesOf(old.page).first().getAttribute("aria-label"), null, "a comment on a whole part has its text as its name");
-      await highlightMatchesNotes(old.page, "an earlier version's comment", 2);
-      assert.deepEqual([...(await rangesOf(old.page, "block-comment")).texts].sort(), [INTRO, LONG_PARAGRAPH].sort(), "it highlights its whole part");
-      await assertTail(notesOf(old.page).first(), here, "text start", "a comment on a whole part");
-      console.log("PASS desktop: an earlier version's comment highlights its whole part, its tail a little in from the text's start");
-      await old.page.context().close();
-    }
-  }
-
-  // ── formulas: a selection in one is highlighted whole, and its bubble's tail points at its glyphs ──
-  {
-    writeTranscript(MATH_ANSWER);
-    const { page } = await open({ viewport: { width: 1280, height: 800 } }, undefined, {}, "Energy relates to mass");
-    const popover = popoverOf(page);
-    const field = popover.getByRole("textbox", { name: "Comment" });
-    const inline = page.locator("p.is-commentable", { hasText: "Energy relates to mass" });
-    const display = page.locator(".markdown-block.is-commentable", { has: page.locator(".markdown-math-display") });
-    /** Presses inside the formula at its left, drags to its right and lets go: a selection that starts and ends inside it. */
-    const dragInside = async (formula: Locator): Promise<void> => {
-      const box = (await formula.boundingBox())!;
-      const y = box.y + box.height / 2;
-      await page.mouse.move(box.x + 2, y);
-      await page.mouse.down();
-      await page.mouse.move(box.x + box.width - 2, y, { steps: 8 });
-      await page.mouse.up();
-    };
-    /** Whether some range of the named highlight reaches over the whole box of `formula` (its glyphs, not only its hidden MathML). */
-    const covers = async (name: string, formula: Locator): Promise<boolean> => {
-      const box = (await formula.boundingBox())!;
-      const boxes = await page.evaluate((highlight) => {
-        const registry = (CSS as unknown as { highlights?: { get(key: string): Iterable<Range> | undefined } }).highlights;
-        return [...(registry?.get(highlight) ?? [])].map((range) => { const rect = range.getBoundingClientRect(); return { left: rect.left, right: rect.right }; });
-      }, name);
-      return boxes.some((found) => found.left <= box.x + 2 && found.right >= box.x + box.width - 2);
-    };
-
-    // a selection over text and a formula: the button is on its line, inside the view, above it
-    await select(page, inline, "relates to mass", " in a vacuum");
-    await floatOf(page).waitFor();
-    const over = await placementOf(page);
-    assert.ok(insideView(over), `the button is inside the view: ${JSON.stringify(over)}`);
-    assert.ok(over.button.bottom <= over.line.top, `the button is above the selection's last line, after the formula (button bottom ${over.button.bottom}px, line top ${over.line.top}px)`);
-    await page.evaluate(() => window.getSelection()!.removeAllRanges());
-    await floatOf(page).waitFor({ state: "detached" });
-
-    // a drag inside an inline formula: the whole formula is the comment's text
-    await dragInside(inline.locator(".katex"));
-    await floatOf(page).waitFor();
-    assert.ok(insideView(await placementOf(page)), "the button for a selection in a formula is inside the view");
-    await floatOf(page).click();
-    await popover.waitFor();
-    assert.equal(await highlighted(page, "block-comment-pending"), 1);
-    assert.equal(await covers("block-comment-pending", inline.locator(".katex")), true, "the pending highlight covers the inline formula whole");
-    await field.fill("Which units?");
-    await popover.getByRole("button", { name: "Save", exact: true }).click();
-    await popover.waitFor({ state: "hidden" });
-    assert.equal(await highlightMatchesNotes(page, "an inline formula"), 1);
-    assert.equal(await covers("block-comment", inline.locator(".katex")), true, "the highlight covers the inline formula whole");
-    await assertTail(notesOf(page).first(), inline, "formula end", "an inline formula");
-    console.log("PASS desktop: a selection in an inline formula highlights it whole, and the bubble's tail points at its right edge");
-
-    // a drag inside a display formula, then the same comment as an earlier version stored it (the whole part)
-    await dragInside(display.locator(".katex"));
-    await floatOf(page).waitFor();
-    await floatOf(page).click();
-    await popover.waitFor();
-    await field.fill("Check the square");
-    await popover.getByRole("button", { name: "Save", exact: true }).click();
-    await popover.waitFor({ state: "hidden" });
-    assert.equal(await highlightMatchesNotes(page, "a display formula"), 2);
-    assert.equal(await covers("block-comment", display.locator(".katex")), true, "the highlight covers the display formula whole");
-    await assertTail(notesOf(page).nth(1), display, "formula end", "a display formula, which is not a whole line wide for the tail");
-    await makeLegacy(page, storeKey, "Check the square");
-    await page.reload();
-    await page.locator(".conn-live").waitFor();
-    await page.locator("p.is-commented").first().waitFor();
-    assert.equal(await highlightMatchesNotes(page, "after the display comment turned into a whole-part one"), 2);
-    assert.equal(await covers("block-comment", display.locator(".katex")), true, "a comment on a whole display formula highlights it whole");
-    await assertTail(notesOf(page).nth(1), display, "formula start", "a whole display formula, its tail in from the formula's left edge");
-    console.log("PASS desktop: a display formula is highlighted whole, selected or as a whole part, its tail at the formula's glyphs");
-    await page.context().close();
-    writeTranscript(ANSWER);
-  }
-
-  // ── desktop, Chat width Full: the column fills the view, and the button stays inside it ──
-  {
-    const { page } = await open({ viewport: { width: 1280, height: 800 } }, undefined, { chatWidth: "full" });
-    await eventually("the layout to settle", () => page.evaluate(() => document.documentElement.dataset["chatWidth"] === "full"));
-    const parts: [Locator, string][] = [
-      [page.locator("p.is-commentable", { hasText: "Intro paragraph about the state." }), "the state."],
-      [page.locator("p.is-commentable", { hasText: "A longer paragraph" }), "button sits."],
-      [page.locator(".markdown-list .markdown-list .markdown-item.is-commentable", { hasText: "check the logs" }), "the logs"],
-      [page.locator(".markdown-block.is-commentable", { has: page.locator(".markdown-code") }), "const a = 1;"],
-    ];
-    for (const [part, tail] of parts) {
-      // the end of the text is where the button centres: at Full it is the view's right edge that clamps it
-      await select(page, part, tail);
-      await floatOf(page).waitFor();
-      const placed = await placementOf(page);
-      assert.ok(insideView(placed), `at Full the button for "${tail}" lies outside the view: ${JSON.stringify(placed)}`);
-      await page.evaluate(() => window.getSelection()!.removeAllRanges());
-      await floatOf(page).waitFor({ state: "detached" });
-    }
-    console.log("PASS desktop: Chat width Full, the Comment button lies inside the view for every kind of part");
-    await page.context().close();
-  }
-
-  // ── a message queued while the agent works: its comments are held apart from the typed text ──
-  {
-    const quote = (text: string) => ({ type: "paragraph", lines: [[{ type: "text", value: text }]] });
-    // comments of the earlier kind (no selection quote) whose block is not in the chat: they are stops of the bar's walk
-    const stored = {
-      version: 1,
-      comments: [
-        { id: "held-1", anchor: "held:0:0", order: [1, 0, 0], comment: "First thought", block: quote("Quoted one.") },
-        { id: "held-2", anchor: "held:0:1", order: [1, 0, 1], comment: "Second thought", block: quote("Quoted two.") },
-      ],
-    };
-    const { page, sent } = await open({ viewport: { width: 1280, height: 800 } }, stored);
-    await eventually("the context bar", async () => (await barOf(page).count()) === 1);
-    assert.equal(await labelOf(page), "2 comments on the reply");
-    await herdrRpc("pane.report_agent", { pane_id: pane, source: "manual", agent: "codex", state: "working", agent_session_path: transcript });
-    const message = page.getByRole("textbox", { name: "Message", exact: true });
-    await message.fill("Remember the exit code");
-    const queueButton = page.getByRole("button", { name: /^Queue message/ });
-    await queueButton.waitFor();
-    assert.equal(await queueButton.getAttribute("aria-label"), "Queue message · Comments to send: 2");
-    await queueButton.click();
-    const held = page.locator(".composer-queue-item");
-    await held.waitFor();
-    const heldText = held.locator(".composer-queue-text");
-    assert.equal(await heldText.inputValue(), "Remember the exit code", "the held row holds only the typed text");
-    assert.equal(await held.locator(".composer-queue-comments").innerText(), "2", "the held row's chip counts its comments");
-    assert.equal(await held.locator("button.composer-queue-comments").count(), 0, "the held chip only informs: it is no button");
-    await barOf(page).waitFor({ state: "detached" });
-    // the comments are a snapshot beside the text: with the text cleared the row is comments only, and still sendable
-    const sendNow = held.getByRole("button", { name: "Send now", exact: true });
-    await heldText.fill("");
-    assert.equal(await heldText.getAttribute("placeholder"), "Comments only");
-    assert.equal(await heldText.inputValue(), "", "clearing the text leaves the comments out of the box");
-    assert.equal(await held.locator(".composer-queue-comments").innerText(), "2");
-    await eventually("Send now enabled", () => sendNow.isEnabled());
-    console.log("PASS desktop: a held message keeps its comments apart, its text box shows only the typed text, and Send now stays enabled");
-
-    // Send now sends the comments composed with the text, so a text too long for that is refused, nothing sent
-    const max = await heldText.evaluate((node) => (node as HTMLTextAreaElement).maxLength);
-    assert.ok(max > 0, "the held text box has a cap");
-    await heldText.fill("x".repeat(max - 10));
-    const before = sent.length;
-    await sendNow.click();
-    await held.locator(".composer-queue-error").waitFor();
-    assert.equal(await held.locator(".composer-queue-error").innerText(), "Too long to send. Shorten the message or remove comments.");
-    assert.equal(sent.length, before, "a message too long with its comments is not sent");
-    assert.equal(await page.locator(".composer-queue-item").count(), 1, "the refused message stays held");
-    console.log("PASS desktop: Send now refuses a message that is too long with its comments, and sends nothing");
-    await held.getByRole("button", { name: "Discard", exact: true }).click();
-    await held.waitFor({ state: "detached" });
-    await herdrRpc("pane.report_agent", { pane_id: pane, source: "manual", agent: "codex", state: "idle", agent_session_path: transcript });
-    await page.context().close();
-  }
-
-  // ── phone: a long press selects, the button is below the selection, the bar is a finger's size ──
-  {
-    const { page } = await open({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
-    assert.equal(await page.evaluate(() => matchMedia("(hover: none)").matches && matchMedia("(pointer: coarse)").matches), true, "the phone context has no hover and a coarse pointer");
-    const item = page.locator(".markdown-item.is-commentable", { hasText: "Run the migration" });
-    const second = page.locator(".markdown-list .markdown-list .markdown-item.is-commentable", { hasText: "check the logs" });
-    const editor = sheetOf(page);
-    const bar = barOf(page);
-    const walk = walkOf(page);
-    const touchTarget = await page.evaluate(() => parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--touch-target")));
-    // the controls row and the message's first line with no comment: the bar comes and goes without moving them
-    const messageFree = await messageLayout(page);
-
-    // a tap chooses nothing any more: no tint, no button, no +
-    await item.tap();
-    await frames(page);
-    assert.equal(await floatOf(page).count(), 0, "a tap on a part shows no Comment button");
-    assert.equal(await staleOf(page).count(), 0, "a tap on a part chooses nothing and shows no +");
-    assert.equal(await item.evaluate((node) => getComputedStyle(node).backgroundColor), "rgba(0, 0, 0, 0)", "a tapped part is not tinted");
-
-    // a selection: the button is below its last line (the OS menu and handles are above and around it), inside the view, a finger tall
-    await select(page, item, "the migration");
-    await floatOf(page).waitFor();
-    const below = await placementOf(page);
-    assert.ok(below.button.top >= below.line.bottom, `on a touch screen the button is below the selection's last line (button top ${below.button.top}px, line bottom ${below.line.bottom}px)`);
-    assert.ok(insideView(below), `the button is inside the chat view: ${JSON.stringify(below)}`);
-    assert.ok(below.button.height >= touchTarget - 1, `the button is a finger tall (${below.button.height}px, wanted ${touchTarget}px)`);
-    if (evidence) await page.screenshot({ path: join(evidence, "block-comments-phone-selection.png"), clip: { x: 0, y: Math.max(0, below.line.top - 80), width: 390, height: 200 } });
-    await floatOf(page).tap();
-    await editor.waitFor();
-    const fits = await editor.evaluate((node) => node.getBoundingClientRect().bottom <= (window.visualViewport?.height ?? window.innerHeight) + 1);
-    assert.ok(fits, "the editor sits inside the visible viewport");
-    assert.equal(await editor.locator(".comment-editor-plain").innerText(), "the migration");
-    // a phone keeps the modal, a bottom sheet with the quote: no popover, and no selection shown as pending
-    assert.equal(await popoverOf(page).count(), 0, "a touch screen gets the sheet, not the popover");
-    assert.equal(await highlighted(page, "block-comment-pending"), 0, "the sheet quotes the selection: nothing is highlighted as pending");
-    assert.equal(await editor.getAttribute("aria-modal"), "true", "the sheet is modal");
-    // taps inside the editor stay inside it
-    await editor.locator(".modal-title").tap();
-    await editor.locator(".comment-editor-block").tap();
-    await frames(page);
-    assert.equal(await staleOf(page).count(), 0, "a tap inside the editor chooses nothing");
-    if (evidence) await page.screenshot({ path: join(evidence, "block-comments-phone-editor.png") });
-    await editor.getByRole("button", { name: "Cancel", exact: true }).tap();
-    await editor.waitFor({ state: "hidden" });
-    assert.equal(await bar.count(), 0, "a cancelled comment is no comment");
-    console.log("PASS phone: a selection shows the Comment button below it, a finger tall and inside the view; a tap on a part does nothing; the editor sits above the fold");
-
-    // a comment, and the bar: the count, an X a finger can press; no rail, tile or pill
-    assert.equal(await comment(page, item, "the migration", "On a phone", { touch: true }), "the migration");
-    assert.equal(await labelOf(page), "1 comment on the reply");
-    await assertMessageLayout(page, messageFree, "with the comments' bar there");
-    // the bubble: the comment only, a tail at the end of the highlight, its name with the excerpt
-    assert.deepEqual(await noteTexts(page), ["On a phone"]);
-    assert.deepEqual(await noteNames(page), ["Comment on “the migration”: On a phone"]);
-    await assertTail(notesOf(page).first(), item, { text: "the migration" }, "on a phone");
-    await assertNoRail(page, "on a phone");
-    const xBox = (await removeOf(page).boundingBox())!;
-    assert.ok(xBox.width >= touchTarget && xBox.height >= touchTarget, `the bar's X is a finger's size (${xBox.width} × ${xBox.height}px, wanted ${touchTarget}px)`);
-    const walkBox = (await walk.boundingBox())!;
-    const barBox = (await bar.boundingBox())!;
-    assert.ok(barBox.height >= touchTarget - 1, `the bar is a finger tall (${barBox.height}px, wanted ${touchTarget}px)`);
-    assert.ok(walkBox.height >= touchTarget - 1, `the walk button is a finger tall (${walkBox.height}px, wanted ${touchTarget}px)`);
-    assertBarLayout(await barLayout(page), "phone", { column: "--space-4", strip: false });
-    assert.equal(await staleOf(page).count(), 0);
-    assert.equal(await page.locator(".composer-controls .composer-comments-chip").count(), 0, "the control row holds no comment chip");
-    const boxBefore = (await page.locator(".composer").boundingBox())!.height;
-    assert.equal(await comment(page, second, "the logs", "A second one", { touch: true }), "the logs");
-    assert.equal(await labelOf(page), "2 comments on the reply");
-    assert.ok(Math.abs((await page.locator(".composer").boundingBox())!.height - boxBefore) <= 1, "a second comment does not grow the composer");
-    assert.equal(await highlightMatchesNotes(page, "on the phone"), 2);
-    // the bar fits the card at 390px: no sideways overflow of the bar either
-    assert.ok(await bar.evaluate((node) => node.scrollWidth <= node.clientWidth + 1), "the bar fits the phone's width");
-
-    // a tap walks to the first note and marks it current, its text highlighted; a second tap moves on
-    await walk.tap();
-    await eventually("the first tap to mark one bubble current and focus it, with its text and itself in view", async () => { const now = await currentOf(page); return now.count === 1 && now.index === 0 && now.noteFocused && now.marked === 1 && now.inView && now.bubbleInView; });
-    await walk.tap();
-    await eventually("the second tap to move the mark to the next bubble", async () => { const now = await currentOf(page); return now.count === 1 && now.index === 1 && now.noteFocused && now.marked === 1 && now.inView && now.bubbleInView; });
-    if (evidence) await page.screenshot({ path: join(evidence, "block-comments-phone.png") });
-    if (evidence) {
-      const card = (await page.locator(".composer").boundingBox())!;
-      await page.screenshot({ path: join(evidence, "block-comments-phone-bar.png"), clip: { x: 0, y: Math.max(0, card.y - 8), width: 390, height: Math.min(card.height + 16, 844 - Math.max(0, card.y - 8)) } });
-    }
-    console.log("PASS phone: the bar's X is touch-sized, no tile or pill exists, and the bar's taps mark the current bubble and its text");
-
-    // notes, highlights and the Comment button make the chat no wider than its box
-    await select(page, item, "Run the migration");
-    await floatOf(page).waitFor();
-    const width = await page.locator(".chat-view").evaluate((node) => ({ scroll: node.scrollWidth, client: node.clientWidth }));
-    assert.ok(width.scroll <= width.client, `the chat scrolls sideways (scrollWidth ${width.scroll}px > clientWidth ${width.client}px)`);
-    const outer = await page.evaluate(() => ({ scroll: document.documentElement.scrollWidth, client: document.documentElement.clientWidth }));
-    assert.ok(outer.scroll <= outer.client, `the page scrolls sideways (scrollWidth ${outer.scroll}px > clientWidth ${outer.client}px)`);
-    await page.evaluate(() => window.getSelection()!.removeAllRanges());
-    await floatOf(page).waitFor({ state: "detached" });
-    console.log("PASS phone: notes, highlights and the Comment button cause no horizontal overflow");
-
-    // Delete in the sheet takes the bubble that opened it with it: on a touch screen the focus is let go, not given to the composer (no keyboard unasked)
-    await notesOf(page).first().tap();
-    await editor.waitFor();
-    await editor.getByRole("button", { name: "Delete", exact: true }).tap();
-    await editor.waitFor({ state: "hidden" });
-    await frames(page);
-    assert.equal(await page.evaluate(() => document.activeElement?.classList.contains("composer-text")), false, "on a touch screen Delete in the sheet does not move the focus to the message box (no keyboard)");
-    await eventually("the deleted comment's bubble to be gone", async () => (await notesOf(page).count()) === 1);
-    assert.equal(await labelOf(page), "1 comment on the reply");
-    // the X takes the rest at once, and the bar with it: no undo, and no keyboard raised unasked
-    await removeOf(page).tap();
-    await bar.waitFor({ state: "detached" });
-    await eventually("every note to leave the chat", async () => (await notesOf(page).count()) === 0 && (await page.locator(".is-commented, .is-current").count()) === 0);
-    assert.equal(await page.locator(".composer-comments-undo, .composer-comments-bar.is-undo").count(), 0, "no undo takes the bar's place");
-    assert.equal(await page.locator(".composer-attachments").count(), 0, "no strip is left behind");
-    assert.equal(await page.evaluate(() => document.activeElement?.classList.contains("composer-text")), false, "on a touch screen the X does not move the focus to the message box (no keyboard)");
-    await assertMessageLayout(page, messageFree, "after the bar is gone");
-    console.log("PASS phone: Delete in the sheet takes one comment, and the bar's X removes the rest and the bar at once, with no undo");
-    assert.deepEqual(errors, []);
-    await page.context().close();
-  }
-
-  // ── a long code block: unfolded, it stays unfolded as comments are added to it; the quote of a long selection scrolls ──
-  {
-    writeTranscript(LONG_ANSWER);
-    const { page, sent } = await open({ viewport: { width: 1280, height: 800 } });
-    const longCode = page.locator(".markdown-block.is-commentable", { has: page.locator(".markdown-code") });
-    const more = longCode.locator(".markdown-code-more");
-    const editor = sheetOf(page);
-    assert.match(await more.innerText(), /^Show all \d+ lines$/);
-    await more.click();
-    assert.equal(await more.getAttribute("aria-expanded"), "true");
-    await longCode.locator(".markdown-code").evaluate((node) => { (node as HTMLElement).dataset.kept = "yes"; });
-    // two comments on the one code block: neither rebuilds it, so the block the reader unfolded stays unfolded after both
-    assert.equal(await comment(page, longCode, "line 35", "Trim this"), "line 35");
-    await page.locator(".markdown-block.is-commented").waitFor();
-    const stillUnfolded = async (what: string): Promise<void> => {
-      assert.equal(await more.getAttribute("aria-expanded"), "true", `the unfolded code block stays unfolded ${what}`);
-      assert.equal(await more.innerText(), "Show less");
-      assert.equal(await longCode.locator(".markdown-code").evaluate((node) => (node as HTMLElement).dataset.kept), "yes", `the code block is the same element ${what}`);
-      assert.match(await longCode.locator("pre").innerText(), /line 40/);
-    };
-    await stillUnfolded("after the first comment");
-    assert.equal(await comment(page, longCode, "line 38", "And this"), "line 38");
-    await stillUnfolded("after a second comment is added to it");
-    // a selection across lines keeps its line breaks, in the store and in the message
-    assert.equal(await comment(page, longCode, "line 5", "Lines", { to: "line 9" }), "line 5\nline 6\nline 7\nline 8\nline 9");
-    await stillUnfolded("after a third comment");
-    assert.deepEqual(await noteTexts(page), ["Lines", "Trim this", "And this"], "three bubbles on the one block, in the order of the text");
-    assert.deepEqual(await noteNames(page), ["Comment on “line 5 line 6 line 7 line 8 lin…”: Lines", "Comment on “line 35”: Trim this", "Comment on “line 38”: And this"], "the first one's excerpt is cut at 32 characters");
-    assert.equal(await highlightMatchesNotes(page, "three comments on a code block"), 3);
-    assert.equal(await highlighted(page), 3, "the highlight holds a range per comment on the block");
-    await assertBubbleGroup(longCode, "three bubbles under a long code block");
-    await assertTail(notesOf(page).nth(0), longCode, { text: "line 9" }, "a selection over five lines: its last line's end");
-    await assertTail(notesOf(page).nth(1), longCode, { text: "line 35" }, "a line of an unfolded block");
-    console.log("PASS desktop: an unfolded long code block stays unfolded after a second and a third comment, one bubble and one highlight each");
-
-    // the sheet (a window of 768px or less, here 700px) quotes the selection: a long quote is as tall as its text and the dialog's body scrolls; it is context, so nothing in it takes focus
-    await page.setViewportSize({ width: 700, height: 800 });
-    await select(page, longCode, "line 1", "line 30");
-    await floatOf(page).waitFor();
-    await floatOf(page).click();
-    await editor.waitFor();
-    const quoted = editor.locator(".comment-editor-block");
-    assert.equal(await quoted.locator(".comment-editor-plain").innerText(), Array.from({ length: 30 }, (_, n) => `line ${n + 1}`).join("\n"), "the editor shows the whole selection, lines kept");
-    assert.equal(await quoted.locator("button, a[href], [tabindex]").count(), 0, "nothing in the editor's quote takes focus");
-    const frame = await quoted.evaluate((node) => {
-      const body = node.closest(".modal-body")!;
-      return { quote: node.scrollHeight - node.clientHeight, body: body.scrollHeight > body.clientHeight };
-    });
-    assert.ok(frame.quote <= 1 && frame.body, `a long quote has no scrolling frame of its own, the dialog's body scrolls (quote overflow ${frame.quote}px)`);
-    await editor.getByRole("button", { name: "Cancel", exact: true }).click();
-    await editor.waitFor({ state: "hidden" });
-    assert.equal(await notesOf(page).count(), 3, "a cancelled comment adds no note");
-    console.log("PASS desktop: the editor's quote of a long selection keeps its lines; the dialog's body scrolls, not the quote");
-
-    // a selection over a link quotes its words, as text
-    const linked = page.locator("p.is-commentable", { hasText: "See docs." });
-    assert.equal(await comment(page, linked, "See docs", "The link", { sheet: true }), "See docs");
-    await notesOf(page).filter({ hasText: "The link" }).click();
-    await editor.waitFor();
-    assert.equal(await editor.locator(".comment-editor-block a").count(), 0, "a link in the editor's quote is no link");
-    await editor.getByRole("button", { name: "Cancel", exact: true }).click();
-    await editor.waitFor({ state: "hidden" });
-    await page.setViewportSize({ width: 1280, height: 800 });
-
-    // the message carries a "> " before every line of a multi-line selection
-    await page.getByRole("textbox", { name: "Message", exact: true }).fill("Done");
-    await page.getByRole("button", { name: /^Send message/ }).click();
-    await barOf(page).waitFor({ state: "detached" });
-    assert.ok(sent.some((text) => text === "> See docs\nThe link\n\n> line 5\n> line 6\n> line 7\n> line 8\n> line 9\nLines\n\n> line 35\nTrim this\n\n> line 38\nAnd this\n\nDone"), `sent: ${JSON.stringify(sent)}`);
-    console.log("PASS desktop: a multi-line selection is sent with a > before every line");
-    await page.context().close();
-    writeTranscript(ANSWER);
-  }
-
-  // ── a comment stored by the earlier version (on a whole block, no selection) still renders, edits and sends ──
-  {
-    // made the way a reader makes one now, then turned into the old shape: the part's own anchor and order, no quote, no range
-    const first = await open({ viewport: { width: 1280, height: 800 } });
-    await comment(first.page, first.page.locator("p.is-commentable", { hasText: INTRO }), "Intro paragraph", "Legacy words");
-    assert.equal((await storedOf(first.page)).length, 1);
-    await makeLegacy(first.page, storeKey, "Legacy words");
-    await first.page.reload();
-    const { page, sent } = first;
-    await page.locator(".conn-live").waitFor();
-    const intro = page.locator("p.is-commentable", { hasText: INTRO });
-    await page.locator("p.is-commented").waitFor();
-    const editor = sheetOf(page);
-    const popover = popoverOf(page);
-    assert.deepEqual(await noteTexts(page), ["Legacy words"], "the old comment shows as a bubble with its text");
-    assert.equal(await notesOf(page).first().getAttribute("aria-label"), null, "a comment on a whole part has its text as its name");
-    assert.equal(await staleOf(page).count(), 0);
-    assert.equal(await labelOf(page), "1 comment on the reply");
-    // a comment on a whole part highlights all of its text, and its tail stands a little in from where the text starts
-    assert.equal(await highlightMatchesNotes(page, "a comment on a whole part"), 1);
-    assert.deepEqual((await rangesOf(page, "block-comment")).texts, [INTRO], "the whole paragraph is highlighted");
-    await assertTail(notesOf(page).first(), intro, "text start", "a comment on a whole part");
-    await assertNoRail(page, "a comment on a whole part");
-    // with a mouse its editor is the popover: no quote, the text of the comment; the block is drawn only in the modal (a window of 768px or less)
-    await notesOf(page).first().click();
-    await popover.waitFor();
-    assert.equal(await popover.getByRole("textbox", { name: "Comment" }).inputValue(), "Legacy words");
-    assert.equal(await popover.locator(".comment-editor-block").count(), 0);
-    await popover.getByRole("button", { name: "Cancel", exact: true }).click();
-    await popover.waitFor({ state: "hidden" });
-    await page.setViewportSize({ width: 700, height: 800 });
-    await notesOf(page).first().click();
-    await editor.waitFor();
-    assert.match(await editor.locator(".comment-editor-block").innerText(), /Intro paragraph about the state\./);
-    assert.equal(await editor.getByRole("textbox", { name: "Comment" }).inputValue(), "Legacy words");
-    await editor.getByRole("button", { name: "Cancel", exact: true }).click();
-    await editor.waitFor({ state: "hidden" });
-    await page.setViewportSize({ width: 1280, height: 800 });
-    // a selection comment beside it in the same paragraph: the old one first, then the new
-    await comment(page, intro, "the state", "New words");
-    assert.deepEqual(await noteTexts(page), ["Legacy words", "New words"]);
-    assert.deepEqual(await noteNames(page), ["Legacy words", "Comment on “the state”: New words"]);
-    assert.equal(await highlightMatchesNotes(page, "an old and a new comment"), 2);
-    await page.getByRole("textbox", { name: "Message", exact: true }).fill("Thanks");
-    await page.getByRole("button", { name: /^Send message/ }).click();
-    await barOf(page).waitFor({ state: "detached" });
-    assert.ok(sent.some((text) => text === "> Intro paragraph about the state.\nLegacy words\n\n> the state\nNew words\n\nThanks"), `sent: ${JSON.stringify(sent)}`);
-    console.log("PASS desktop: a comment of the earlier version highlights its whole part, edits and sends beside a selection comment");
-    await page.context().close();
-  }
-
-  // ── a stored comment whose block this version cannot draw ──
-  {
-    const broken = { id: "broken", anchor: "x:0:0", order: [0, 0, 0], comment: "kept", block: { type: "blockquote", blocks: [{ type: "video" }] } };
-    const { page } = await open({ viewport: { width: 1280, height: 800 } }, { version: 1, comments: [broken] });
-    await walkOf(page).click(); // the part is not in the chat: the bar's stop opens its editor
-    const editor = page.locator(".comment-editor");
-    await editor.waitFor();
-    assert.equal(await editor.getByRole("textbox", { name: "Comment" }).inputValue(), "kept");
-    await page.locator(".conn-live").waitFor();
-    assert.deepEqual(errors.filter((message) => !/render failed/.test(message)), []);
-    console.log("PASS a block the editor cannot draw leaves the app and the comment usable");
-    await page.context().close();
   }
 } finally {
   await browser?.close();
@@ -1783,3 +1432,8 @@ try {
   if (workspace) await workspaceClose(workspace);
   rmSync(root, { recursive: true, force: true });
 }
+if (failed.length > 0) {
+  console.log(`FAIL ${failed.length} of ${wanted.length} cases: ${failed.join(", ")}`);
+  process.exit(1);
+}
+console.log(`PASS all ${wanted.length} cases: ${wanted.join(", ")}`);

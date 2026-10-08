@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import type { ReactNode, Ref } from "react";
 import { Minus, Plus } from "lucide-react";
 
 import "./SettingsControls.css";
@@ -33,9 +33,10 @@ export function SettingsRow({ label, description, htmlFor, wide = false, childre
   );
 }
 
-export function Toggle({ checked, label, onChange }: { checked: boolean; label: string; onChange: (checked: boolean) => void }) {
+/** A switch; `buttonRef` reaches its button, for an owner that gives the focus back to it (after a question it asked). */
+export function Toggle({ checked, label, onChange, buttonRef }: { checked: boolean; label: string; onChange: (checked: boolean) => void; buttonRef?: Ref<HTMLButtonElement> }) {
   return (
-    <button type="button" className="settings-toggle" role="switch" aria-checked={checked} aria-label={label} onClick={() => onChange(!checked)}>
+    <button ref={buttonRef} type="button" className="settings-toggle" role="switch" aria-checked={checked} aria-label={label} onClick={() => onChange(!checked)}>
       <span className="settings-toggle-thumb" />
     </button>
   );

@@ -1,56 +1,55 @@
 /* Comments on blocks of an agent's final reply (Markdown.tsx, lib/blockComments.ts): a comment is
-   made by selecting text in a reply, through the floating Comment button (ChatView.tsx), which
-   opens an inline form. The text a comment is on is highlighted (lib/commentHighlight.ts), and
-   under the part where it ends hangs a card per comment (CommentCard.tsx). Nothing is drawn
-   beside the text. A list item's own words are its `.markdown-item` (Markdown.tsx): its nested
-   blocks follow it. */
+   made by a mouse dragging over text in a reply (ChatView.tsx, useSelectionComment.ts), or by
+   clicking or tapping a block, which opens a popover (CommentPopover.tsx). The text a comment is on is
+   highlighted (lib/commentHighlight.ts), and a pin after its end opens it (CommentPins.tsx). A
+   list item's own words are its `.markdown-item` (Markdown.tsx): its nested blocks follow it. */
 
-/* the text of every comment shown: a tint and an accent underline, as a reviewer's marks in a
-   document (a comment on a whole part marks all its text). Translucent: on a code block, a table
-   or a blockquote their own fill shows through. The underline's thickness is a declaration of its
-   own, so a browser that does not take it in a highlight keeps the rest */
+/* the text of every comment shown: a faint accent tint (a comment on a whole part marks all its text), there to be
+   found and read through, never in the way of reading; its pin is what catches the eye. Translucent: on a code
+   block, a table or a blockquote their own fill shows through */
 ::highlight(block-comment) {
-  background-color: color-mix(in srgb, var(--accent) 18%, transparent);
-  text-decoration-line: underline;
-  text-decoration-color: var(--accent);
-  text-decoration-thickness: 2px;
+  background-color: color-mix(in srgb, var(--accent) 8%, transparent);
 }
 
-/* the selection a comment is being written on in the inline form (its field took the browser's
-   selection away): the stronger tint over the one above, together about 35% accent */
+/* the text a comment is being written on in the popover (its field took the browser's selection
+   away), as it will be marked */
 ::highlight(block-comment-pending) {
-  background-color: color-mix(in srgb, var(--accent) 20%, transparent);
+  background-color: color-mix(in srgb, var(--accent) 30%, transparent);
 }
 
-/* Focus mode: while a card's comment is up (the pointer over the card, the keyboard's focus in it,
-   or the composer's walk on it) lib/commentHighlight.ts sets `data-comment-focus` on that chat
-   view, and only on it, so two panes are independent. The other comments' marks fade to a hint
-   and the one that is up stands on its own: its own full underline and a strong tint, not the
-   base's. `.chat-view[…] ::highlight(name)` is valid: a highlight pseudo-element takes selectors
+/* Focus mode: while a pin's comment is up (the pointer over the pin, the keyboard's focus on it,
+   its popover open, or the composer's walk on it) lib/commentHighlight.ts sets `data-comment-focus` on that chat
+   view, and only on it, so two panes are independent. The other comments' marks go, and the one
+   that is up stands alone, in a clear tint of its own. `.chat-view[…] ::highlight(name)` is valid: a highlight pseudo-element takes selectors
    of its originating element, here the text's ancestors. A browser that cannot parse it drops
    only this rule and keeps the plain marks above. The active and current marks are painted over
-   the faded base, so their underline and tint are their own (the app sets the attribute only
-   while one of them has text to show) */
+   the base, now gone, so their tint is their own (the app sets the attribute only while one of
+   them has text to show) */
 .chat-view[data-comment-focus] ::highlight(block-comment) {
-  background-color: color-mix(in srgb, var(--accent) 6%, transparent);
-  text-decoration-color: color-mix(in srgb, var(--accent) 40%, transparent);
+  background-color: transparent;
 }
 
 ::highlight(block-comment-active),
 ::highlight(block-comment-current) {
-  background-color: color-mix(in srgb, var(--accent) 40%, transparent);
-  text-decoration-line: underline;
-  text-decoration-color: var(--accent);
-  text-decoration-thickness: 2px;
+  background-color: color-mix(in srgb, var(--accent) 30%, transparent);
 }
 
-/* the text being written stays as it is while a card is up (about 35%, as with no card), over the faded base: so more of
-   its own tint, and its full underline, which the base no longer draws */
+/* the text being written keeps its tint while a pin is up */
 .chat-view[data-comment-focus] ::highlight(block-comment-pending) {
   background-color: color-mix(in srgb, var(--accent) 30%, transparent);
-  text-decoration-line: underline;
-  text-decoration-color: var(--accent);
-  text-decoration-thickness: 2px;
+}
+
+/* a click on a block of a reply comments on it (ChatView.tsx): with a pointer that hovers, the block under it is
+   framed, while comments are on (`data-comments`) and no popover is open: quietly, a faint accent fill reaching 2px
+   past the block and a hairline edge of the accent at 55% around it, nearly square. Drawn by the background, a shadow and an outline, which take no room, so nothing moves */
+@media (hover: hover) {
+  .chat-view[data-comments]:not(:has(.comment-popover)) .is-commentable:hover {
+    border-radius: calc(var(--radius-sm) / 3);
+    background-color: color-mix(in srgb, var(--accent) 5%, transparent);
+    box-shadow: 0 0 0 calc(var(--space-1) / 2) color-mix(in srgb, var(--accent) 5%, transparent);
+    outline: var(--hairline) solid color-mix(in srgb, var(--accent) 55%, transparent);
+    outline-offset: calc(var(--space-1) / 2);
+  }
 }
 
 /* a code block clips and a table scrolls its own box: they sit on this host instead, which takes
@@ -72,277 +71,4 @@
 
 .markdown-list .markdown-block > .markdown-table-wrap {
   margin: 0;
-}
-
-/* A part's cards, one per comment in reading order, full width under it (and the inline form for
-   a new comment after them); the part's bottom margin goes below the last, so the part and its
-   cards read as one group */
-.block-comment-notes {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-2);
-  margin: var(--space-2) 0 var(--space-3) 0;
-}
-
-.is-commentable:has(+ .block-comment-notes) {
-  margin-bottom: 0;
-}
-
-/* in a list a paragraph or a table keeps only --space-1 below it (ChatView.css, above): so does
-   the group of it and its cards. Same specificity as the table rule above, after it */
-.markdown-list .is-commentable:has(+ .block-comment-notes) {
-  margin-bottom: 0;
-}
-
-.markdown-list p + .block-comment-notes,
-.markdown-list .markdown-block:has(> .markdown-table-wrap) + .block-comment-notes {
-  margin-bottom: var(--space-1);
-}
-
-/* a list item's cards are inside the item's own box (Markdown.tsx), before its nested blocks */
-.markdown-item > .block-comment-notes {
-  margin: var(--space-2) 0 0 0;
-}
-
-/* A comment's card, GitLab's pending draft note: a surface tinted with the accent and an edge of
-   it, so it reads as a comment of the reader's, not as part of the reply. Laid out as the form that
-   writes it (below), so an Edit swaps one for the other with nothing moving: the same radius, the
-   comment where the form's field has its text, then the same footer row, with the "Pending" badge
-   (and a file comment's reference) on the left and Edit and Delete where the form has Cancel and
-   Save. No author: the comment is the reader's own. The text it is on shows as the highlight
-   (lib/commentHighlight.ts). A group, not a button: its two buttons are the controls.
-   --radius-xl, not the composer's --radius-2xl: the box is a line or two tall and 24px would round
-   it into a pill */
-.block-comment-card {
-  display: flex;
-  flex-direction: column;
-  border: var(--hairline) solid color-mix(in srgb, var(--accent) 35%, var(--border));
-  border-radius: var(--radius-xl);
-  background: color-mix(in srgb, var(--accent) 8%, var(--bg-elevated));
-  color: var(--text);
-  font-size: var(--fs-sm);
-  line-height: var(--lh-base);
-  transition: border-color var(--dur-fast) var(--ease-out);
-}
-
-/* the comment waits for the next message: the accent, as other things that are yours and unsent;
-   a stronger tint than the card's, so it stands on it */
-.block-comment-badge {
-  color: var(--accent);
-  background: color-mix(in srgb, var(--accent) 22%, transparent);
-}
-
-/* Edit and Delete sit on the right of the footer, at the control height of the form's Save, so the
-   row keeps its height when the form takes the card's place; a finger gets the full touch target.
-   After .icon-button (styles.css): same specificity, so the order decides */
-.block-comment-action {
-  width: var(--control-h);
-  height: var(--control-h);
-  color: var(--text-dim);
-}
-
-@media (hover: hover) {
-  .block-comment-action:hover:not(:disabled) {
-    color: var(--text-strong);
-  }
-}
-
-/* the comment, as written: its lines and long words kept, plain text; set as the form's field sets
-   it (below), its padding, size and leading, so the text stays where it is when Edit opens the form */
-.block-comment-text {
-  padding: var(--space-3) var(--space-4) var(--space-1);
-  font-size: var(--fs-input);
-  line-height: var(--lh-base);
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-}
-
-@media (hover: hover) and (pointer: fine) {
-  .block-comment-text {
-    font-size: var(--fs-chat);
-    line-height: var(--lh-code);
-  }
-}
-
-/* The card that is up (the pointer over it, the keyboard's focus in it; its comment's text comes up
-   too, see Focus mode above) has an accent edge, as the card the walk stands on has, so the card
-   and its text pair. The form is no card to point at: it keeps its own edge. Not on a touch
-   screen, where a tap leaves :hover on */
-@media (hover: hover) {
-  .block-comment-card:not(.is-editing):hover {
-    border-color: var(--accent);
-  }
-}
-
-/* the keyboard's: only a focus the keyboard (or the walk) put there, as `focusOn` in CommentCard.tsx */
-.block-comment-card:not(.is-editing):focus-visible {
-  border-color: var(--accent);
-}
-
-/* its own rule: a browser without :has() drops only this one */
-.block-comment-card:not(.is-editing):has(:focus-visible) {
-  border-color: var(--accent);
-}
-
-/* The card the walk from the composer stands on (Composer.tsx sets `is-current` by hand, one at
-   a time, until the next step, a click elsewhere or Escape, which also brings the focus back to
-   the walk control): an accent border, the same as hover and the keyboard's focus; its comment's
-   text takes the current highlight (above) */
-.block-comment-card.is-current {
-  border-color: var(--accent);
-}
-
-/* The form is the chat's message box in the column's scale (Composer.css `.composer-surface`): one
-   surface, its fill, hairline, shadow and focus edge, with the field borderless inside it and the
-   controls in a row under the text, on the right. Not yet a comment, so untinted; its shape is the
-   card's (above) */
-.block-comment-card.is-editing {
-  border-color: var(--border);
-  background: var(--bg-elevated);
-  box-shadow: var(--shadow-card);
-  transition:
-    border-color var(--dur-fast) var(--ease-out),
-    box-shadow var(--dur-fast) var(--ease-out);
-}
-
-/* focus is the surface's, as the composer's: the accent edge on the rounded box, not a ring on the
-   field (the field's own outline is off below) */
-.block-comment-card.is-editing:focus-within {
-  border-color: var(--accent);
-  box-shadow: var(--shadow-card), 0 0 0 var(--hairline) var(--accent-tint);
-}
-
-/* the field inside the surface: no frame, fill or ring of its own (the modal's keeps all three,
-   CommentEditor.css), the composer's text padding, and its size with a mouse. It grows with the
-   comment (CommentDraft.tsx) up to four lines, then scrolls */
-.block-comment-card.is-editing .comment-editor-field {
-  max-height: calc(4lh + var(--space-3) + var(--space-1));
-  padding: var(--space-3) var(--space-4) var(--space-1);
-  background: transparent;
-  border: 0;
-  border-radius: 0;
-  outline: 0;
-}
-
-@media (hover: hover) and (pointer: fine) {
-  .block-comment-card.is-editing .comment-editor-field {
-    font-size: var(--fs-chat);
-    line-height: var(--lh-code);
-  }
-}
-
-.block-comment-card.is-editing .comment-editor-field::placeholder {
-  color: var(--text-dim);
-}
-
-/* the footer, the card's and the form's: what the comment is (the badge, the file and lines) on the
-   left; on the right the card's Edit and Delete, the form's Cancel as text and Save as the round
-   accent button, as the composer's */
-.block-comment-actions {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: var(--space-2);
-  padding: var(--space-1) var(--space-2) var(--space-2);
-}
-
-/* The file and lines a comment is on (CommentCard.tsx `FileReferenceLabel`): quiet, small, one line.
-   In the footer's left side (`.block-comment-meta`), after the card's badge; the buttons stay right.
-   A long name is cut inside its stem, as the file viewer's title (FileViewer.css `.file-viewer-stem`):
-   the extension and the lines never give way */
-.comment-file-reference {
-  display: flex;
-  min-width: 0;
-  color: var(--text-dim);
-  font-size: var(--fs-xs);
-  white-space: nowrap;
-}
-
-.comment-file-stem {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.comment-file-rest {
-  flex: none;
-}
-
-/* the footer's left side: lined up with the text above it (the text is inset by --space-4, the row by --space-2) */
-.block-comment-meta {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  min-width: 0;
-  margin-inline-end: auto;
-  padding-inline-start: var(--space-2);
-}
-
-/* Save: the composer's send button by its tokens (Composer.css `.composer-send`), at the control height */
-.block-comment-save {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  flex: none;
-  width: var(--control-h);
-  height: var(--control-h);
-  padding: 0;
-  background: var(--primary);
-  border: var(--hairline) solid var(--primary);
-  border-radius: var(--radius-pill);
-  color: var(--primary-text);
-  cursor: pointer;
-  transition:
-    background-color var(--dur-fast) var(--ease-out),
-    border-color var(--dur-fast) var(--ease-out);
-}
-
-.block-comment-save svg {
-  width: var(--icon-size);
-  height: var(--icon-size);
-}
-
-/* a new comment with nothing in it: nothing to save */
-.block-comment-save:disabled {
-  opacity: 0.7;
-  cursor: default;
-}
-
-@media (hover: hover) {
-  .block-comment-save:hover:not(:disabled) {
-    background: var(--primary-hover);
-    border-color: var(--primary-hover);
-  }
-}
-
-/* The Comment button over text selected in a final reply (ChatView.tsx): the app's small floating
-   control, a pill on the elevated surface with the card shadow. Placed by script inside the
-   scrolling view, so it scrolls with the text. A press on it keeps the selection; its own label is
-   not selectable */
-.comment-selection {
-  position: absolute;
-  z-index: var(--z-popover);
-  border-radius: var(--radius-pill);
-  box-shadow: var(--shadow-card);
-  font-size: var(--fs-sm);
-  user-select: none;
-  -webkit-user-select: none;
-  -webkit-touch-callout: none;
-}
-
-@media (pointer: coarse) {
-  .comment-selection {
-    height: var(--touch-target);
-  }
-
-  /* fingers: the card's buttons and the form's reach the touch target (the header grows with them) */
-  .block-comment-action,
-  .block-comment-save {
-    width: var(--touch-target);
-    height: var(--touch-target);
-  }
-
-  .block-comment-actions .btn {
-    height: var(--touch-target);
-  }
 }

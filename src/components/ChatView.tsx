@@ -8,11 +8,8 @@ import {
 import "./ChatView.css";
 
 import { AgentMark } from "./AgentMark.tsx";
-import { Markdown, OpenCommentContext } from "./Markdown.tsx";
-import { CommentEditor } from "./CommentEditor.tsx";
-import { CommentEditContext } from "./CommentCard.tsx";
-import { SelectionCommentButton } from "./SelectionCommentButton.tsx";
-import { useCommentForm } from "./useCommentForm.ts";
+import { Markdown } from "./Markdown.tsx";
+import { useCommentSurface, type SurfaceComment } from "./useCommentSurface.tsx";
 import { PromptCard } from "./PromptCard.tsx";
 import { RenderBoundary } from "./RenderBoundary.tsx";
 import { turnRevision } from "../lib/turnRevision.ts";
@@ -34,9 +31,9 @@ import { OpenFileContext } from "../lib/filePaths.ts";
 import { patchText } from "../../shared/patch.ts";
 import { toolVerb } from "../lib/toolVerbs.ts";
 import { machinePath, paneStorageId } from "../../shared/machines.ts";
-import { BlockCommentContext, blockComments, replyPart, selectionTarget, type CommentTarget, type ReplyPart } from "../lib/blockComments.ts";
-import { paneComposer, selectionComment, type SelectionComment } from "../lib/commentSelection.ts";
-import { showPendingComment, watchCommentHighlights } from "../lib/commentHighlight.ts";
+import { BlockCommentContext, blockComments, blockContent, commentTarget, isReplyComment, quoteExcerpt, replyPart, selectionTarget, useBlockComments, type CommentTarget, type ReplyPart } from "../lib/blockComments.ts";
+import { commentPartOf, paneComposer, pointOnText, selectionComment, type SelectionComment } from "../lib/commentSelection.ts";
+import { draftRanges, showPendingComment, watchCommentHighlights } from "../lib/commentHighlight.ts";
 import { fileUrl } from "../lib/api.ts";
 import { useMachineId } from "../lib/machineContext.tsx";
 import { lineDiff } from "../lib/diff.ts";
@@ -46,6 +43,8 @@ import { formatElapsed, taskCallItems, taskResultMarkdown } from "../lib/omoTask
 /** The pane this chat shows, for what its rows fetch on request (a tool call's whole output). */
 const ChatPaneContext = createContext<string | null>(null);
 const ChatHistoryContext = createContext("");
+/** Bound once: a class method handed on loses its `this`. */
+const persistReplyComment = blockComments.save.bind(blockComments);
 import type { TypedAnswer } from "../lib/promptAnswer.ts";
 import type { AgentStatus, ConversationMetadata, ConversationPart, ConversationTurn, InteractivePrompt, OmoTaskResult } from "../../shared/protocol.ts";
 import { chatIsBlank, type ChatRead } from "../lib/greeting.ts";
@@ -548,6 +547,7 @@ function FallbackTurn({ paneId, message }: { paneId: string; message: Transcript
 export const ChatView = memo(function ChatView({ paneId, refreshKey, sentKey = 0, connected, ended, agent, agentStatus, onMetadata, onRead, greeted = false, onPrompt, onSuggestion, promptRefreshKey = 0, pendingAnswer = null, onPendingAnswerDone, promptDock = null, onPromptAnswered }: ChatViewProps) {
   const t = useT();
   const { fetchPaneConversation, fetchPanePromptState, fetchPaneTranscript } = useMachineApi();
+  const machineId = useMachineId();
   const { settings } = useSettings();
   // polls pause while the page is hidden and pick up at once when it is back
   const visible = usePageVisible();
@@ -851,12 +851,14 @@ export const ChatView = memo(function ChatView({ paneId, refreshKey, sentKey = 0
     const node = scroller.current;
     if (node !== null && stickToBottom.current) node.scrollTo({ top: node.scrollHeight, behavior: "instant" });
   }, [faces]);
-  // the text of each selection comment shown here is highlighted, this view's ranges only (lib/commentHighlight.ts)
+  // the text of each selection comment shown here is highlighted, this view's ranges only (lib/commentHighlight.ts); with
+  // comments turned off none is, even one another tab that still has them on stores meanwhile
+  const commentsOn = settings.comments;
   useEffect(() => {
     const node = scroller.current;
     const transcript = node?.firstElementChild;
-    return node === null || transcript === null || transcript === undefined ? undefined : watchCommentHighlights(node, transcript);
-  }, []);
+    return !commentsOn || node === null || transcript === null || transcript === undefined ? undefined : watchCommentHighlights(node, transcript);
+  }, [commentsOn]);
   // a tap or a drag down the transcript puts a phone's keyboard away to read (lib/keyboard.ts)
   useEffect(() => {
     const node = scroller.current;
@@ -892,30 +894,63 @@ export const ChatView = memo(function ChatView({ paneId, refreshKey, sentKey = 0
   // the chat left the screen (another lens): nothing is known of it until it is read again
   useLayoutEffect(() => () => onRead?.(paneId, null), [onRead, paneId]);
 
-  // One comment form for the chat, opened by a selection's Comment button or a comment's Edit
-  // button: the part where the comment's card goes or is draws it inline (`CommentEditContext`,
-  // Markdown.tsx), on a phone as on a desktop. Where no part draws it (its reply left the chat,
-  // turned live again) the modal takes over with what was typed. The agent may start again while a
-  // comment is written, and the reply turn live: the form and what is typed in it stay until it is
-  // saved or closed (`useCommentForm`)
-  const { editing, open: openForm, save: saveComment, close: closeComment, edit, typed } = useCommentForm<CommentTarget>({ view: scroller, persist: blockComments.save.bind(blockComments) });
-  const openComment = useCallback((owner: string, target: CommentTarget, fromSelection = false) => {
-    openForm(owner, target, blockComments.get(owner, target)?.comment ?? "", fromSelection);
-  }, [openForm]);
-  const commentSelection = useCallback((found: ChatSelection) => {
-    openComment(found.owner, selectionTarget(found.target, found.text, found.start, found.end, found.until), true);
-  }, [openComment]);
-  // a new comment in the form: the field took the browser's selection, so the selected text
-  // shows as a highlight until the comment is saved or given up (lib/commentHighlight.ts)
-  const pending = editing !== null && !editing.modal && editing.selection && editing.target.quote !== undefined ? editing : null;
-  useLayoutEffect(() => {
-    const node = scroller.current;
-    if (pending === null || node === null) return;
-    showPendingComment(node, { owner: pending.owner, target: pending.target });
-    return () => showPendingComment(node, null);
-  }, [pending]);
+  // The chat's comments (`useCommentSurface`): a pin opens its comment to edit, its field filled with it, a block clicked
+  // or tapped or a mouse's drag over text a new one to write, or the block's or selection's comment where it has one.
+  // The popover is drawn beside its pin, or as a dialog where it has none and on a phone. The agent may start again
+  // while a comment is written, and the reply turn live: the popover and what is typed in it stay until it is saved or
+  // closed. A pin for each of this pane's reply comments whose text is drawn, named as the comment; none while comments
+  // are off
+  const owner = paneStorageId(machineId, paneId);
+  const stored = useBlockComments(owner);
+  const surfaceComments = useMemo<SurfaceComment<CommentTarget>[]>(() => stored.filter(isReplyComment).map((comment) => ({
+    id: comment.id,
+    anchor: comment.anchor,
+    label: t("Comment on “{quote}”: {comment}", { quote: quoteExcerpt(comment.quote ?? blockContent(comment.block)), comment: comment.comment }),
+    ...(comment.point === undefined ? {} : { point: comment.point }),
+    target: commentTarget(comment),
+    comment: comment.comment,
+  })), [stored, t]);
+  const commentSurface = useCommentSurface<CommentTarget, SelectionComment>({
+    surface: scroller,
+    enabled: settings.comments,
+    persist: persistReplyComment,
+    owner,
+    comments: surfaceComments,
+    anchorOf: (target) => target.anchor,
+    // the block's or selection's comment where it has one: it keeps its pin where it was
+    existing: (targetOwner, target) => {
+      const found = blockComments.get(targetOwner, target);
+      return found === undefined ? null : { id: found.id, comment: found.comment, target };
+    },
+    // a new comment's pin goes where the block was clicked or the drag let go, on the text its highlight will cover (`draftRanges`)
+    pointed: (targetOwner, target, at) => {
+      const node = scroller.current;
+      const point = node === null ? undefined : pointOnText(draftRanges(node, targetOwner, target), at);
+      return point === undefined ? target : { ...target, point };
+    },
+    // a click on a reply block comments on all of it, or on the part of it that was clicked
+    targetAtClick: (element) => {
+      const part = element.closest(".is-commentable");
+      const found = part === null ? undefined : commentPartOf(part);
+      return found === undefined ? null : { owner: found.owner, target: found.target };
+    },
+    selection: {
+      measure: selectionComment,
+      target: (found) => ({ owner: found.owner, target: selectionTarget(found.target, found.text, found.start, found.end, found.until) }),
+    },
+    describe: ({ target }) => ({ quote: target.quote ? { text: target.quote.text } : { block: target.block } }),
+    // a Delete with no pin left, or a comment whose pin is gone, gives the focus to the composer
+    focusFallback: paneComposer,
+    // its text shows as the comment's will, a selection's (the field took the browser's selection away) or a whole block's
+    showPending: (targetOwner, target) => {
+      const node = scroller.current;
+      if (node === null) return () => {};
+      showPendingComment(node, { owner: targetOwner, target });
+      return () => showPendingComment(node, null);
+    },
+  });
 
-  return <ChatPaneContext.Provider value={paneId}><ChatHistoryContext.Provider value={historyId ?? ""}><OpenCommentContext.Provider value={openComment}><CommentEditContext.Provider value={edit}><div className="chat-view" data-comment-surface="" ref={scroller} onScroll={onScroll} role="log" aria-live="polite" aria-label={t("conversation of {pane}", { pane: paneId })}>
+  return <ChatPaneContext.Provider value={paneId}><ChatHistoryContext.Provider value={historyId ?? ""}><div className="chat-view" {...commentSurface.surfaceProps} ref={scroller} onScroll={onScroll} role="log" aria-live="polite" aria-label={t("conversation of {pane}", { pane: paneId })}>
     <div className="chat-transcript">
       {/* the conversation below is not all the file holds: a /tree left these behind, and pi moved
           its leaf without writing anything, so nothing here could say they were ever there. First
@@ -955,19 +990,11 @@ export const ChatView = memo(function ChatView({ paneId, refreshKey, sentKey = 0
       {loaded && empty && error === null && prompt === null && !(greeted && blank) && <div className="chat-empty"><AgentMark agent={agent ?? "agent"} size={32} /><p>{t("No conversation yet — say something below")}</p></div>}
       {ended && <p className="chat-endcap">{t("terminal ended")}</p>}
     </div>
-    <SelectionCommentButton view={scroller} measure={measureSelection} onComment={commentSelection} />
+    {/* after the transcript: the pins come after the reply's own controls in the tab order, in reading order */}
+    {commentSurface.overlay}
     {newMessages ? <button type="button" className="btn chat-new-messages" onClick={scrollToBottom}>{t("New messages")} <ArrowDown aria-hidden="true" /></button>
       : away && <button type="button" className="btn chat-new-messages is-icon" aria-label={t("Jump to latest")} title={t("Jump to latest")} onClick={scrollToBottom}><ArrowDown aria-hidden="true" /></button>}
   </div>
-  {editing !== null && editing.modal && <CommentEditor
-    block={editing.target.block}
-    quote={editing.target.quote?.text}
-    initialComment={editing.initialComment}
-    startValue={typed()}
-    onSave={saveComment}
-    onClose={closeComment}
-    fallback={() => paneComposer(scroller.current)}
-  />}
   {/* The prompt card is not part of the transcript: it is drawn on the composer's column, over the
       input card, where PaneTerminal keeps its place. The prompt itself (its poll, the answer, the
       re-read) stays here. */}
@@ -980,19 +1007,6 @@ export const ChatView = memo(function ChatView({ paneId, refreshKey, sentKey = 0
       if (prompt.steps) setPromptPollKey((key) => key + 1);
       onPendingAnswerDone?.(paneId, prompt.id);
     }} />, promptDock)}
-  </CommentEditContext.Provider></OpenCommentContext.Provider></ChatHistoryContext.Provider></ChatPaneContext.Provider>;
+  </ChatHistoryContext.Provider></ChatPaneContext.Provider>;
 });
 
-/** A selection the chat can comment on, keyed by its text (`SelectionCommentButton`). */
-type ChatSelection = SelectionComment & { key: string };
-
-/**
- * The comment the current selection makes in the chat `view` (`selectionComment`), with the key
- * that names the same text selected: its part, offsets and text, and where it ends when it runs on.
- */
-function measureSelection(selection: Selection | null, view: Element): ChatSelection | null {
-  const found = selectionComment(selection, view);
-  if (found === null) return null;
-  const key = JSON.stringify([found.target.anchor, found.start, found.end, found.text, found.until?.target.anchor ?? null, found.until?.end ?? null]);
-  return { ...found, key };
-}

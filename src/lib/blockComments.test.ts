@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import { parseMarkdown, type ListBlock, type MarkdownBlock } from "./markdown.ts";
-import { BLOCK_COMMENTS_PREFIX, BlockCommentStore, blockContent, blockTarget, commentCanSave, commentTarget, commentTyped, composeWithComments, draftComment, formPlace, hasQuotedLine, isBlockComment, isMarkdownBlock, isPaneComment, isReplyComment, noteHost, notesOnPart, outgoingMessage, partSegments, quoteExcerpt, quoteFor, replyPart, replyParts, SELECTION_QUOTE_MAX, selectionTarget, textRange, type BlockComment, type CommentTarget } from "./blockComments.ts";
+import { BLOCK_COMMENTS_PREFIX, BlockCommentStore, blockContent, blockTarget, commentTarget, composeWithComments, draftComment, hasQuotedLine, isBlockComment, isMarkdownBlock, isPaneComment, isReplyComment, outgoingMessage, partSegments, quoteExcerpt, quoteFor, replyPart, replyParts, SELECTION_QUOTE_MAX, selectionTarget, textRange, type BlockComment, type CommentTarget } from "./blockComments.ts";
 import { fileAnchor, type FileComment, type FileTarget } from "./fileComments.ts";
 
 const TS = "2026-10-03T10:12:00Z";
@@ -149,7 +149,7 @@ describe("isMarkdownBlock", () => {
 /** a store on an in-memory storage, with the map behind it to inspect */
 function fixture() {
   const data = new Map<string, string>();
-  const storage = { getItem: (key: string) => data.get(key) ?? null, setItem: (key: string, value: string) => { data.set(key, value); }, removeItem: (key: string) => { data.delete(key); } };
+  const storage = { getItem: (key: string) => data.get(key) ?? null, setItem: (key: string, value: string) => { data.set(key, value); }, removeItem: (key: string) => { data.delete(key); }, key: (i: number) => [...data.keys()][i] ?? null, get length() { return data.size; } };
   return { data, storage, store: new BlockCommentStore(() => storage) };
 }
 const KEY = `${BLOCK_COMMENTS_PREFIX}o`;
@@ -157,6 +157,110 @@ const KEY = `${BLOCK_COMMENTS_PREFIX}o`;
 const replies = (store: BlockCommentStore): BlockComment[] => store.list("o").filter(isReplyComment);
 /** the target for the block `text` parses to, at `path` in `reply` */
 const at = (path: number[], text: string) => blockTarget(reply, path, first(text));
+
+describe("clearing every comment", () => {
+  it("counts the comments of every pane, also one only another tab wrote", () => {
+    const { store, data } = fixture();
+    store.save("o", at([0], "first"), "one");
+    store.save("o", at([1], "second"), "two");
+    store.save("p", at([0], "first"), "three");
+    const other = fixture();
+    other.store.save("q", at([0], "first"), "four");
+    data.set(`${BLOCK_COMMENTS_PREFIX}q`, other.data.get(`${BLOCK_COMMENTS_PREFIX}q`)!);
+    expect(store.countAll()).toBe(4);
+  });
+  it("removes every comments key and nothing else", () => {
+    const { store, data } = fixture();
+    store.save("o", at([0], "first"), "one");
+    data.set("herdr-web-ui:settings", "{}");
+    store.clearAll();
+    expect([...data.keys()]).toEqual(["herdr-web-ui:settings"]);
+  });
+  it("empties the cache and tells subscribers", () => {
+    const { store } = fixture();
+    store.save("o", at([0], "first"), "one");
+    let told = 0;
+    store.subscribe(() => { told++; });
+    store.clearAll();
+    expect(store.list("o")).toEqual([]);
+    expect(store.countAll()).toBe(0);
+    expect(told).toBe(1);
+  });
+  it("still clears what only memory holds when storage throws", () => {
+    const refuse = () => { throw new Error("blocked"); };
+    const store = new BlockCommentStore(() => ({ getItem: () => null, setItem: refuse, removeItem: refuse, key: refuse, get length(): number { return refuse(); } }));
+    store.save("o", at([0], "first"), "one");
+    expect(store.countAll()).toBe(1);
+    store.clearAll();
+    expect(store.list("o")).toEqual([]);
+    expect(store.isUnsaved("o")).toBe(false);
+    expect(store.countAll()).toBe(0);
+  });
+});
+
+describe("BlockCommentStore.setEnabled (the Comments setting)", () => {
+  it("lists none while comments are off, whatever is stored, and every one again once they are on", () => {
+    const { store } = fixture();
+    store.save("o", at([0], "first"), "one");
+    store.saveFile("o", { path: "/repo/a.ts", label: "a.ts", view: "code", lines: [1, 1], source: ["x"], quoteLines: ["x"] }, "two");
+    const on = store.list("o");
+    expect(on).toHaveLength(2);
+    store.setEnabled(false);
+    expect(store.list("o")).toEqual([]);
+    // the same empty list every time: a `useSyncExternalStore` reader does not re-render for nothing
+    expect(store.list("o")).toBe(store.list("p"));
+    expect(store.get("o", at([0], "first"))).toBeUndefined();
+    store.setEnabled(true);
+    expect(store.list("o")).toBe(on);
+    expect(store.get("o", at([0], "first"))?.comment).toBe("one");
+  });
+  it("leaves storage untouched while off, and sends none: there are none to hold back either", () => {
+    const { store, data } = fixture();
+    store.save("o", at([0], "first"), "one");
+    const raw = data.get(KEY);
+    store.setEnabled(false);
+    expect(data.get(KEY)).toBe(raw);
+    expect(outgoingMessage(store.list("o"), "/compact")).toEqual({ message: "/compact", sent: [], sentIds: [], commentsHeld: null, tooLong: false, sendable: true });
+    expect(outgoingMessage(store.list("o"), "  ").sendable).toBe(false);
+  });
+  it("still counts and clears every stored comment while off", () => {
+    const { store, data } = fixture();
+    store.save("o", at([0], "first"), "one");
+    store.save("p", at([0], "first"), "two");
+    store.setEnabled(false);
+    expect(store.countAll()).toBe(2);
+    store.clearAll();
+    expect(data.size).toBe(0);
+    store.setEnabled(true);
+    expect(store.list("o")).toEqual([]);
+  });
+  it("keeps what another tab writes while off, and the write paths work on what is stored", () => {
+    const { store, storage } = fixture();
+    store.save("o", at([0], "first"), "one");
+    store.setEnabled(false);
+    const other = new BlockCommentStore(() => storage);
+    other.save("o", at([1], "second"), "two");
+    store.refresh("o");
+    expect(store.list("o")).toEqual([]);
+    expect(store.countAll()).toBe(2);
+    store.save("o", at([2], "third"), "three");
+    store.setEnabled(true);
+    expect(store.list("o").map((c) => c.comment).sort()).toEqual(["one", "three", "two"]);
+  });
+  it("tells subscribers once per change, and not for the value it already has", () => {
+    const { store } = fixture();
+    let told = 0;
+    store.subscribe(() => { told++; });
+    store.setEnabled(true);
+    expect(told).toBe(0);
+    store.setEnabled(false);
+    expect(told).toBe(1);
+    store.setEnabled(false);
+    expect(told).toBe(1);
+    store.setEnabled(true);
+    expect(told).toBe(2);
+  });
+});
 
 describe("BlockCommentStore", () => {
   it("keeps one comment per anchor: a second save edits it", () => {
@@ -254,7 +358,7 @@ describe("BlockCommentStore", () => {
   });
 
   it("keeps a comment in memory when storage refuses it", () => {
-    const store = new BlockCommentStore(() => ({ getItem: () => null, setItem: () => { throw new Error("quota"); }, removeItem: () => {} }));
+    const store = new BlockCommentStore(() => ({ getItem: () => null, setItem: () => { throw new Error("quota"); }, removeItem: () => {}, key: () => null, length: 0 }));
     store.save("o", at([0], "first"), "one");
     expect(store.list("o").map((c) => c.comment)).toEqual(["one"]);
     expect(store.isUnsaved("o")).toBe(true);
@@ -271,6 +375,63 @@ describe("BlockCommentStore", () => {
     store.refresh("o");
     expect(updates).toBe(1);
     expect(store.list("o").map((c) => c.comment)).toEqual(["from the other tab"]);
+  });
+});
+
+describe("a comment's point", () => {
+  const point = { x: 0.25, y: 0.5 };
+  it("is stored with a comment made by a click, and is no part of its anchor", () => {
+    const { store, storage } = fixture();
+    store.save("o", { ...at([0], "first"), point }, "one");
+    const [saved] = replies(store);
+    expect(saved).toMatchObject({ anchor: at([0], "first").anchor, point });
+    expect(new BlockCommentStore(() => storage).list("o")).toEqual([saved!]);
+  });
+  it("finds the comment by its block wherever the block is clicked, and an edit keeps the first point", () => {
+    const { store } = fixture();
+    store.save("o", { ...at([0], "first"), point }, "one");
+    expect(store.get("o", { ...at([0], "first"), point: { x: 0.9, y: 0.1 } })?.comment).toBe("one");
+    store.save("o", { ...at([0], "first"), point: { x: 0.9, y: 0.1 } }, "two");
+    store.save("o", commentTarget(replies(store)[0]!), "three");
+    expect(replies(store).map((c) => [c.comment, c.point])).toEqual([["three", point]]);
+  });
+  it("is given to an edit of a stored comment, and to the draft being written", () => {
+    const { store } = fixture();
+    store.save("o", { ...at([0], "first"), point }, "one");
+    expect(commentTarget(replies(store)[0]!).point).toEqual(point);
+    expect(draftComment({ ...at([0], "first"), point }).point).toEqual(point);
+  });
+  it("is none for a comment without one, an edit adding none", () => {
+    const { store } = fixture();
+    store.save("o", at([0], "first"), "one");
+    store.save("o", { ...at([0], "first"), point }, "two");
+    expect(replies(store)[0]!.comment).toBe("two");
+    expect("point" in replies(store)[0]!).toBe(false);
+  });
+  it("leaves the message sent alone", () => {
+    const plain = comment("a", [0], "first", "note");
+    expect(composeWithComments([{ ...plain, point }], "text")).toBe(composeWithComments([plain], "text"));
+  });
+});
+
+describe("isBlockComment with a point", () => {
+  const base = comment("a", [0], "first", "note");
+  it("keeps a valid point", () => {
+    const entry = { ...base, point: { x: 1.5, y: -0.2 } };
+    expect(isBlockComment(entry)).toBe(true);
+    expect(entry.point).toEqual({ x: 1.5, y: -0.2 });
+  });
+  it("drops a point that is not one, and keeps the comment", () => {
+    for (const bad of [null, "0.5", [0.5, 0.5], { x: 0.5 }, { x: Number.NaN, y: 0 }, { x: 9, y: 0.5 }, { x: 0.5, y: 3 }, { x: -2, y: 0 }]) {
+      const entry: Record<string, unknown> = { ...base, point: bad };
+      expect(isBlockComment(entry)).toBe(true);
+      expect("point" in entry).toBe(false);
+    }
+  });
+  it("reads a stored comment with a broken point without its point", () => {
+    const { data, storage } = fixture();
+    data.set(KEY, JSON.stringify({ version: 1, comments: [{ ...base, point: { x: "far", y: 0 } }] }));
+    expect(new BlockCommentStore(() => storage).list("o")).toEqual([base]);
   });
 });
 
@@ -557,15 +718,12 @@ describe("selections across parts", () => {
     expect(selectionTarget(alpha, "beta", 6, 10, { target: alpha, end: 10 })).toEqual(selectionTarget(alpha, "beta", 6, 10));
   });
 
-  it("saves one comment, hangs its note under its last part and reads it back from storage", () => {
+  it("saves one comment and reads it back from storage", () => {
     const { store, storage } = fixture();
     store.save("o", spanning, "across");
     const [saved] = store.list("o");
     expect(saved).toMatchObject({ anchor: spanning.anchor, quote: "beta\none\ntwo\nOmega", range: [6, 10], until: { anchor: omega.anchor, block: omega.block, end: 5 }, order: [TIME, 0, 0, -1, 6] });
     expect(new BlockCommentStore(() => storage).list("o")).toEqual(store.list("o"));
-    // its note hangs under the part it ends in
-    expect(notesOnPart(store.list("o"), omega, parts).map((c) => c.comment)).toEqual(["across"]);
-    expect(notesOnPart(store.list("o"), alpha, parts)).toEqual([]);
     expect(store.get("o", spanning)?.comment).toBe("across");
   });
 
@@ -586,7 +744,6 @@ describe("selections across parts", () => {
     store.save("o", { ...changed, anchor: spanning.anchor }, "new");
     expect(store.list("o").map((c) => c.comment)).toEqual(["old", "new"]);
     expect(store.list("o").map((c) => c.anchor.includes("~"))).toEqual([true, false]);
-    expect(notesOnPart(store.list("o"), omega, parts)).toEqual([]);
   });
 
   it("keeps a comment apart whose last part was replaced under the same anchor: get has none, save moves the old one off", () => {
@@ -633,21 +790,11 @@ describe("selections across parts", () => {
     expect(outgoingMessage([last, item, after, spanned, before, whole], "").sentIds).toEqual(["w", "b", "s", "a", "i", "l"]);
   });
 
-  describe("notes and segments", () => {
+  describe("segments", () => {
     const legacy = stored("w", "whole", alpha);
     const single = stored("b", "before", selectionTarget(omega, "Omega", 0, 5));
     const own = stored("t", "two", two);
     const all = [single, own, spanned, legacy];
-
-    it("hangs a spanning comment's note under the part where the selection ends", () => {
-      expect(noteHost(spanned, parts)).toBe(omega);
-      expect(noteHost(legacy, parts)).toBe(alpha);
-      expect(noteHost(single, parts)).toBe(omega);
-      expect(notesOnPart(all, omega, parts).map((c) => c.id)).toEqual(["s", "b"]);
-      expect(notesOnPart(all, alpha, parts).map((c) => c.id)).toEqual(["w"]);
-      expect(notesOnPart(all, one, parts)).toEqual([]);
-      expect(notesOnPart(all, two, parts).map((c) => c.id)).toEqual(["t"]);
-    });
 
     it("gives every part a comment touches its segment: from the start, whole parts between, to the end", () => {
       const segments = (target: CommentTarget) => partSegments(all, target, parts).map((s) => [s.comment.id, s.start, s.end]);
@@ -658,33 +805,28 @@ describe("selections across parts", () => {
       expect(segments(omega)).toEqual([["s", 0, 5], ["b", 0, 5]]);
     });
 
-    it("hangs the note under the first part, and clamps the segments to it, when the last part is not rendered", () => {
+    it("clamps the segments to the first part when the last part is not rendered", () => {
       const shorter = replyParts(reply, parseMarkdown("Alpha beta\n\n- one\n- two"));
       const shortAlpha = shorter.get(alpha.anchor)!.target;
-      expect(noteHost(spanned, shorter)).toBe(shortAlpha);
-      expect(notesOnPart([spanned], shortAlpha, shorter).map((c) => c.id)).toEqual(["s"]);
       expect(partSegments([spanned], shortAlpha, shorter).map((s) => [s.start, s.end])).toEqual([[6, 10]]);
       expect(partSegments([spanned], shorter.get(one.anchor)!.target, shorter)).toEqual([]);
     });
 
     it("does the same when the last part's block was replaced", () => {
       const changed = replyParts(reply, parseMarkdown("Alpha beta\n\n- one\n- two\n\n---\n\nSomething else"));
-      const changedAlpha = changed.get(alpha.anchor)!.target;
-      expect(noteHost(spanned, changed)).toBe(changedAlpha);
-      expect(notesOnPart([spanned], changed.get(omega.anchor)!.target, changed)).toEqual([]);
+      expect(partSegments([spanned], changed.get(alpha.anchor)!.target, changed).map((s) => [s.start, s.end])).toEqual([[6, 10]]);
+      expect(partSegments([spanned], changed.get(omega.anchor)!.target, changed)).toEqual([]);
       expect(partSegments([spanned], changed.get(two.anchor)!.target, changed)).toEqual([]);
     });
 
     it("shows nothing of a comment whose first part was replaced or that was moved off its anchor", () => {
       const changed = replyParts(reply, parseMarkdown("Another start\n\n- one\n- two\n\n---\n\nOmega end"));
-      expect(noteHost(spanned, changed)).toBeNull();
-      for (const target of [...changed.values()].map((p) => p.target)) {
-        expect(notesOnPart([spanned], target, changed)).toEqual([]);
-        expect(partSegments([spanned], target, changed)).toEqual([]);
-      }
+      for (const target of [...changed.values()].map((p) => p.target)) expect(partSegments([spanned], target, changed)).toEqual([]);
       const moved = { ...spanned, anchor: `${spanned.anchor}~s` };
-      expect(noteHost(moved, parts)).toBeNull();
-      expect(noteHost({ ...legacy, anchor: `${legacy.anchor}~w` }, parts)).toBeNull();
+      for (const target of [...parts.values()].map((p) => p.target)) {
+        expect(partSegments([moved], target, parts)).toEqual([]);
+        expect(partSegments([{ ...legacy, anchor: `${legacy.anchor}~w` }], target, parts)).toEqual([]);
+      }
     });
 
     it("gives a comment not yet written the segments its target will have once saved", () => {
@@ -704,38 +846,8 @@ describe("selections across parts", () => {
       expect(drafted).toEqual(saved);
     });
 
-    it("puts the form of a new selection comment in the host its card will have, replacing nothing", () => {
-      const others = [single, own, legacy];
-      expect(formPlace(others, spanning, parts)).toEqual({ host: omega, replaces: null });
-      expect(formPlace(others, selectionTarget(alpha, "Alpha", 0, 5), parts)).toEqual({ host: alpha, replaces: null });
-      expect(formPlace([], selectionTarget(two, "two", 0, 3), parts)).toEqual({ host: two, replaces: null });
-    });
-
-    it("puts the form of an edit in the host of the comment it replaces: a selection's, a spanning one's, a whole part's", () => {
-      const place = (comment: BlockComment) => formPlace([...all, comment], commentTarget(comment), parts);
-      expect(place(spanned)).toEqual({ host: omega, replaces: "s" });
-      expect(place(single)).toEqual({ host: omega, replaces: "b" });
-      // a comment on a whole part is edited on the part's own target
-      expect(formPlace(all, alpha, parts)).toEqual({ host: alpha, replaces: "w" });
-      expect(formPlace(all, two, parts)).toEqual({ host: two, replaces: "t" });
-    });
-
-    it("does not replace a comment written on another block at the same anchor", () => {
-      // the same anchor as `spanned`, another block at the end: the store moves the old comment off the anchor on save
-      const otherEnd = blockTarget(reply, [3], parseMarkdown("Other words")[0]!);
-      const changed = selectionTarget(alpha, "beta\none\ntwo\nOther", 6, 10, { target: otherEnd, end: 5 });
-      expect(changed.anchor).toBe(spanning.anchor);
-      expect(formPlace(all, changed, parts)).toEqual({ host: alpha, replaces: null });
-    });
-
-    it("has no place for a target whose first part is not rendered", () => {
-      const changed = replyParts(reply, parseMarkdown("Another start\n\n- one\n- two\n\n---\n\nOmega end"));
-      expect(formPlace(all, spanning, changed)).toBeNull();
-    });
-
     it("has nothing for a part of another reply", () => {
       const elsewhere = blockTarget(replyPart("o", TS, 7, 1), [0], first("Alpha beta"));
-      expect(notesOnPart(all, elsewhere, parts)).toEqual([]);
       expect(partSegments(all, elsewhere, parts)).toEqual([]);
     });
   });
@@ -756,37 +868,6 @@ describe("selections across parts", () => {
         expect(isBlockComment({ ...spanned, until: bad })).toBe(false);
       }
     });
-  });
-});
-
-describe("commentTyped", () => {
-  it("is not typed while a new comment is still empty", () => {
-    expect(commentTyped("", "")).toBe(false);
-  });
-  it("is not typed while an edit is as it opened", () => {
-    expect(commentTyped("Fix this", "Fix this")).toBe(false);
-  });
-  it("is typed once a new comment has any text, whitespace included", () => {
-    expect(commentTyped("x", "")).toBe(true);
-    expect(commentTyped(" ", "")).toBe(true);
-  });
-  it("is typed once an edit differs from how it opened, even when it was emptied", () => {
-    expect(commentTyped("Fix that", "Fix this")).toBe(true);
-    expect(commentTyped("", "Fix this")).toBe(true);
-  });
-});
-
-describe("commentCanSave", () => {
-  it("has nothing to save in a new comment that is empty or blank", () => {
-    expect(commentCanSave("", "")).toBe(false);
-    expect(commentCanSave("  \n", "")).toBe(false);
-  });
-  it("saves a new comment with text", () => {
-    expect(commentCanSave("Fix this", "")).toBe(true);
-  });
-  it("saves an edit, also emptied: a blank edit deletes the comment", () => {
-    expect(commentCanSave("Fix that", "Fix this")).toBe(true);
-    expect(commentCanSave("", "Fix this")).toBe(true);
   });
 });
 
@@ -954,6 +1035,27 @@ describe("file comments in the store", () => {
     expect(isPaneComment(fileB)).toBe(true);
     expect(isPaneComment(broken)).toBe(false);
     expect(isPaneComment(unknownKind)).toBe(false);
+  });
+});
+
+describe("a file comment's point", () => {
+  const point = { x: 0.4, y: 0.5 };
+  it("is stored with a comment made by a click, and is no part of its anchor", () => {
+    const { store } = storeAt();
+    store.saveFile("o", { ...fileTarget, point }, "one");
+    expect(store.list("o")[0]).toMatchObject({ anchor: fileAnchor(fileTarget), point });
+  });
+  it("is kept by an edit, and not added to a comment without one", () => {
+    const { store } = storeAt();
+    store.saveFile("o", { ...fileTarget, point }, "one");
+    store.saveFile("o", { ...fileTarget, point: { x: 0.9, y: 0.1 } }, "two");
+    expect(store.list("o").map((c) => [c.comment, (c as FileComment).point])).toEqual([["two", point]]);
+    store.saveFile("o", { ...fileTarget, lines: [9, 9], source: ["x"], quoteLines: ["x"] }, "other");
+    store.saveFile("o", { ...fileTarget, lines: [9, 9], source: ["x"], quoteLines: ["x"], point }, "other, edited");
+    expect("point" in store.list("o")[1]!).toBe(false);
+  });
+  it("leaves the message sent alone", () => {
+    expect(composeWithComments([{ ...fileB, point }], "")).toBe(composeWithComments([fileB], ""));
   });
 });
 

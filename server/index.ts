@@ -145,6 +145,8 @@ const TYPED_SETTLE_MS = 300;
  * reaches the pane later.
  */
 export const SUBMIT_DEADLINE_MS = 45_000;
+/** agent.prompt refusals herdr answers before it pastes anything (herdr/client.ts agentPrompt): nothing was typed. */
+const NOT_TYPED_BY_AGENT_PROMPT = new Set(["agent_blocked", "agent_not_found", "agent_not_ready"]);
 const SERVER_FEATURES: ServerFeature[] = ["submit", "pending-input", "secret-input", "input-ready", "take-over", "submit-agent-only"];
 
 /** Bind addresses only this machine can reach, so an unset token is nobody else's business. */
@@ -384,7 +386,8 @@ export function createServer(
     send(owner, { type: "pending-messages", pane_id: paneId, messages, ...(removed ? { removed } : {}) });
   }, Date.now, options.pendingStartTimeoutMs);
   const pendingDrains = new Set<string>();
-  type SubmitReply = { ok: boolean; pending?: PendingMessage; code?: string; message?: string };
+  /** `typed: false`: refused before anything of the message reached the pane (see ServerMessage submit-result). */
+  type SubmitReply = { ok: boolean; pending?: PendingMessage; code?: string; message?: string; typed?: false };
   const pendingRequests = new WeakMap<Client, PendingRequestBook<SubmitReply>>();
   /** each pane's input while a composer message is in flight, one step after another */
   const paneQueues = new Map<string, Promise<unknown>>();
@@ -435,11 +438,18 @@ export function createServer(
    *
    * `agentOnly` (a message carrying comments, which quote the agent's reply) never takes the
    * send_text way: typed into a shell, the quote's "> " would redirect into a file and each
-   * line would run. Without an agent in front it is refused, nothing typed. So it is for a Codex
+   * line would run. Without an agent in front it is refused, nothing typed (`agent_not_found`), and so
+   * it is with an agent whose input state is not known (`agent_not_ready`). So it is for a Codex
    * blocked only by its queue: a plain message is typed into its main prompt, but this one is
-   * refused (`agent_only_busy`), since only agent.prompt may carry it.
+   * refused (`agent_queue_busy`), since only agent.prompt may carry it (submitRoute).
+   *
+   * `progress.typing` is false while the server knows nothing of the message reached the pane:
+   * it turns true when agent.prompt is asked (back to false when herdr refused it with
+   * NOT_TYPED_BY_AGENT_PROMPT) and when send_text begins. A failure thrown while it is false is
+   * reported with `typed: false`.
    */
-  async function submitText(paneId: string, text: string, payload: string, arrivedAt: number, fromTerminal = false, authorize: () => void = () => {}, agentOnly = false): Promise<void> {
+  async function submitText(paneId: string, text: string, payload: string, arrivedAt: number, fromTerminal = false, authorize: () => void = () => {}, agentOnly = false,
+    progress: { typing: boolean } = { typing: false }): Promise<void> {
     const inTime = (): void => {
       authorize();
       if (Date.now() - arrivedAt > (options.submitDeadlineMs ?? SUBMIT_DEADLINE_MS)) {
@@ -453,15 +463,16 @@ export function createServer(
     // the terminal's input line stands in for the keyboard: it types what the user wrote, an
     // answer into an open menu included, where agent.prompt would refuse
     if (!fromTerminal || agentOnly) try {
+      progress.typing = true;
       await agentPrompt(paneId, text);
       return;
     } catch (error) {
       if (!(error instanceof HerdrError)) throw error;
+      if (NOT_TYPED_BY_AGENT_PROMPT.has(error.code)) progress.typing = false;
       const queuedOnly = error.code === "agent_blocked" && await blockedOnlyByCodexQueue(paneId);
       const route = submitRoute(error.code, queuedOnly, agentOnly);
       if (route === "rethrow") throw error;
-      if (route === "refuse-no-agent") throw new HerdrError("agent_only", "no agent runs in this pane, and this message is only sent to one; nothing was typed");
-      if (route === "refuse-busy") throw new HerdrError("agent_only_busy", "the agent is busy with questions it queued, and this message only goes to it directly; nothing was typed");
+      if (route !== "type") throw new HerdrError(route.refuse.code, route.refuse.message);
       // route "type": a Codex blocked only by its queue is an agent, and its prompt takes the message
     }
     inTime();
@@ -470,6 +481,7 @@ export function createServer(
     // asked only for such a block, so a one-line message never waits on it.
     const shaped = await mirrorInput(payload, async () => await terminalAttach() ? null : (await paneContext(paneId)).agent);
     inTime();
+    progress.typing = true;
     await paneSendText(paneId, shaped);
     await Bun.sleep(options.submitDelayMs ?? SUBMIT_DELAY_MS);
     authorize();
@@ -589,9 +601,10 @@ export function createServer(
       await paneSendKeys(paneId, ["Enter"]);
       return { ok: true };
     } catch (error) {
-      const fault = wrote ? { code: "submit_changed", message: "Pending-message delivery could not be confirmed. Check the terminal before sending again." } : pendingFault(error);
-      if (automatic && !wrote && fault.code === "agent_blocked") pending.observe(paneId, "blocked", mark);
-      return { ok: false, ...fault };
+      if (wrote) return { ok: false, code: "submit_changed", message: "Pending-message delivery could not be confirmed. Check the terminal before sending again." };
+      const fault = pendingFault(error);
+      if (automatic && fault.code === "agent_blocked") pending.observe(paneId, "blocked", mark);
+      return { ok: false, ...fault, typed: false };
     }
   }
   async function dispatchPending(item: PendingItem, automatic: boolean, arrivedAt: number): Promise<SubmitReply> {
@@ -2193,9 +2206,11 @@ export function createServer(
               break;
             }
             case "submit": {
-              // every submit is answered: the composer keeps its text until it hears back
-              const result = (ok: boolean, code?: string, text?: string, accepted?: PendingMessage) => send(client, {
+              // every submit is answered: the composer keeps its text until it hears back. `typed: false`
+              // only where nothing of the message reached the pane, which the client cannot tell on its own
+              const result = ({ ok, code, message: text, pending: accepted, typed }: SubmitReply) => send(client, {
                 type: "submit-result", id: message.id, pane_id: message.pane_id, ok, ...(accepted ? { pending: accepted } : {}), ...(code ? { code, message: text } : {}),
+                ...(typed === false ? { typed: false as const } : {}),
               });
               if (!Number.isSafeInteger(message.id) || typeof message.pane_id !== "string" || !message.pane_id
                 || typeof message.text !== "string" || typeof message.payload !== "string") {
@@ -2204,19 +2219,21 @@ export function createServer(
               }
               if ((message.delivery !== undefined && message.delivery !== "immediate" && message.delivery !== "queue")
                 || (message.delivery === "queue" && message.typed !== undefined && message.typed !== false)) {
-                result(false, "invalid_delivery", "Use immediate delivery, or queue a chat message");
+                result({ ok: false, code: "invalid_delivery", message: "Use immediate delivery, or queue a chat message", typed: false });
                 break;
               }
               if (client.data.mode === "observe") {
-                result(false, "read_only", "this connection is in observe mode");
+                result({ ok: false, code: "read_only", message: "this connection is in observe mode", typed: false });
                 break;
               }
               // another web bridge has this pane's terminal: its user types there, not this one
               if (attachments.get(message.pane_id)?.held) {
-                result(false, "attach_held", ATTACH_HELD_MESSAGE);
+                result({ ok: false, code: "attach_held", message: ATTACH_HELD_MESSAGE, typed: false });
                 break;
               }
               const arrivedAt = Date.now();
+              // true once something of the message may have reached the pane (submitText sets it)
+              const progress = { typing: false };
               try {
                 if (message.delivery === "queue") {
                   let book = pendingRequests.get(client);
@@ -2232,7 +2249,7 @@ export function createServer(
                     if (Date.now() - arrivedAt > (options.submitDeadlineMs ?? SUBMIT_DEADLINE_MS)) throw new HerdrError("submit_timeout", "This pending message waited too long; nothing was typed");
                     if (!context.working) {
                       // the agent left while the message was on its way: a chat follow-up is not typed into what is there now
-                      if (context.identity.agent === null) throw new HerdrError("agent_not_ready", "No agent is in front of this pane now; nothing was typed");
+                      if (context.identity.agent === null) throw new HerdrError("agent_not_found", "No agent is in front of this pane now; nothing was typed");
                       // A request that raced the turn's finish still needs cancellable
                       // paste + Enter; agent.prompt commits its key inside herdr. With a message
                       // already waiting its turn here, this one takes its place behind it instead.
@@ -2241,22 +2258,25 @@ export function createServer(
                     pending.observe(message.pane_id, context.pane.agent_status, mark);
                     const item = pending.enqueue(client, message.pane_id, message.id, text, lease!, context.identity);
                     return { ok: true, pending: item.message };
-                  }).catch((error): SubmitReply => ({ ok: false, ...pendingFault(error) })));
+                    // dispatchPendingText answers its own failures: what is thrown here came before any typing
+                  }).catch((error): SubmitReply => ({ ok: false, ...pendingFault(error), typed: false })));
                   const answer = await reply;
+                  // the answer says what was typed; a failure after it is not known to be untyped
+                  progress.typing = true;
                   const accepted = answer.pending ? pending.get(client, message.pane_id, answer.pending.id)?.message : undefined;
                   if (answer.pending && !accepted) replayPendingOutcome(client, message.pane_id, answer.pending.id);
-                  result(answer.ok, answer.code, answer.message, accepted);
+                  result({ ...answer, pending: accepted });
                   drainPending(message.pane_id);
                   break;
                 }
                 await serialize(message.pane_id, () => {
                   // held while this waited its turn (the attach was refused after the check above)
                   if (attachments.get(message.pane_id)?.held) throw new HerdrError("attach_held", ATTACH_HELD_MESSAGE);
-                  return submitText(message.pane_id, message.text, message.payload, arrivedAt, message.typed === true, () => authorizeSocket(client), message.agent_only === true);
+                  return submitText(message.pane_id, message.text, message.payload, arrivedAt, message.typed === true, () => authorizeSocket(client), message.agent_only === true, progress);
                 });
-                result(true);
+                result({ ok: true });
               } catch (error) {
-                const fault = pendingFault(error); result(false, fault.code, fault.message);
+                result({ ok: false, ...pendingFault(error), ...(progress.typing ? {} : { typed: false as const }) });
               }
               break;
             }
@@ -2264,7 +2284,7 @@ export function createServer(
               const result = (reply: SubmitReply) => send(client, { type: "pending-result", id: message.id, pane_id: message.pane_id, pending_id: message.pending_id, ...reply });
               if (!Number.isSafeInteger(message.id) || typeof message.pane_id !== "string" || !message.pane_id
                 || typeof message.pending_id !== "string" || !message.pending_id || !["steer", "discard"].includes(message.action)) {
-                result({ ok: false, code: "invalid_pending_action", message: "Use steer or discard with a pending-message id" }); break;
+                result({ ok: false, code: "invalid_pending_action", message: "Use steer or discard with a pending-message id", typed: false }); break;
               }
               const arrivedAt = Date.now();
               try {
@@ -2278,7 +2298,9 @@ export function createServer(
                     ? { ok: true } : { ok: false, code: "pending_not_found", message: "This pending message does not belong to this connection" };
                   if (message.action === "discard") return pending.discard(item) ? { ok: true } : { ok: false, code: "pending_busy", message: "This message is already being sent" };
                   if (item.message.state === "uncertain") return { ok: false, code: "pending_uncertain", message: "Check the terminal before sending this message again" };
-                  await pendingContext(client, item.paneId, lease!, item.identity);
+                  // an item neither uncertain nor on its way has typed nothing yet, and this refusal types nothing either
+                  try { await pendingContext(client, item.paneId, lease!, item.identity); }
+                  catch (error) { return { ok: false, ...pendingFault(error), ...(item.inFlight ? {} : { typed: false as const }) }; }
                   if (!pending.claim(item, false)) return { ok: false, code: "pending_busy", message: "This message is already being sent" };
                   item.lease = lease!;
                   return dispatchPending(item, false, arrivedAt);

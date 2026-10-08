@@ -1,10 +1,18 @@
 /**
- * A comment starts from text selected in an agent's final reply (ChatView). This module measures a
- * selection in the own text of a reply part (`.is-commentable`): the offsets `selectionTarget`
- * keeps, and that the highlight maps back to text nodes with `textRange`. Everything but
- * `sliceText`, `spanText`, `floatingPlace`, `lineAt`, `onLine`, `placeAtPointer`, `focusAfter` and `restoreFocusTarget` needs a DOM.
+ * Measuring a comment surface's text, and where the focus goes around a comment. A comment in the chat starts from a
+ * block of an agent's final reply that was clicked, or from text a mouse dragged over in it: the commentable parts on
+ * screen (`rememberCommentPart`, `commentPartOf`), and a selection measured in a part's own text (`selectionComment`,
+ * the offsets `selectionTarget` keeps and the highlight maps back to text nodes with `textRange`). For either surface
+ * (the chat, the file viewer) the text a comment covers on screen (`textRects`, `textBox`) and the point on it its pin
+ * keeps (`pointOnText`). Then the focus: the pane's composer (`paneComposer`) and what a closing popover gives the
+ * focus back to (`restoreFocusTarget`). Everything but `sliceText`, `spanText` and `restoreFocusTarget` needs a DOM.
+ *
+ * The comment UI's own markup (popover, pins) is queried through lib/commentDom.ts, and the pins' and the popover's
+ * geometry is lib/commentPins.ts.
  */
 import type { CommentTarget, PartLookup } from "./blockComments.ts";
+import { PINS_SELECTOR } from "./commentDom.ts";
+import { pointIn, unionBox, type CommentPoint, type PinBox } from "./commentPins.ts";
 
 /** A rendered part that can carry comments: its pane, its target, and the parts of its reply (`replyParts`). */
 export interface CommentPart {
@@ -20,11 +28,11 @@ export function rememberCommentPart(element: Element, part: CommentPart): void {
 export function forgetCommentPart(element: Element): void { parts.delete(element); }
 export function commentPartOf(element: Element): CommentPart | undefined { return parts.get(element); }
 
-/** Never text of a reply, neither counted nor seen as selected: comment cards and their form, controls, a code block's header. */
-const NOT_TEXT = ".block-comment-notes, .block-comment-card, .markdown-code-header, button:not(.markdown-file)";
+/** Never text of a reply, neither counted nor seen as selected: the pin layer, controls, a code block's header. */
+const NOT_TEXT = `${PINS_SELECTOR}, .markdown-code-header, button:not(.markdown-file)`;
 
 /**
- * Not a part's own text (`NOT_TEXT`): its comment cards, its controls (a file path is a button but reads as the
+ * Not a part's own text (`NOT_TEXT`): its pins, its controls (a file path is a button but reads as the
  * text it replaced), a code block's header, anything hidden from assistive technology. KaTeX draws
  * its formula twice, as MathML and as glyphs (aria-hidden): of a formula only its TeX source counts.
  */
@@ -157,14 +165,6 @@ export interface SelectionComment extends CommentPart {
   end: number;
   /** a selection over several parts: the last part with selected text, and the offset in its text where it ends */
   until?: CommentPart & { end: number };
-  /**
-   * Where the button goes, measured on the user's whole selection (to where it really ends, in this reply): a
-   * drag over several paragraphs or list items ends, and the pointer that let go there is, in the last. The last
-   * line on screen: a keyboard or touch selection's button goes above or below it.
-   */
-  placeRect: DOMRect;
-  /** every line of selected text on screen, in order (`textRects`): the line under a mouse's release is one of them */
-  placeLines: DOMRect[];
 }
 
 /**
@@ -215,11 +215,7 @@ export function selectionComment(selection: Selection | null, view: Element): Se
   const until = span.last === span.first
     ? {}
     : { until: { ...parts[span.last]!, end: slices[span.last]!.end } };
-  // the button is placed on the whole selection's text (the root holds both ends: inside the view)
-  const rects = textRects(range);
-  const placeRect = rects.at(-1) ?? range.getBoundingClientRect();
-  const placeLines = rects.length > 0 ? rects : [placeRect];
-  return { ...parts[span.first]!, text: span.text, start, end, ...until, placeRect, placeLines };
+  return { ...parts[span.first]!, text: span.text, start, end, ...until };
 }
 
 /**
@@ -230,7 +226,7 @@ const UNSEEN = `${NOT_TEXT}, .katex-mathml`;
 
 /**
  * The lines of text `range` selects on screen, in document order: the client rects of each text
- * node in it, clipped to its ends, without notes, controls and a code block's header. Not a whole
+ * node in it, clipped to its ends, without pins, controls and a code block's header. Not a whole
  * element's box: a part selected whole would be one tall rect around its lines, and the gap
  * between two parts no line.
  */
@@ -256,83 +252,25 @@ export function textRects(range: Range): DOMRect[] {
   return rects;
 }
 
+/**
+ * The box around the text `ranges` show on screen (`textRects` of each, `unionBox`), in client pixels: what a comment's
+ * `CommentPoint` is a fraction of. Undefined where none of it is drawn.
+ */
+export function textBox(ranges: readonly Range[]): PinBox | undefined {
+  return unionBox(ranges.flatMap(textRects));
+}
+
+/**
+ * Where the client point `at` lies on the text `ranges` show (`textBox`, `pointIn`): the point a comment made there keeps
+ * for its pin. Undefined where none of that text is drawn.
+ */
+export function pointOnText(ranges: readonly Range[], at: { x: number; y: number }): CommentPoint | undefined {
+  const box = textBox(ranges);
+  return box === undefined ? undefined : pointIn(box, at);
+}
+
 function elementOf(node: Node): Element | null {
   return node instanceof Element ? node : node.parentElement;
-}
-
-/**
- * Where a floating button of `size` goes for a selection whose line is `anchor`, both in the
- * coordinates of the visible `view`: centred on the anchor's `right`, `gap` above it (or below it,
- * where a touch screen's own menu takes the space above), on the other side when its own has no
- * room and the other has, and `margin` inside the view's sides.
- */
-export function floatingPlace(
-  anchor: { top: number; bottom: number; right: number },
-  view: { width: number; height: number },
-  size: { width: number; height: number },
-  { below, gap, margin }: { below: boolean; gap: number; margin: number },
-): { left: number; top: number } {
-  const left = Math.max(margin, Math.min(anchor.right - size.width / 2, view.width - size.width - margin));
-  const above = anchor.top - gap - size.height;
-  const under = anchor.bottom + gap;
-  const fitsAbove = above >= 0;
-  const fitsUnder = under + size.height <= view.height;
-  const top = below ? (!fitsUnder && fitsAbove ? above : under) : (!fitsAbove && fitsUnder ? under : above);
-  return { left, top };
-}
-
-/**
- * The line of a selection a mouse let go on: the one whose vertical span holds `y` (the thinnest of
- * them: a block selected whole is one tall box around its lines), else the nearest. Null for none.
- */
-export function lineAt<T extends { top: number; bottom: number }>(lines: readonly T[], y: number): T | null {
-  let best: T | null = null;
-  let bestGap = Infinity;
-  for (const line of lines) {
-    const gap = y < line.top ? line.top - y : y > line.bottom ? y - line.bottom : 0;
-    if (gap < bestGap || (gap === bestGap && best !== null && line.bottom - line.top < best.bottom - best.top)) {
-      best = line;
-      bestGap = gap;
-    }
-  }
-  return best;
-}
-
-/**
- * Whether `y` lies on one of a selection's `lines` (edges included): a mouse's release still stands
- * for a selection that changed only where it is on one of its lines.
- */
-export function onLine(lines: readonly { top: number; bottom: number }[], y: number): boolean {
-  return lines.some((line) => y >= line.top && y <= line.bottom);
-}
-
-/**
- * `floatingPlace` for a button that follows a pointer: centred on the pointer's x, on the line of
- * `lines` under (or nearest to) its y, all in the coordinates of the visible `view`. Without lines
- * the pointer's own height is the line.
- */
-export function placeAtPointer(
-  lines: readonly { top: number; bottom: number }[],
-  pointer: { x: number; y: number },
-  view: { width: number; height: number },
-  size: { width: number; height: number },
-  options: { below: boolean; gap: number; margin: number },
-): { left: number; top: number } {
-  const line = lineAt(lines, pointer.y) ?? { top: pointer.y, bottom: pointer.y };
-  return floatingPlace({ top: line.top, bottom: line.bottom, right: pointer.x }, view, size, options);
-}
-
-/**
- * The cards of one host (their anchors, in reading order) that take the focus, in order of
- * preference, when the card `removed` leaves it: the ones after it, nearest first, then the ones
- * before it, nearest first. Not just the two next to it: one of them can be an open form, which
- * has no Edit button (`firstEditButton` takes the first that has one). Empty when nothing else is
- * there; the caller then falls back to the pane's composer.
- */
-export function focusAfter(anchors: readonly string[], removed: string): string[] {
-  const at = anchors.indexOf(removed);
-  if (at < 0) return [];
-  return [...anchors.slice(at + 1), ...anchors.slice(0, at).reverse()];
 }
 
 /** The composer's field of the pane a chat view is in; null without one. */
@@ -341,29 +279,10 @@ export function paneComposer(view: Element | null): HTMLElement | null {
 }
 
 /**
- * The field of a comment form in the pane of `view` (an element in its `.terminal-stack`) that has text typed in
- * it and not yet saved; null for none. A message sent meanwhile would go without that comment.
- */
-export function typedCommentField(view: Element | null): HTMLTextAreaElement | null {
-  return view?.closest(".terminal-stack")?.querySelector<HTMLTextAreaElement>(".block-comment-card.is-editing[data-comment-typed] textarea") ?? null;
-}
-
-/** The first of the cards at `anchors` (in order of preference) in the chat `view` that has an Edit button, which is that button; null for none. */
-export function firstEditButton(view: Element | null, anchors: readonly string[]): HTMLElement | null {
-  if (view === null) return null;
-  const cards = [...view.querySelectorAll<HTMLElement>(".block-comment-card[data-comment-anchor]")];
-  for (const anchor of anchors) {
-    const button = cards.find((card) => card.dataset.commentAnchor === anchor)?.querySelector<HTMLElement>(".block-comment-edit");
-    if (button) return button;
-  }
-  return null;
-}
-
-/**
- * What a closing comment editor gives the focus back to: its opener while that is still in the
- * document, else `fallback` (a deleted comment takes its own card, the opener, with it). A modal
- * focuses whatever that is; an inline form (`inline`) only an element that is in the document, so it
- * leaves the focus where it is otherwise. On a touch screen (`coarse`) the fallback is a composer's
+ * What a closing comment popover gives the focus back to: its opener while that is still in the
+ * document, else `fallback` (a deleted comment takes its own pin, the opener, with it). A dialog
+ * focuses whatever that is; a popover beside its pin (`inline`) only an element that is in the
+ * document, so it leaves the focus where it is otherwise. On a touch screen (`coarse`) the fallback is a composer's
  * field, and focusing it raises the keyboard unasked: the focus is only let go (null).
  */
 export function restoreFocusTarget<T extends { isConnected: boolean }>(opener: T | null, fallback: T | null, inline: boolean, coarse = false): T | null {

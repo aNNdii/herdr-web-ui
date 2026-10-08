@@ -5,7 +5,8 @@
  * `--term-*` tokens of each theme for PaneTerminal's theme object.
  */
 
-import { createContext, createElement, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
+import { createContext, createElement, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useState, type ReactNode } from "react";
+import { blockComments } from "./blockComments.ts";
 import { LANGUAGE_SETTINGS, LOCALE_TAGS, resolveLanguage, setCurrentLanguage, type Language, type LanguageSetting } from "./i18n.ts";
 import type { AlertPrefs, DoneAlerts } from "../../shared/notify-policy.ts";
 import { chatFontStack, sanitizeFontFamily } from "./fontFamily.ts";
@@ -76,6 +77,8 @@ export interface Settings {
   enterSends: boolean;
   /** show the agent's folded reasoning blocks in the chat view */
   showThinking: boolean;
+  /** comment on a reply or a file by selecting text or clicking a block; off deletes every comment */
+  comments: boolean;
   /** request a screen wake lock while a pane is open in this visible tab */
   keepScreenOn: boolean;
   /** UI language; `system` follows the browser (src/lib/i18n.ts) */
@@ -156,6 +159,7 @@ export const DEFAULT_SETTINGS: Settings = {
   chatWidth: "default",
   enterSends: true,
   showThinking: false,
+  comments: true,
   keepScreenOn: false,
   language: "system",
   alertsOn: true,
@@ -309,6 +313,7 @@ export function sanitizeSettings(raw: unknown): Settings {
     chatWidth: CHAT_WIDTHS.includes(record["chatWidth"] as ChatWidth) ? record["chatWidth"] as ChatWidth : DEFAULT_SETTINGS.chatWidth,
     enterSends: typeof record["enterSends"] === "boolean" ? record["enterSends"] : DEFAULT_SETTINGS.enterSends,
     showThinking: typeof record["showThinking"] === "boolean" ? record["showThinking"] : DEFAULT_SETTINGS.showThinking,
+    comments: typeof record["comments"] === "boolean" ? record["comments"] : DEFAULT_SETTINGS.comments,
     keepScreenOn: typeof record["keepScreenOn"] === "boolean" ? record["keepScreenOn"] : DEFAULT_SETTINGS.keepScreenOn,
     language: LANGUAGE_SETTINGS.includes(record["language"] as LanguageSetting) ? record["language"] as LanguageSetting : DEFAULT_SETTINGS.language,
     alertsOn: typeof record["alertsOn"] === "boolean" ? record["alertsOn"] : DEFAULT_SETTINGS.alertsOn,
@@ -430,7 +435,14 @@ interface SettingsContextValue {
 const SettingsContext = createContext<SettingsContextValue | null>(null);
 
 export function SettingsProvider({ children }: { children: ReactNode }) {
-  const [settings, setSettings] = useState<Settings>(loadSettings);
+  // the Comments setting decides what the comment store lists (`BlockCommentStore.setEnabled`): applied as the settings
+  // load, before anything reads the store, and on every change before paint, so what read it in that commit draws again
+  const [settings, setSettings] = useState<Settings>(() => {
+    const loaded = loadSettings();
+    blockComments.setEnabled(loaded.comments);
+    return loaded;
+  });
+  useLayoutEffect(() => blockComments.setEnabled(settings.comments), [settings.comments]);
   const [systemDark, setSystemDark] = useState(() => resolveTheme("system") === "dark");
 
   useEffect(() => {

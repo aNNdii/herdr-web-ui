@@ -7,12 +7,10 @@
  * find the selection again in a fresh render. The line elements do not nest. The first helpers
  * are pure; the rest needs a DOM.
  */
-import { outsideMath, textRects, textUnits, type Separator } from "./commentSelection.ts";
+import { outsideMath, textUnits, type Separator } from "./commentSelection.ts";
 import type { FileSelection, LineRange } from "./fileComments.ts";
 
 const LINE = "[data-source-line]";
-/** Comment cards the viewer draws between its lines: never part of a line, of its text or of a copy. */
-const NOTES = ".block-comment-notes";
 const CELL_SEPARATOR = " | ";
 
 type Units = readonly (string | Separator)[];
@@ -84,9 +82,55 @@ export function lineSpan(element: Element): LineRange {
   return [first, Math.max(first, last)];
 }
 
-/** Every line element of `root` in document order, not those inside a comment card. */
+/** Every line element of `root` in document order. */
 function lineElements(root: Element): Element[] {
-  return [...root.querySelectorAll(LINE)].filter((element) => element.closest(NOTES) === null);
+  return [...root.querySelectorAll(LINE)];
+}
+
+/**
+ * The line elements a click on `target` comments on, in document order; none outside `root`'s line elements. A code
+ * line, a heading, a list item's text, a table row or a formula is its own line element. A preview paragraph is one
+ * block, though each of its source lines is a line element of its own (a `<span>` each): a click on one of its lines,
+ * or beside them in the paragraph, takes all of them. DOM-light: reads only `closest`, `contains`, `children` and
+ * `matches`.
+ */
+export function clickedLineElements(root: Element, target: Element): Element[] {
+  const line = target.closest(LINE);
+  const paragraph = (line ?? target).closest("p");
+  if (paragraph !== null && root.contains(paragraph) && (line === null || line.parentElement === paragraph)) {
+    const lines = [...paragraph.children].filter((child) => child.matches(LINE));
+    if (lines.length > 0) return lines;
+  }
+  return line !== null && root.contains(line) ? [line] : [];
+}
+
+/** The line element of `root` that `target` lies in (a paragraph's lines together, `clickedLineElements`), with its lines and its quote; null outside one. */
+export function clickedLines(root: Element, target: Element): { lines: LineRange; quoteLines: string[] } | null {
+  const elements = clickedLineElements(root, target);
+  if (elements.length === 0) return null;
+  return { lines: [lineSpan(elements[0]!)[0], lineSpan(elements[elements.length - 1]!)[1]], quoteLines: elements.map(lineQuoteText) };
+}
+
+/** A folded code block's "Show all" button in the preview (Markdown.tsx), which names the block's last source line. */
+const FOLDED = ".markdown-code-more[aria-expanded='false'][data-fold-end]";
+
+/**
+ * Unfolds the folded preview code block holding source line `line` (its first drawn `.hl-line` to its
+ * `data-fold-end`), by its "Show all" button: a line folded away cannot be highlighted, pinned or scrolled to. True
+ * when that line is drawn already (no folded block holds it, or it is in the block's head), false when it was folded
+ * and the block is unfolding. DOM-light: reads only `querySelectorAll`, `closest`, `querySelector` and attributes.
+ */
+export function unfoldAt(root: Element, line: number): boolean {
+  for (const more of root.querySelectorAll<HTMLElement>(FOLDED)) {
+    const block = more.closest(".markdown-code");
+    const first = Number(block?.querySelector(".hl-line[data-source-line]")?.getAttribute("data-source-line"));
+    const end = Number(more.getAttribute("data-fold-end"));
+    if (block === null || !Number.isFinite(first) || !(first <= line && line <= end)) continue;
+    if (block.querySelector(`.hl-line[data-source-line="${line}"]`) !== null) return true;
+    more.click();
+    return false;
+  }
+  return true;
 }
 
 /** The line elements of `root` whose lines meet `lines`, in document order. */
@@ -168,7 +212,7 @@ interface Edge { index: number; point: [Node, number] | null }
  * The line element a selection's start (or its end) lies in. A point between lines or past them
  * (the "\n" between a code block's lines, the padding around them) belongs to the nearest line
  * element on the selection's side, when nothing but blanks lies between; text of anything else
- * there (a heading, a comment card) makes it null.
+ * there (a heading) makes it null.
  */
 function edgeOf(range: Range, elements: readonly Element[], asEnd: boolean): Edge | null {
   const container = asEnd ? range.endContainer : range.startContainer;
@@ -193,16 +237,12 @@ function edgeOf(range: Range, elements: readonly Element[], asEnd: boolean): Edg
  * is not blank. Line elements the selection covers only with blanks are left out at both ends, so
  * a selection that ends at the start of the next line (a triple click) belongs to the line before.
  * `selection`'s indexes count the measured line elements (0 = the first), its columns count the
- * text of `lineQuoteText`, which `quoteLines` holds for each of them. `key` is the same for the
- * same selection: it tells a repeated measurement of one selection from a new one.
+ * text of `lineQuoteText`, which `quoteLines` holds for each of them.
  */
 export function measureFileSelection(selection: Selection | null, root: Element): {
   lines: LineRange;
   quoteLines: string[];
   selection: FileSelection;
-  key: string;
-  placeRect: DOMRect;
-  placeLines: DOMRect[];
 } | null {
   if (selection === null || selection.rangeCount === 0 || selection.isCollapsed) return null;
   const first = selection.getRangeAt(0);
@@ -231,15 +271,10 @@ export function measureFileSelection(selection: Selection | null, root: Element)
   const start: [number, number] = [0, cuts[firstLine]![0]];
   const end: [number, number] = [lastLine - firstLine, cuts[lastLine]![1]];
   const text = picked.slice(firstLine, lastLine + 1).join("\n");
-  const rects = textRects(range);
-  const placeRect = rects.at(-1) ?? range.getBoundingClientRect();
   return {
     lines,
     quoteLines: texts.slice(firstLine, lastLine + 1),
     selection: { text, start, end },
-    key: JSON.stringify([lines, start, end, text]),
-    placeRect,
-    placeLines: rects.length > 0 ? rects : [placeRect],
   };
 }
 
@@ -272,35 +307,4 @@ export function lineRanges(elements: readonly Element[], selection: FileSelectio
     if (!range.collapsed) ranges.push(range);
   });
   return ranges;
-}
-
-/**
- * What copying `selection` in the code view of `root` puts on the clipboard when the selection
- * runs over a comment card: the selected text of the `.hl-line`s only, a line break between them
- * (the cards between lines are no code). Null when it touches no card, or covers no code line
- * outside the cards (text selected inside a card): the browser's own copy is right then. A line
- * the selection only touches at its edge adds nothing; an empty line it covers is an empty line
- * of the copy.
- */
-export function codeCopyText(selection: Selection, root: Element): string | null {
-  if (selection.rangeCount === 0 || selection.isCollapsed) return null;
-  const first = selection.getRangeAt(0);
-  const last = selection.getRangeAt(selection.rangeCount - 1);
-  const range = document.createRange();
-  range.setStart(first.startContainer, first.startOffset);
-  range.setEnd(last.endContainer, last.endOffset);
-  if (![...root.querySelectorAll(NOTES)].some((notes) => range.intersectsNode(notes))) return null;
-  const parts: string[] = [];
-  for (const line of root.querySelectorAll(".hl-line")) {
-    if (line.closest(NOTES) !== null || !range.intersectsNode(line)) continue;
-    const piece = document.createRange();
-    piece.selectNodeContents(line);
-    const holdsEnd = line.contains(range.endContainer);
-    if (line.contains(range.startContainer)) piece.setStart(range.startContainer, range.startOffset);
-    if (holdsEnd) piece.setEnd(range.endContainer, range.endOffset);
-    const text = piece.toString();
-    if (text === "" && (line.textContent !== "" || holdsEnd)) continue;
-    parts.push(text);
-  }
-  return parts.length === 0 ? null : parts.join("\n");
 }

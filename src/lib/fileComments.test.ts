@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import { SELECTION_QUOTE_MAX } from "./compose.ts";
-import { assignHosts, fileAnchor, fileCommentAt, fileLines, fileQuote, isFileComment, linesText, pathLabel, placeFileComment, QUOTE_LINE_MAX, QUOTE_LINES_MAX, sortFileComments, type FileComment, type LineRange } from "./fileComments.ts";
+import { fileAnchor, fileCommentAt, fileLines, fileQuote, isFileComment, linesText, pathLabel, placeFileComment, QUOTE_LINE_MAX, QUOTE_LINES_MAX, sortFileComments, type FileComment, type LineRange } from "./fileComments.ts";
 
 const base = { path: "/repo/src/sync.ts", label: "src/sync.ts", view: "code" as const };
 
@@ -130,14 +130,6 @@ describe("fileCommentAt", () => {
   });
 });
 
-describe("assignHosts", () => {
-  it("hangs a comment under the host holding its last line, else the next one", () => {
-    const hosts: LineRange[] = [[1, 1], [3, 5], [8, 8]];
-    expect(assignHosts(hosts, [{ id: "a", lines: [2, 4] }, { id: "b", lines: [6, 6] }, { id: "c", lines: [9, 9] }])).toEqual(new Map([[3, ["a"]], [8, ["b", "c"]]]));
-  });
-  it("hangs nothing without hosts", () => expect(assignHosts([], [{ id: "a", lines: [1, 1] }]).size).toBe(0));
-});
-
 describe("isFileComment", () => {
   const valid: FileComment = { ...base, kind: "file", id: "i", anchor: "file:/repo/src/sync.ts:code:2-3", lines: [2, 3], source: ["a", "b"], quoteLines: ["a", "b"], created: 1, comment: "note", selection: { text: "a\nb", start: [0, 0], end: [1, 1] } };
   it("accepts a well-formed comment, with or without a selection", () => {
@@ -152,6 +144,21 @@ describe("isFileComment", () => {
     expect(isFileComment({ ...valid, selection: { text: "a", start: [0, 0], end: [2, 0] } })).toBe(false);
     expect(isFileComment({ ...valid, selection: { text: "a", start: [1, 0], end: [0, 0] } })).toBe(false);
     expect(isFileComment({ ...valid, view: "raw" })).toBe(false);
+  });
+  it("keeps a valid point, and drops one that is not without losing the comment", () => {
+    const pointed = { ...valid, point: { x: 7.5, y: 0.5 } };
+    expect(isFileComment(pointed)).toBe(true);
+    expect(pointed.point).toEqual({ x: 7.5, y: 0.5 });
+    for (const bad of [null, { x: 0.5 }, { x: 0.5, y: Infinity }, { x: 8.5, y: 0 }, { x: 0, y: -1.1 }, "here"]) {
+      const entry: Record<string, unknown> = { ...valid, point: bad };
+      expect(isFileComment(entry)).toBe(true);
+      expect("point" in entry).toBe(false);
+    }
+  });
+  it("is named by its place alone, never by its point", () => {
+    const { point: _, ...plain } = { ...valid, point: { x: 0.5, y: 0.5 } };
+    expect(fileAnchor({ ...valid, point: { x: 0.5, y: 0.5 } })).toBe(fileAnchor(plain));
+    expect(fileCommentAt([valid], { ...plain, anchor: undefined, point: { x: 0.9, y: 0.1 } })).toBe(valid);
   });
   it("rejects an entry of another kind or with a wrong field", () => {
     expect(isFileComment(null)).toBe(false);

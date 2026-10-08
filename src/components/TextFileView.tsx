@@ -1,4 +1,4 @@
-import { useCallback, useContext, useLayoutEffect, useMemo, useRef, type ReactNode, type RefObject } from "react";
+import { useCallback, useContext, useLayoutEffect, useRef, type RefObject } from "react";
 
 import { OpenFileContext, resolveFromFile } from "../lib/filePaths.ts";
 import { useSettings, type MarkdownWidth } from "../lib/settings.ts";
@@ -28,9 +28,9 @@ export interface TextFileViewProps {
 
 /**
  * The text of a file: Markdown rendered, or highlighted code with line numbers. In a viewer that
- * takes comments (`FileCommentsContext`) each code line carries its number, and a line's comment
- * cards hang under it; the preview's elements carry the source lines they come from, and a block's
- * cards follow it (`Markdown` with `sourceLines`).
+ * takes comments (`FileCommentsContext`) each code line carries its number, and the preview's
+ * elements carry the source lines they come from (`Markdown` with `sourceLines`): a comment is on
+ * those lines. Nothing of the comments is drawn here: their pins lie in the viewer's pin layer.
  */
 export function TextFileView({ path, text, language, view, onOpen, sourceRef, previewRef }: TextFileViewProps) {
   const { settings } = useSettings();
@@ -39,14 +39,10 @@ export function TextFileView({ path, text, language, view, onOpen, sourceRef, pr
   const onOpenRef = useRef(onOpen);
   useLayoutEffect(() => { onOpenRef.current = onOpen; });
   const openLink = useCallback((href: string) => onOpenRef.current(resolveFromFile(path, href)), [path]);
-  const comments = useContext(FileCommentsContext);
-  // only the lines that have notes are asked: a file may have tens of thousands. The preview's
-  // blocks ask for their own (Markdown.tsx)
-  const notes = useMemo(() => comments === null || view !== "code" ? undefined
-    : new Map<number, ReactNode>(comments.noted.map((line) => [line, comments.notesFor(line)])), [comments, view]);
+  const takesComments = useContext(FileCommentsContext);
   return <div className="file-viewer-content">
     {view === "markdown"
-      ? <OpenFileContext.Provider value={openLink}><Markdown ref={previewRef} className={MARKDOWN_CLASS[settings.markdownWidth]} sourceLines={comments !== null}>{text}</Markdown></OpenFileContext.Provider>
-      : <HighlightedCode ref={sourceRef} className="file-viewer-text" code={text} language={language} limit={settings.highlightLimit} tooLongNote={false} lineNumbers wrap={settings.wrapCode} firstLine={1} notes={notes} />}
+      ? <OpenFileContext.Provider value={openLink}><Markdown ref={previewRef} className={MARKDOWN_CLASS[settings.markdownWidth]} sourceLines={takesComments}>{text}</Markdown></OpenFileContext.Provider>
+      : <HighlightedCode ref={sourceRef} className="file-viewer-text" code={text} language={language} limit={settings.highlightLimit} tooLongNote={false} lineNumbers wrap={settings.wrapCode} firstLine={1} />}
   </div>;
 }
