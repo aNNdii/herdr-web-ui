@@ -64,9 +64,6 @@
 .hl-inserted { color: var(--syntax-inserted); }
 .hl-deleted { color: var(--syntax-deleted); }
 
-.hl-em { font-style: italic; }
-.hl-strong { font-weight: var(--fw-semibold); }
-
 .hl-note {
   margin: var(--space-3);
   color: var(--text-dim);

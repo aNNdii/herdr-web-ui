@@ -62,9 +62,11 @@ export interface Settings {
   terminalWheelSpeed: number;
   /** fonts tried before the built-in terminal stack, as a CSS font-family list; "" keeps the built-in one */
   terminalFontFamily: string;
-  /** let a pane's OSC 52 sequence write the clipboard (lib/osc52.ts); off until chosen: any process
-   *  in the pane could otherwise plant text the user pastes into a password field elsewhere */
-  terminalOsc52: boolean;
+  /** let a pane's OSC 52 sequence write the clipboard (lib/osc52.ts), as vim, tmux and Claude Code copy;
+   *  on unless chosen off, since any process in the pane can then plant text the user pastes elsewhere.
+   *  Stored under this key, not 0.4.1's `terminalOsc52`: settings are saved whole, so a `false` there
+   *  was written by any change at all, not chosen, and is ignored. */
+  paneClipboard: boolean;
   /** chat text size in px (its body text; the rest scales with it); null follows the density */
   chatFontSize: number | null;
   /** fonts tried before the UI font in the chat's prose (code stays mono), as a CSS font-family list; "" keeps the UI font */
@@ -113,28 +115,14 @@ export interface Settings {
   voicePolishTerminal: boolean;
   /** the file viewer wraps long lines instead of scrolling sideways */
   wrapCode: boolean;
-  /**
-   * the longest text the file viewer syntax-highlights, in characters (`code.length`), one of
-   * SIZE_LIMIT_CHOICES. Shown as "256 KB": code is nearly all ASCII, one byte a character, and a
-   * size is what a reader compares with the file's. The text the viewer loads is cut in bytes.
-   */
-  highlightLimit: number;
-  /** how much of a text file the file viewer loads, in bytes; one of SIZE_LIMIT_CHOICES */
-  textLoadLimit: number;
+  /** code in the chat and the file viewer is colored by syntax; off, it is plain text */
+  highlightCode: boolean;
   /** the width of a Markdown preview: the chat's lane (--chat-w), centered, or the viewer's width */
   markdownWidth: MarkdownWidth;
 }
 
 export const MARKDOWN_WIDTHS = ["readable", "full"] as const;
 export type MarkdownWidth = (typeof MARKDOWN_WIDTHS)[number];
-
-/** the sizes the file viewer's limits offer, 256 KB and 1 MB: bytes loaded, characters highlighted */
-export const SIZE_LIMIT_CHOICES = [256 * 1024, 1024 * 1024] as const;
-
-/** A stored limit if it is one of the choices; anything else (an old or hand-edited value) falls back. */
-function sizeLimit(value: unknown, fallback: number): number {
-  return SIZE_LIMIT_CHOICES.find((choice) => choice === value) ?? fallback;
-}
 
 export const DEFAULT_SETTINGS: Settings = {
   terminalInputMode: "auto",
@@ -150,7 +138,7 @@ export const DEFAULT_SETTINGS: Settings = {
   terminalFontSize: 13,
   terminalWheelSpeed: 1,
   terminalFontFamily: "",
-  terminalOsc52: false,
+  paneClipboard: true,
   chatFontSize: null,
   chatFontFamily: "",
   chatWidth: "default",
@@ -176,8 +164,7 @@ export const DEFAULT_SETTINGS: Settings = {
   voicePolishChat: true,
   voicePolishTerminal: false,
   wrapCode: false,
-  highlightLimit: 256 * 1024,
-  textLoadLimit: 1024 * 1024,
+  highlightCode: true,
   markdownWidth: "readable",
 };
 
@@ -304,7 +291,7 @@ export function sanitizeSettings(raw: unknown): Settings {
       ? Math.min(CHAT_FONT_MAX, Math.max(CHAT_FONT_MIN, Math.round(chatFont)))
       : DEFAULT_SETTINGS.chatFontSize,
     terminalFontFamily: sanitizeFontFamily(record["terminalFontFamily"]),
-    terminalOsc52: typeof record["terminalOsc52"] === "boolean" ? record["terminalOsc52"] : DEFAULT_SETTINGS.terminalOsc52,
+    paneClipboard: typeof record["paneClipboard"] === "boolean" ? record["paneClipboard"] : DEFAULT_SETTINGS.paneClipboard,
     chatFontFamily: sanitizeFontFamily(record["chatFontFamily"]),
     chatWidth: CHAT_WIDTHS.includes(record["chatWidth"] as ChatWidth) ? record["chatWidth"] as ChatWidth : DEFAULT_SETTINGS.chatWidth,
     enterSends: typeof record["enterSends"] === "boolean" ? record["enterSends"] : DEFAULT_SETTINGS.enterSends,
@@ -332,8 +319,7 @@ export function sanitizeSettings(raw: unknown): Settings {
     voicePolishChat: typeof record["voicePolishChat"] === "boolean" ? record["voicePolishChat"] : DEFAULT_SETTINGS.voicePolishChat,
     voicePolishTerminal: typeof record["voicePolishTerminal"] === "boolean" ? record["voicePolishTerminal"] : DEFAULT_SETTINGS.voicePolishTerminal,
     wrapCode: typeof record["wrapCode"] === "boolean" ? record["wrapCode"] : DEFAULT_SETTINGS.wrapCode,
-    highlightLimit: sizeLimit(record["highlightLimit"], DEFAULT_SETTINGS.highlightLimit),
-    textLoadLimit: sizeLimit(record["textLoadLimit"], DEFAULT_SETTINGS.textLoadLimit),
+    highlightCode: typeof record["highlightCode"] === "boolean" ? record["highlightCode"] : DEFAULT_SETTINGS.highlightCode,
     markdownWidth: MARKDOWN_WIDTHS.find((width) => width === record["markdownWidth"]) ?? DEFAULT_SETTINGS.markdownWidth,
   };
 }

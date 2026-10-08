@@ -6,8 +6,7 @@ import "./SettingsDialog.css";
 import type { AppActions } from "../lib/actions.ts";
 import { useInstallPrompt } from "../lib/install.ts";
 import { SHORTCUTS, formatKeys, shortcutKeys, shortcutConflict } from "../lib/shortcuts.ts";
-import { CHAT_FONT_MAX, CHAT_FONT_MIN, CHAT_WIDTHS, chatFontSize, DEFAULT_SETTINGS, MARKDOWN_WIDTHS, QUICK_REPLIES_MAX, QUICK_REPLY_MAX_CHARS, SIZE_LIMIT_CHOICES, TERMINAL_FONT_MAX, TERMINAL_FONT_MIN, TERMINAL_WHEEL_SPEED_MAX, TERMINAL_WHEEL_SPEED_MIN, VOICE_BUTTONS, useSettings, forgetPaneViews, type VoiceButton } from "../lib/settings.ts";
-import { formatBytes } from "../lib/bridgeProgress.ts";
+import { CHAT_FONT_MAX, CHAT_FONT_MIN, CHAT_WIDTHS, chatFontSize, DEFAULT_SETTINGS, MARKDOWN_WIDTHS, QUICK_REPLIES_MAX, QUICK_REPLY_MAX_CHARS, TERMINAL_FONT_MAX, TERMINAL_FONT_MIN, TERMINAL_WHEEL_SPEED_MAX, TERMINAL_WHEEL_SPEED_MIN, VOICE_BUTTONS, useSettings, forgetPaneViews, type VoiceButton } from "../lib/settings.ts";
 import { LANGUAGE_NAMES, LANGUAGE_SETTINGS, useT } from "../lib/i18n.ts";
 import { useFocusTrap } from "../lib/useFocusTrap.ts";
 import { KeyBarSettings } from "./KeyBarSettings.tsx";
@@ -28,6 +27,7 @@ import { PhonePanel } from "./PhonePanel.tsx";
 import { PushTestControls } from "./PushTestControls.tsx";
 import { previewAlertSound, unlockAlertSound } from "../lib/alertSound.ts";
 import { HerdrUpdateControls, UpdateControls } from "./UpdateControls.tsx";
+import { TelemetryControls } from "./TelemetryControls.tsx";
 
 export interface SettingsDialogProps {
   open: boolean;
@@ -262,41 +262,31 @@ function TerminalPage({ keyBarButtonRef, onEditKeyBar }: { keyBarButtonRef: RefO
       <SettingsRow label={t("Key bar")} description={t("Keys, order and custom combinations for the terminal.")}>
         <button type="button" ref={keyBarButtonRef} className="btn" onClick={onEditKeyBar}>{t("Edit key bar")}</button>
       </SettingsRow>
-      <SettingsRow label={t("Clipboard from a pane")} description={t("Off: nothing running in a pane can set this device's clipboard. On: a program in a pane that asks to copy has its text put there, as a copy you made yourself would.")}>
-        <Toggle label={t("Clipboard from a pane")} checked={settings.terminalOsc52} onChange={(terminalOsc52) => update({ terminalOsc52 })} />
+      <SettingsRow label={t("Clipboard from a pane")} description={t("A program in a pane that copies (vim, tmux, Claude Code) puts its text on this device's clipboard, as a copy you made yourself would. Turn it off if a pane runs output you do not trust: it could replace what you paste next.")}>
+        <Toggle label={t("Clipboard from a pane")} checked={settings.paneClipboard} onChange={(paneClipboard) => update({ paneClipboard })} />
       </SettingsRow>
     </SettingsGroup>
   );
 }
 
-/** File viewer: how a file opened from a pane reads, and how much of a large one loads. */
+/** File viewer: how a file opened from a pane reads. */
 function FileViewerPage() {
   const { settings, update } = useSettings();
   const t = useT();
   // literal keys, so the i18n check finds them
   const markdownWidthLabel = { readable: t("Default"), full: t("Full width") };
-  // the segmented control keys its options by string; the limits are byte counts
-  const sizeOptions = SIZE_LIMIT_CHOICES.map((limit) => ({ value: String(limit), label: formatBytes(limit) }));
   return (
-    <>
-      <SettingsGroup>
-        <SettingsRow label={t("Wrap long lines")}>
-          <Toggle label={t("Wrap long lines")} checked={settings.wrapCode} onChange={(wrapCode) => update({ wrapCode })} />
-        </SettingsRow>
-        <SettingsRow label={t("Markdown width")}>
-          <Segmented label={t("Markdown width")} value={settings.markdownWidth} onChange={(markdownWidth) => update({ markdownWidth })} options={MARKDOWN_WIDTHS.map((width) => ({ value: width, label: markdownWidthLabel[width] }))} />
-        </SettingsRow>
-      </SettingsGroup>
-
-      <SettingsGroup title={t("Large files")} note={t("A longer file shows its start, and Raw opens all of it. Past the highlight limit, code shows without colors.")}>
-        <SettingsRow label={t("Load text files up to")}>
-          <Segmented label={t("Load text files up to")} value={String(settings.textLoadLimit)} onChange={(value) => update({ textLoadLimit: Number(value) })} options={sizeOptions} />
-        </SettingsRow>
-        <SettingsRow label={t("Highlight syntax up to")}>
-          <Segmented label={t("Highlight syntax up to")} value={String(settings.highlightLimit)} onChange={(value) => update({ highlightLimit: Number(value) })} options={sizeOptions} />
-        </SettingsRow>
-      </SettingsGroup>
-    </>
+    <SettingsGroup>
+      <SettingsRow label={t("Wrap long lines")}>
+        <Toggle label={t("Wrap long lines")} checked={settings.wrapCode} onChange={(wrapCode) => update({ wrapCode })} />
+      </SettingsRow>
+      <SettingsRow label={t("Highlight code")} description={t("Colors code in the chat and the file viewer. Off, code is plain text.")}>
+        <Toggle label={t("Highlight code")} checked={settings.highlightCode} onChange={(highlightCode) => update({ highlightCode })} />
+      </SettingsRow>
+      <SettingsRow label={t("Markdown width")}>
+        <Segmented label={t("Markdown width")} value={settings.markdownWidth} onChange={(markdownWidth) => update({ markdownWidth })} options={MARKDOWN_WIDTHS.map((width) => ({ value: width, label: markdownWidthLabel[width] }))} />
+      </SettingsRow>
+    </SettingsGroup>
   );
 }
 
@@ -578,6 +568,7 @@ function AboutPage({ updates, herdrVersion, bridgesFollow }: { updates: UpdatesM
     <>
       <UpdateControls updates={updates} bridgesFollow={bridgesFollow} />
       <HerdrUpdateControls enabled herdrVersion={herdrVersion} />
+      <TelemetryControls />
       <SettingsGroup title={t("About")} className="settings-about">
         <div className="settings-row">
           <div className="settings-row-text">

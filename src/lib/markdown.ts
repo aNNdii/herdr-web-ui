@@ -396,12 +396,8 @@ export function foldCode(value: string): { head: string; lines: number } | null 
   return { head: lines.slice(0, FOLDED_CODE_LINES).join("\n"), lines: lines.length };
 }
 
-/**
- * How deep quotes nest. A quote's contents recurse into `parseBlocks` once per level, so a file of
- * nothing but `>` (20 000 of them are 20 KB) would overflow the stack while rendering; past this
- * depth the remaining markers are the quote's text.
- */
-export const MAX_QUOTE_DEPTH = 32;
+/** Quotes nest by one call each: past this many levels, what is left is read as plain lines. */
+const MAX_QUOTE_DEPTH = 32;
 
 /**
  * Markdown source as blocks, uncached; `parseMarkdown` is the entry, and a quote's contents recurse here.
@@ -473,12 +469,21 @@ function parseBlocks(source: string, depth: number, firstLine: number | null): M
       continue;
     }
 
-    if (depth < MAX_QUOTE_DEPTH && /^\s*>/.test(line)) {
+    if (/^\s*>/.test(line)) {
       const quoted: string[] = [];
       const quoteLine = index;
       while (index < lines.length && /^\s*>/.test(lineAt(lines, index))) quoted.push(lineAt(lines, index++).replace(/^\s*>\s?/, ""));
       // each quoted line is one line of the file, so the contents count on from the quote's first
-      blocks.push({ type: "blockquote", blocks: parseBlocks(quoted.join("\n"), depth + 1, firstLine === null ? null : firstLine + quoteLine), ...span(firstLine, quoteLine, index - 1) });
+      const quoteFirst = firstLine === null ? null : firstLine + quoteLine;
+      // a line of thousands of ">" (text nobody wrote by hand) would otherwise overflow the stack
+      const inner: MarkdownBlock[] = depth < MAX_QUOTE_DEPTH ? parseBlocks(quoted.join("\n"), depth + 1, quoteFirst)
+        : [{
+          type: "paragraph",
+          lines: quoted.map((quotedLine) => parseInline(quotedLine)),
+          ...span(quoteFirst, 0, quoted.length - 1),
+          ...(quoteFirst === null ? {} : { lineNumbers: quoted.map((_, offset) => quoteFirst + offset) }),
+        }];
+      blocks.push({ type: "blockquote", blocks: inner, ...span(firstLine, quoteLine, index - 1) });
       continue;
     }
 

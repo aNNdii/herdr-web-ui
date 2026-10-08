@@ -1,6 +1,17 @@
 /** How the viewer shows a text file: chosen in its header, Preview unless the user asked for the source. */
 export type TextViewMode = "preview" | "code";
 
+/**
+ * How much of a text file the viewer loads, in bytes: the start of a longer file shows, and Raw
+ * opens it whole. It bounds what the Preview parses and the code view highlights too: the chat's
+ * parser is built for a message, not a megabyte, and a Preview draws every block of a file at
+ * once. Plans and specs agents write are far below it (the largest seen, 79 KB).
+ */
+export const TEXT_LOAD_LIMIT = 256 * 1024;
+
+/** The request headers for a text file's first `TEXT_LOAD_LIMIT` bytes: a range, whatever the file's size. */
+export const TEXT_START_HEADERS: Readonly<Record<string, string>> = { range: `bytes=0-${TEXT_LOAD_LIMIT - 1}` };
+
 /** A text file as the viewer loaded it: its start when it is longer than the limit. */
 export interface LoadedText {
   text: string;
@@ -56,7 +67,18 @@ export function hasPreview(language: string | null): boolean {
   return language === "markdown";
 }
 
-/** What the viewer renders for a text file in `mode`: its Preview where it has one, else its code. */
-export function textView(language: string | null, mode: TextViewMode): "markdown" | "code" {
-  return hasPreview(language) && mode === "preview" ? "markdown" : "code";
+/**
+ * A text file as loaded from the answer to a request with `TEXT_START_HEADERS`: its first
+ * `TEXT_LOAD_LIMIT` bytes, cut back to a whole line when the file goes on. An empty file answers
+ * 416 (it has no first byte to send) and is loaded as empty. Any other error answer rejects: it
+ * carries JSON (the file gone since, a remote PC dropped), never the file's text.
+ */
+export async function readTextStart(response: Response): Promise<LoadedText> {
+  const range = response.headers.get("content-range");
+  const empty = response.status === 416 && answeredFileSize(response.status, range, 0) === 0;
+  if (!response.ok && !empty) throw new Error(`the file answered ${response.status}`);
+  const bytes = new Uint8Array(await response.arrayBuffer());
+  // the size as it was sent, not as the stat saw it: a file grown since is still cut short
+  const size = answeredFileSize(response.status, range, bytes.length);
+  return loadedText(decodeStart(bytes, TEXT_LOAD_LIMIT), size, TEXT_LOAD_LIMIT);
 }

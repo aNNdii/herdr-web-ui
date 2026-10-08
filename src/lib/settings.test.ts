@@ -28,6 +28,27 @@ it("keeps sidebar rows on two lines unless one line was chosen", () => {
   }
 });
 
+describe("clipboard from a pane", () => {
+  it("is on in a fresh install", () => {
+    expect(DEFAULT_SETTINGS.paneClipboard).toBe(true);
+    expect(sanitizeSettings({}).paneClipboard).toBe(true);
+  });
+
+  it("turns on for a 0.4.1 record, whose false was saved with any other change", () => {
+    const loaded = sanitizeSettings(JSON.parse(JSON.stringify({ theme: "light", terminalOsc52: false })));
+    expect(loaded.paneClipboard).toBe(true);
+    expect(loaded).not.toHaveProperty("terminalOsc52");
+  });
+
+  it("stays off once turned off, across a save and a reload", () => {
+    const chosen = sanitizeSettings({ ...sanitizeSettings({ terminalOsc52: false }), paneClipboard: false });
+    const reloaded = sanitizeSettings(JSON.parse(JSON.stringify(chosen)));
+    expect(reloaded.paneClipboard).toBe(false);
+    expect(sanitizeSettings({ ...reloaded, theme: "dark" }).paneClipboard).toBe(false);
+    expect(sanitizeSettings({ paneClipboard: "false" }).paneClipboard).toBe(true);
+  });
+});
+
 it("drops the folder grouping an older version stored", () => {
   expect(sanitizeSettings({ sidebarGrouping: "directory" })).not.toHaveProperty("sidebarGrouping");
 });
@@ -474,18 +495,21 @@ describe("default lens", () => {
   });
 });
 
-it("keeps the file viewer's wrap and size limits to the offered choices", () => {
+it("keeps the file viewer's wrap setting only when it is a boolean, and no size limits", () => {
   expect(DEFAULT_SETTINGS.wrapCode).toBe(false);
-  expect(DEFAULT_SETTINGS.highlightLimit).toBe(256 * 1024);
-  expect(DEFAULT_SETTINGS.textLoadLimit).toBe(1024 * 1024);
   expect(sanitizeSettings({ wrapCode: true }).wrapCode).toBe(true);
   expect(sanitizeSettings({ wrapCode: "yes" }).wrapCode).toBe(false);
-  expect(sanitizeSettings({ highlightLimit: 1024 * 1024 }).highlightLimit).toBe(1024 * 1024);
-  expect(sanitizeSettings({ textLoadLimit: 256 * 1024 }).textLoadLimit).toBe(256 * 1024);
-  for (const bad of [0, 128 * 1024, 4 * 1024 * 1024, "1048576", null]) {
-    expect(sanitizeSettings({ highlightLimit: bad }).highlightLimit).toBe(256 * 1024);
-    expect(sanitizeSettings({ textLoadLimit: bad }).textLoadLimit).toBe(1024 * 1024);
-  }
+  // the limits are fixed now: a record stored with them drops them
+  const stored = sanitizeSettings({ textLoadLimit: 1024 * 1024, highlightLimit: 1024 * 1024 }) as unknown as Record<string, unknown>;
+  expect("textLoadLimit" in stored).toBe(false);
+  expect("highlightLimit" in stored).toBe(false);
+});
+
+it("highlights code unless turned off, and keeps a stored choice only when it is a boolean", () => {
+  expect(DEFAULT_SETTINGS.highlightCode).toBe(true);
+  expect(sanitizeSettings({ highlightCode: false }).highlightCode).toBe(false);
+  expect(sanitizeSettings({ highlightCode: "no" }).highlightCode).toBe(true);
+  expect(sanitizeSettings({}).highlightCode).toBe(true);
 });
 
 it("keeps the Markdown preview's width to readable or full, readable by default", () => {

@@ -8,6 +8,8 @@ import { HerdrUpdater } from "./herdr-update.ts";
 import { noInstalledNotes, unmanagedUpdateStatus, type HerdrUpdateStatus, type InstalledNotes, type UpdateNotes } from "../shared/update.ts";
 import { USAGE_PROVIDERS, UsageService } from "./usage.ts";
 import { VoiceService } from "./voice.ts";
+import { Telemetry } from "./telemetry.ts";
+import type { TelemetryStatus } from "../shared/telemetry.ts";
 import { herdrRpc, ping, sessionSnapshot, tabCreate, workspaceCreate, workspaceClose } from "./herdr/client.ts";
 import { startFakePushService, type FakePushService } from "./push.fake.ts";
 import { descriptorPath, type BridgeDescriptor } from "./bridge.ts";
@@ -27,7 +29,7 @@ let server: { port: number; stop: () => void };
 const stateDir = mkdtempSync(join(tmpdir(), "herdr-web-ui-contract-"));
 
 beforeAll(() => {
-  server = createServer({ port: 0, stateDir, alertTiming: { short: 0, long: 0, longTurn: 0 } });
+  server = createServer({ port: 0, stateDir, alertTiming: { short: 0, long: 0, longTurn: 0 }, pushLoopbackHttp: true });
 });
 
 afterAll(() => {
@@ -243,6 +245,49 @@ describe("update API", () => {
       }
       expect(status).toMatchObject({ phase: "idle", output: "already up to date (0.9.3)" });
       expect(readFileSync(join(state, "calls"), "utf8")).toContain("update --handoff");
+    } finally { server.stop(); rmSync(state, { recursive: true, force: true }); }
+  });
+});
+
+describe("telemetry API", () => {
+  it("answers 404 on a server started without telemetry", async () => {
+    for (const method of ["GET", "POST"]) {
+      const response = await fetch(`${base()}/api/telemetry`, { method, headers: { "x-herdr-update": "1", "content-type": "application/json" }, ...(method === "POST" ? { body: "{}" } : {}) });
+      expect(response.status).toBe(404);
+      expect((await response.json() as ApiError).error.code).toBe("not_found");
+    }
+  });
+
+  it("tells the switch and the next event, and takes the notice and the switch from the app", async () => {
+    const state = mkdtempSync(join(tmpdir(), "herdr-telemetry-api-"));
+    const sent: unknown[] = [];
+    const telemetry = new Telemetry({ stateDir: state, version: "9.9.9", env: {}, url: "http://receiver.invalid/v1/events", noticeGraceMs: 0,
+      fetch: (async (_url: string | URL | Request, init?: RequestInit) => { sent.push(JSON.parse(String(init?.body))); return new Response(null, { status: 204 }); }) as typeof fetch });
+    const server = createServer({ port: 0, stateDir: state, token: "", telemetry });
+    const url = `http://localhost:${server.port}/api/telemetry`;
+    try {
+      const first = await fetch(url);
+      expect(first.headers.get("cache-control")).toBe("no-store");
+      expect(await first.json() as TelemetryStatus).toMatchObject({ enabled: true, notice_seen: false, blocked_by_env: false, next: { event: "install", version: "9.9.9" } });
+      expect((await fetch(url, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ notice_seen: true }) })).status).toBe(403);
+      const seen = await fetch(url, { method: "POST", headers: { "content-type": "application/json", "x-herdr-update": "1" }, body: JSON.stringify({ notice_seen: true }) });
+      expect(await seen.json() as TelemetryStatus).toMatchObject({ notice_seen: true });
+      await telemetry.report();
+      expect(sent).toEqual([expect.objectContaining({ event: "install", version: "9.9.9" })]);
+      expect(await (await fetch(url)).json() as TelemetryStatus).toMatchObject({ next: null });
+      const off = await fetch(url, { method: "POST", headers: { "content-type": "application/json", "x-herdr-update": "1" }, body: JSON.stringify({ enabled: false }) });
+      expect(await off.json() as TelemetryStatus).toMatchObject({ enabled: false });
+    } finally { server.stop(); rmSync(state, { recursive: true, force: true }); }
+  });
+
+  it("keeps telemetry behind the token gate", async () => {
+    const state = mkdtempSync(join(tmpdir(), "herdr-telemetry-auth-"));
+    const telemetry = new Telemetry({ stateDir: state, version: "9.9.9", env: {}, fetch: (async () => new Response(null, { status: 204 })) as unknown as typeof fetch });
+    const server = createServer({ port: 0, stateDir: state, token: "test-telemetry-token", telemetry });
+    try {
+      for (const method of ["GET", "POST"]) {
+        expect((await fetch(`http://localhost:${server.port}/api/telemetry`, { method, headers: { "x-herdr-update": "1" } })).status).toBe(401);
+      }
     } finally { server.stop(); rmSync(state, { recursive: true, force: true }); }
   });
 });
@@ -1656,7 +1701,7 @@ describe("web push", () => {
       const device = await startFakePushService();
       cleanupDevice = device;
       await herdrRpc("pane.report_agent", { pane_id: paneId, source: "manual", agent: "codex", state: "unknown" });
-      bridge = createServer({ port: 0, hostname: "127.0.0.1", token: "", stateDir: dir, machines: false,
+      bridge = createServer({ port: 0, hostname: "127.0.0.1", token: "", stateDir: dir, machines: false, pushLoopbackHttp: true,
         alertTiming: { short: 0, long: 0, longTurn: 0 } });
       const origin = `http://127.0.0.1:${bridge.port}`;
       watcher = await RecordingSocket.connect(`ws://127.0.0.1:${bridge.port}/ws`);
@@ -1748,7 +1793,7 @@ describe("web push", () => {
       const before = (await herdrRpc<{ snapshot: SessionSnapshot }>("session.snapshot", {})).snapshot;
       expect(before.panes.find((pane) => pane.pane_id === watchedId)?.agent_status).toBe("working");
 
-      restarted = createServer({ port: 0, stateDir: restartDir, alertTiming: { short: 0, long: 0, longTurn: 0 } });
+      restarted = createServer({ port: 0, stateDir: restartDir, alertTiming: { short: 0, long: 0, longTurn: 0 }, pushLoopbackHttp: true });
       const subscribe = await fetch(`http://localhost:${restarted.port}/api/push/subscribe`, {
         method: "POST",
         headers: { "content-type": "application/json" },
