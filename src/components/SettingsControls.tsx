@@ -34,9 +34,9 @@ export function SettingsRow({ label, description, htmlFor, wide = false, childre
 }
 
 /** A switch; `buttonRef` reaches its button, for an owner that gives the focus back to it (after a question it asked). */
-export function Toggle({ checked, label, onChange, buttonRef }: { checked: boolean; label: string; onChange: (checked: boolean) => void; buttonRef?: Ref<HTMLButtonElement> }) {
+export function Toggle({ checked, label, onChange, disabled, buttonRef }: { checked: boolean; label: string; onChange: (checked: boolean) => void; disabled?: boolean; buttonRef?: Ref<HTMLButtonElement> }) {
   return (
-    <button ref={buttonRef} type="button" className="settings-toggle" role="switch" aria-checked={checked} aria-label={label} onClick={() => onChange(!checked)}>
+    <button ref={buttonRef} type="button" className="settings-toggle" role="switch" aria-checked={checked} aria-label={label} disabled={disabled} onClick={() => onChange(!checked)}>
       <span className="settings-toggle-thumb" />
     </button>
   );

@@ -7,9 +7,9 @@ import type { AppActions } from "../lib/actions.ts";
 import { blockComments } from "../lib/blockComments.ts";
 import { hasChangedComment, hasCommentDialog } from "../lib/commentDom.ts";
 import { useInstallPrompt } from "../lib/install.ts";
-import { SHORTCUTS, formatKeys, shortcutKeys, shortcutConflict } from "../lib/shortcuts.ts";
-import { CHAT_FONT_MAX, CHAT_FONT_MIN, CHAT_WIDTHS, chatFontSize, DEFAULT_SETTINGS, MARKDOWN_WIDTHS, QUICK_REPLIES_MAX, QUICK_REPLY_MAX_CHARS, SIZE_LIMIT_CHOICES, TERMINAL_FONT_MAX, TERMINAL_FONT_MIN, TERMINAL_WHEEL_SPEED_MAX, TERMINAL_WHEEL_SPEED_MIN, VOICE_BUTTONS, useSettings, forgetPaneViews, type VoiceButton } from "../lib/settings.ts";
-import { formatBytes } from "../lib/bridgeProgress.ts";
+import { SHORTCUTS, formatKeys, isMacPlatform, shortcutDisplayKeys, shortcutKeys, shortcutConflict } from "../lib/shortcuts.ts";
+import { isReservedShortcutKey } from "../lib/shortcutBindings.ts";
+import { CHAT_FONT_MAX, CHAT_FONT_MIN, CHAT_WIDTHS, chatFontSize, DEFAULT_SETTINGS, MARKDOWN_WIDTHS, QUICK_REPLIES_MAX, QUICK_REPLY_MAX_CHARS, TERMINAL_FONT_MAX, TERMINAL_FONT_MIN, TERMINAL_WHEEL_SPEED_MAX, TERMINAL_WHEEL_SPEED_MIN, VOICE_BUTTONS, useSettings, forgetPaneViews, type VoiceButton } from "../lib/settings.ts";
 import { LANGUAGE_NAMES, LANGUAGE_SETTINGS, useT } from "../lib/i18n.ts";
 import { useFocusTrap } from "../lib/useFocusTrap.ts";
 import { ConfirmDialog } from "./ConfirmDialog.tsx";
@@ -31,6 +31,7 @@ import { PhonePanel } from "./PhonePanel.tsx";
 import { PushTestControls } from "./PushTestControls.tsx";
 import { previewAlertSound, unlockAlertSound } from "../lib/alertSound.ts";
 import { HerdrUpdateControls, UpdateControls } from "./UpdateControls.tsx";
+import { TelemetryControls } from "./TelemetryControls.tsx";
 
 export interface SettingsDialogProps {
   open: boolean;
@@ -295,41 +296,31 @@ function TerminalPage({ keyBarButtonRef, onEditKeyBar }: { keyBarButtonRef: RefO
       <SettingsRow label={t("Key bar")} description={t("Keys, order and custom combinations for the terminal.")}>
         <button type="button" ref={keyBarButtonRef} className="btn" onClick={onEditKeyBar}>{t("Edit key bar")}</button>
       </SettingsRow>
-      <SettingsRow label={t("Clipboard from a pane")} description={t("Off: nothing running in a pane can set this device's clipboard. On: a program in a pane that asks to copy has its text put there, as a copy you made yourself would.")}>
-        <Toggle label={t("Clipboard from a pane")} checked={settings.terminalOsc52} onChange={(terminalOsc52) => update({ terminalOsc52 })} />
+      <SettingsRow label={t("Clipboard from a pane")} description={t("A program in a pane that copies (vim, tmux, Claude Code) puts its text on this device's clipboard, as a copy you made yourself would. Turn it off if a pane runs output you do not trust: it could replace what you paste next.")}>
+        <Toggle label={t("Clipboard from a pane")} checked={settings.paneClipboard} onChange={(paneClipboard) => update({ paneClipboard })} />
       </SettingsRow>
     </SettingsGroup>
   );
 }
 
-/** File viewer: how a file opened from a pane reads, and how much of a large one loads. */
+/** File viewer: how a file opened from a pane reads. */
 function FileViewerPage() {
   const { settings, update } = useSettings();
   const t = useT();
   // literal keys, so the i18n check finds them
   const markdownWidthLabel = { readable: t("Default"), full: t("Full width") };
-  // the segmented control keys its options by string; the limits are byte counts
-  const sizeOptions = SIZE_LIMIT_CHOICES.map((limit) => ({ value: String(limit), label: formatBytes(limit) }));
   return (
-    <>
-      <SettingsGroup>
-        <SettingsRow label={t("Wrap long lines")}>
-          <Toggle label={t("Wrap long lines")} checked={settings.wrapCode} onChange={(wrapCode) => update({ wrapCode })} />
-        </SettingsRow>
-        <SettingsRow label={t("Markdown width")}>
-          <Segmented label={t("Markdown width")} value={settings.markdownWidth} onChange={(markdownWidth) => update({ markdownWidth })} options={MARKDOWN_WIDTHS.map((width) => ({ value: width, label: markdownWidthLabel[width] }))} />
-        </SettingsRow>
-      </SettingsGroup>
-
-      <SettingsGroup title={t("Large files")} note={t("A longer file shows its start, and Raw opens all of it. Past the highlight limit, code shows without colors.")}>
-        <SettingsRow label={t("Load text files up to")}>
-          <Segmented label={t("Load text files up to")} value={String(settings.textLoadLimit)} onChange={(value) => update({ textLoadLimit: Number(value) })} options={sizeOptions} />
-        </SettingsRow>
-        <SettingsRow label={t("Highlight syntax up to")}>
-          <Segmented label={t("Highlight syntax up to")} value={String(settings.highlightLimit)} onChange={(value) => update({ highlightLimit: Number(value) })} options={sizeOptions} />
-        </SettingsRow>
-      </SettingsGroup>
-    </>
+    <SettingsGroup>
+      <SettingsRow label={t("Wrap long lines")}>
+        <Toggle label={t("Wrap long lines")} checked={settings.wrapCode} onChange={(wrapCode) => update({ wrapCode })} />
+      </SettingsRow>
+      <SettingsRow label={t("Highlight code")} description={t("Colors code in the chat and the file viewer. Off, code is plain text.")}>
+        <Toggle label={t("Highlight code")} checked={settings.highlightCode} onChange={(highlightCode) => update({ highlightCode })} />
+      </SettingsRow>
+      <SettingsRow label={t("Markdown width")}>
+        <Segmented label={t("Markdown width")} value={settings.markdownWidth} onChange={(markdownWidth) => update({ markdownWidth })} options={MARKDOWN_WIDTHS.map((width) => ({ value: width, label: markdownWidthLabel[width] }))} />
+      </SettingsRow>
+    </SettingsGroup>
   );
 }
 
@@ -524,28 +515,38 @@ const SHORTCUT_KEYS: readonly string[] = [..."abcdefghijklmnopqrstuvwxyz01234567
 function ShortcutsPage() {
   const { settings, update } = useSettings();
   const t = useT();
+  const platformIsMac = isMacPlatform();
   return (
     <>
-      <SettingsGroup className="settings-shortcuts" note={t("Some keys are reserved by the browser. Changes apply to this device.")}>
-        {SHORTCUTS.map((shortcut) => (
-          <SettingsRow key={shortcut.id} label={t(shortcut.label)}>
-            {shortcut.id === "voice" ? <span className="settings-keys">{formatKeys(shortcut.keys).map((key) => <kbd className="kbd" key={key}>{key}</kbd>)}</span> : (
-              <select className="select settings-select settings-shortcut-select" aria-label={t(shortcut.label)} value={Object.hasOwn(settings.shortcutOverrides, shortcut.id) ? settings.shortcutOverrides[shortcut.id] ?? "off" : "default"} onChange={(event) => {
-                const next = { ...settings.shortcutOverrides };
-                if (event.target.value === "default") delete next[shortcut.id];
-                else next[shortcut.id] = event.target.value === "off" ? null : event.target.value;
-                update({ shortcutOverrides: next });
-              }}>
-                <option value="default" title={t("Default")} disabled={shortcutConflict(shortcut.id, shortcutKeys(shortcut.id, {}), settings.shortcutOverrides)}>{compactKeys(shortcut.keys)}</option>
-                <option value="off" title={t("Send keys to terminal")}>{t("Off")}</option>
-                {SHORTCUT_KEYS.map((key) => {
-                  const conflict = shortcutConflict(shortcut.id, [key], settings.shortcutOverrides);
-                  return <option key={key} value={key} disabled={conflict}>{compactKeys(["Mod", "Shift", key])}{conflict ? " — " + t("Already assigned") : ""}</option>;
-                })}
-              </select>
-            )}
-          </SettingsRow>
-        ))}
+      <SettingsGroup className="settings-shortcuts" note={<>{t("Bindings apply to this browser and device; Mod+Shift is fixed.")} {t("Text selection in focused fields stays native; Tab/list keys are UI-local, not global shortcuts.")} {t("The mobile key bar sends terminal keys, not app actions.")}</>}>
+        {SHORTCUTS.map((shortcut) => {
+          const displayedKeys = shortcutDisplayKeys(shortcut.id, settings.shortcutOverrides);
+          const selectedKey = displayedKeys[displayedKeys.length - 1];
+          const selectedReserved = selectedKey !== undefined && isReservedShortcutKey(selectedKey, platformIsMac);
+          const defaultKeys = shortcutDisplayKeys(shortcut.id, {});
+          const defaultKey = defaultKeys[defaultKeys.length - 1];
+          const defaultReserved = defaultKey !== undefined && isReservedShortcutKey(defaultKey, platformIsMac);
+          return (
+            <SettingsRow key={shortcut.id} label={t(shortcut.label)} wide={shortcut.id !== "voice"} description={selectedReserved ? t("Your browser or operating system may intercept {keys}.", { keys: compactKeys(displayedKeys) }) : undefined}>
+              {shortcut.id === "voice" ? <span className="settings-keys">{formatKeys(shortcut.keys).map((key) => <kbd className="kbd" key={key}>{key}</kbd>)}</span> : (
+                <select className="select settings-select settings-shortcut-select" aria-label={t(shortcut.label)} value={Object.hasOwn(settings.shortcutOverrides, shortcut.id) ? settings.shortcutOverrides[shortcut.id] ?? "off" : "default"} onChange={(event) => {
+                  const next = { ...settings.shortcutOverrides };
+                  if (event.target.value === "default") delete next[shortcut.id];
+                  else next[shortcut.id] = event.target.value === "off" ? null : event.target.value;
+                  update({ shortcutOverrides: next });
+                }}>
+                  <option value="default" title={t("Default")} disabled={shortcutConflict(shortcut.id, shortcutKeys(shortcut.id, {}), settings.shortcutOverrides)}>{compactKeys(defaultKeys)}{defaultReserved ? ` — ${t("Reserved")}` : ""}</option>
+                  <option value="off" title={t("Send keys to terminal")}>{t("Off")}</option>
+                  {SHORTCUT_KEYS.map((key) => {
+                    const conflict = shortcutConflict(shortcut.id, [key], settings.shortcutOverrides);
+                    const reserved = isReservedShortcutKey(key, platformIsMac);
+                    return <option key={key} value={key} disabled={conflict}>{compactKeys(["Mod", "Shift", key])}{reserved ? ` — ${t("Reserved")}` : ""}{conflict ? " — " + t("Already assigned") : ""}</option>;
+                  })}
+                </select>
+              )}
+            </SettingsRow>
+          );
+        })}
       </SettingsGroup>
       <div className="settings-actions">
         <button type="button" className="btn" onClick={() => update({ shortcutOverrides: {} })}>{t("Reset shortcuts")}</button>
@@ -611,11 +612,12 @@ function AboutPage({ updates, herdrVersion, bridgesFollow }: { updates: UpdatesM
     <>
       <UpdateControls updates={updates} bridgesFollow={bridgesFollow} />
       <HerdrUpdateControls enabled herdrVersion={herdrVersion} />
+      <TelemetryControls />
       <SettingsGroup title={t("About")} className="settings-about">
         <div className="settings-row">
           <div className="settings-row-text">
             <span className="settings-label">herdr web ui</span>
-            <a className="settings-link" href="https://devswha.github.io/herdr-web-ui/" target="_blank" rel="noreferrer">devswha.github.io/herdr-web-ui</a>
+            <a className="settings-link" href="https://herdrweb.dev/" target="_blank" rel="noreferrer">herdrweb.dev</a>
           </div>
           <a className="btn" href="https://github.com/devswha/herdr-web-ui" target="_blank" rel="noreferrer"><Star aria-hidden="true" />{t("Star on GitHub")}</a>
         </div>

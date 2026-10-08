@@ -28,9 +28,18 @@ const CLAUDE_TABS_RE = /^←\s+[☐☒☑✔]/;
 // Claude Code's unnumbered menus (the folder-trust check on a new folder, among others):
 // plain rows, `❯` on the selected one, under this hint
 const CLAUDE_CONFIRM_HINT_RE = /enter to confirm.*esc to (?:cancel|exit|go back)/i;
+/** Claude Code took invisible characters out of a message and holds it in its input (2.1.294) */
+const CLAUDE_HELD_HINT_RE = /^Removed (\d+) invisible characters?\s*·\s*review and press \S+ to send$/i;
 // Claude Code's `/model` list, by the two keys it takes a pick with: Enter saves it as the default
 // for new sessions, `s` keeps it to this session
 const CLAUDE_MODEL_HINT_RE = /enter to set as default.*\bs to use this session only.*esc to cancel/i;
+// Claude Code's `/effort` slider (2.1.294), the same two keys in other words: Enter saves the level
+// as the default for new sessions, `s` keeps it to this session
+const CLAUDE_EFFORT_HINT_RE = /←\/→ to adjust\s*·\s*enter to confirm\s*·\s*s for this session only\s*·\s*esc to cancel/i;
+// The slider by its keys alone, for the guard that keeps the fallback card and pending input off
+// it: a hint cut inside a word, or drawn without `s`, is still a slider whose Enter saves a default
+const CLAUDE_EFFORT_GUARD_RE = new RegExp(["←/→ to adjust · Enter to confirm", "Esc to cancel"]
+  .map((part) => [...part.replace(/\s+/g, "")].map((char) => char.replace(/[/.*+?^${}()|[\]\\]/g, "\\$&")).join("\\s*")).join(".*"), "i");
 // Codex's `/model` lists, by the footer of the row under the cursor (its keymap's own words): a
 // row that only opens the next list takes Enter, a row that picks takes `s` for this session and
 // Enter to save the pick as the default (`enter apply` on Ultra)
@@ -72,6 +81,7 @@ const KEY = {
   space: "space",
   tab: "tab",
   right: "right",
+  left: "left",
   backtab: "shift+tab",
   backspace: "backspace",
   // opens Codex's queue on its first question, and closes it back to the main prompt
@@ -93,7 +103,9 @@ type Responder =
   | "claude-approval"
   | "claude-plan"
   | "claude-confirm"
+  | "claude-held"
   | "claude-model"
+  | "claude-effort"
   | "codex-model"
   | "omo-question"
   | "omo-review"
@@ -104,6 +116,7 @@ type Responder =
   | "pi-input"
   | "pi-model"
   | "fallback-menu"
+  | "fallback-gjc-menu"
   | "fallback-keys";
 
 type ParsedPrompt = InteractivePrompt & {
@@ -1194,6 +1207,99 @@ function parseClaudeApproval(screen: string): ParsedPrompt | null {
 }
 
 /**
+ * Claude Code 2.1.294 takes zero-width and other invisible characters out of a message, and instead
+ * of sending it keeps it in its input until it is reviewed. For a moment it says so over the box:
+ *
+ *                       Removed 1 invisible character · review and press Enter to send
+ *   ────────────────
+ *   ❯ helloworld test
+ *   ────────────────
+ *     [Haiku 4.5] │ project
+ *
+ * The chat had sent the message and cleared its box, so it seemed gone. The card shows the
+ * message as Claude now holds it and sends it (Enter) or drops it (Ctrl+C clears the input).
+ * The hint does not stay (a turn's status line takes its row), so the box counts on its own too:
+ * when it still holds what the chat last sent here less only invisible characters (`sent`).
+ * `working`: Claude is under a turn. Ctrl+C then interrupts the turn and leaves the box as it was
+ * (live, 2.1.294: "Interrupted · What should Claude do instead?"), so the card offers Send alone
+ * until the turn ends; Enter under a turn queues the message as it does from the terminal.
+ */
+function parseClaudeHeld(screen: string, sent: string | null, working: boolean): ParsedPrompt | null {
+  const lines = screen.replace(ANSI_RE, "").split(/\r?\n/);
+  // the input box: the last rule with only Claude's footer under it, the rule above it, and a ❯ line first
+  const bottom = findLastIndex(lines, (line) => isDivider(line));
+  if (bottom < 0) return null;
+  const footer = lines.slice(bottom + 1).map(cleanLine).filter(Boolean);
+  if (footer.length > 8 || footer.some((line) => line.startsWith("❯"))) return null;
+  let top = bottom - 1;
+  while (top >= 0 && !isDivider(lines[top]!)) top -= 1;
+  if (top < 0 || bottom - top > 40) return null;
+  const box = lines.slice(top + 1, bottom).map((line) => line.replace(/\s+$/, ""));
+  if (!/^\s*❯/.test(box[0] ?? "")) return null;
+  // the box's own lines: the first after its ❯, the rest at the box's indent
+  const message = box.map((line, index) => index === 0 ? line.replace(/^\s*❯\s?/, "") : line.replace(/^ {0,2}/, "")).join("\n").trim();
+  if (!message) return null;
+  let above = top - 1;
+  while (above >= 0 && !cleanLine(lines[above]!)) above -= 1;
+  const hint = above >= 0 ? CLAUDE_HELD_HINT_RE.exec(cleanLine(lines[above]!)) : null;
+  const removed = hint ? Number(hint[1]) : sent !== null ? removedInvisible(sent, message) : 0;
+  if (removed <= 0) return null;
+  const title = removed === 1 ? "Claude Code removed 1 invisible character" : `Claude Code removed ${removed} invisible characters`;
+  // the choices are part of the card's id: a Discard tapped on a card read before the turn began is refused
+  const choices = [{ label: "Send", steps: keySteps([KEY.enter]) }, ...(working ? [] : [{ label: "Discard", steps: keySteps(["ctrl+c"]) }])];
+  return finishPrompt("claude", {
+    kind: "approval", title, question: "The message waits in its input. Send it as it is now?",
+    body: message,
+    options: choices.map(({ label }) => ({ label, description: null })),
+    multi_select: false, custom_option_index: null,
+  }, {
+    responder: "claude-held", menuLabels: choices.map(({ label }) => label), selectedIndex: -1,
+    checkedOptionIndices: [], customMenuIndex: null, rejectWithEscapeIndex: null,
+    optionSteps: choices.map(({ steps }) => steps),
+  });
+}
+
+/** Characters no one sees: format controls (zero-width spaces and joiners, bidi marks, tags), combining marks, Hangul fillers. */
+export const INVISIBLE_CHAR_RE = /[\p{Cf}\p{Mn}\p{Me}\u115F\u1160\u3164\uFFA0]/u;
+
+/**
+ * How many characters of `sent` the box `shown` lacks, when it lacks only invisible ones (0 when
+ * anything else differs). Whitespace is left out of both: the box wraps a long message.
+ */
+export function removedInvisible(sent: string, shown: string): number {
+  // whitespace, but not U+FEFF, which \s takes for a space and Claude Code counts as invisible
+  const a = [...sent.replace(/[^\S\uFEFF]+/g, "")];
+  const b = [...shown.replace(/[^\S\uFEFF]+/g, "")];
+  let i = 0;
+  let removed = 0;
+  for (const char of a) {
+    if (i < b.length && b[i] === char) { i += 1; continue; }
+    if (!INVISIBLE_CHAR_RE.test(char)) return 0;
+    removed += 1;
+  }
+  return i === b.length ? removed : 0;
+}
+
+/** What the chat last sent to each pane, while it carried invisible characters (noteSubmitted). */
+const heldCandidates = new Map<string, { text: string; at: number }>();
+/** Long enough to read the card and answer it; a message kept past this is the user's own business */
+const HELD_WINDOW_MS = 10 * 60_000;
+
+/** A message the chat just sent to a pane: one with invisible characters may be held by Claude Code. */
+export function noteSubmitted(paneId: string, text: string): void {
+  if (INVISIBLE_CHAR_RE.test(text)) heldCandidates.set(paneId, { text, at: Date.now() });
+  else heldCandidates.delete(paneId);
+}
+
+/** What the chat sent a pane that Claude Code may be holding, for the readers that ask whether it waits. */
+export function heldCandidate(paneId: string): string | null {
+  const entry = heldCandidates.get(paneId);
+  if (!entry) return null;
+  if (Date.now() - entry.at > HELD_WINDOW_MS) { heldCandidates.delete(paneId); return null; }
+  return entry.text;
+}
+
+/**
  * Claude Code's unnumbered menus, live in 2.1.285 on a folder it has not seen:
  *
  *   Accessing workspace:
@@ -1538,23 +1644,24 @@ function parseCodexModel(screen: string): ParsedPrompt | null {
  * there saves a default, so nothing that ends in Enter is typed while one is open.
  */
 export function modelListWaits(agent: string, screen: string): boolean {
-  return claudeModelListWaits(screen) || (agent === "codex" && codexModelListWaits(screen));
+  return claudeModelListWaits(screen) || claudeModelListWaits(screen, CLAUDE_EFFORT_GUARD_RE) || (agent === "codex" && codexModelListWaits(screen));
 }
 
 /**
  * Whether Claude Code's model list holds the end of the screen, by its hint alone: also a list
  * parseClaudeModel could not read (a name the pane cut in two). Such a list gets no fallback card
  * while herdr happens to report the pane blocked: that card offers Enter, and Enter on this list
- * saves the row under the cursor as the default for every new session.
+ * saves the row under the cursor as the default for every new session. `hint`: the effort slider's
+ * instead, whose Enter saves a default the same way.
  */
-function claudeModelListWaits(screen: string): boolean {
+function claudeModelListWaits(screen: string, hint: RegExp = CLAUDE_MODEL_HINT_RE): boolean {
   const visible = screen.replace(ANSI_RE, "").split(/\r?\n/).map(cleanLine).filter((line) => line && !isDivider(line));
   // wider than the reader's own window: a hint wrapped further than it reads is still this list's.
   // The match runs into the line it ends at, as in promptTailIsActive: a hint that ended above
   // later output is an answered list's, and holds nothing
   const ends = (lines: string[], end: number): boolean => [1, 2, 3, 4, 5, 6].some((span) => {
     const from = Math.max(0, end - span);
-    return CLAUDE_MODEL_HINT_RE.test(lines.slice(from, end).join(" ")) && (span === 1 || !CLAUDE_MODEL_HINT_RE.test(lines.slice(from, end - 1).join(" ")));
+    return hint.test(lines.slice(from, end).join(" ")) && (span === 1 || !hint.test(lines.slice(from, end - 1).join(" ")));
   });
   // Claude's own footer under the open list (the session's rule, its task list) is no later
   // output, and it sits under a wrapped hint as under a whole one
@@ -1593,6 +1700,65 @@ function parseClaudeModel(screen: string): ParsedPrompt | null {
     checkedOptionIndices: [], customMenuIndex: null, rejectWithEscapeIndex: null,
     // `s`, never Enter: the pick stays in this session, and the default for new ones is left alone
     optionSteps: rows.map((_, index) => [...keySteps(navigationKeys(index - selectedIndex)), { text: "s" }]),
+  });
+}
+
+/**
+ * Claude Code's `/effort` slider, as 2.1.294 draws it:
+ *
+ *   Effort
+ *
+ *                Faster                             Smarter
+ *                ────────────────────▲─────────────────────      Ultracode  off
+ *                low     medium     high     xhigh      max      Tab to toggle
+ *
+ *
+ *   ←/→ to adjust · Enter to confirm · s for this session only · Esc to cancel
+ *
+ * ▲ stands over the level the slider is on. The levels are the card's options, picked with ←/→
+ * and `s`, never Enter. Ultracode is left to the terminal.
+ */
+const CLAUDE_EFFORT_LEVEL_RE = /\b(?:low|medium|high|xhigh|max)\b/g;
+/** how far ▲ may stand from the middle of a level's name and still be over it */
+const CLAUDE_EFFORT_ALIGN = 3;
+/** blank lines between the level names and the hint, at most */
+const CLAUDE_EFFORT_UNDER_LINES = 3;
+
+function parseClaudeEffort(screen: string): ParsedPrompt | null {
+  const lines = screen.replace(ANSI_RE, "").split(/\r?\n/).map((line) => line.trimEnd());
+  const hintIndex = findLastIndex(lines, (_, index) => CLAUDE_EFFORT_HINT_RE.test(wrapped(lines, index)));
+  if (hintIndex < 0) return null;
+  let labelsIndex = hintIndex - 1;
+  while (labelsIndex > 0 && lines[labelsIndex]!.trim() === "") labelsIndex -= 1;
+  const labels = lines[labelsIndex] ?? "";
+  const track = lines[labelsIndex - 1] ?? "";
+  const scale = /^\s*[─▲]+/.exec(track)?.[0] ?? "";
+  const titled = lines.slice(Math.max(0, labelsIndex - 4), Math.max(0, labelsIndex - 1)).some((line) => line.trim() === "Effort");
+  // a line of level names and nothing else (the toggle's hint aside), cut or wrapped by a narrow pane: not read
+  const onlyLevels = labels.replace(CLAUDE_EFFORT_LEVEL_RE, "").replace(/Tab to toggle/i, "").trim() === "";
+  // two blank lines stand between the level names and the hint as Claude draws it
+  if (hintIndex - labelsIndex > CLAUDE_EFFORT_UNDER_LINES + 1 || !titled || !onlyLevels || scale.split("▲").length !== 2) return null;
+  const arrow = track.indexOf("▲");
+  const levels = [...labels.matchAll(CLAUDE_EFFORT_LEVEL_RE)].map((match) => ({ name: match[0], middle: match.index + match[0].length / 2 }));
+  if (levels.length < 2 || new Set(levels.map(({ name }) => name)).size !== levels.length) return null;
+  const distance = (index: number) => Math.abs(levels[index]!.middle - arrow);
+  const selectedIndex = levels.reduce((best, _, index) => distance(index) < distance(best) ? index : best, 0);
+  if (distance(selectedIndex) > CLAUDE_EFFORT_ALIGN) return null;
+  const names = levels.map(({ name }) => name);
+  return finishPrompt("claude", {
+    // where the slider stands is no part of what the card asks: one card wherever ▲ is
+    kind: "question",
+    title: "",
+    question: "Set effort for this session",
+    body: null,
+    options: names.map((label) => ({ label, description: null })),
+    multi_select: false,
+    custom_option_index: null,
+  }, {
+    responder: "claude-effort", menuLabels: names, selectedIndex,
+    checkedOptionIndices: [], customMenuIndex: null, rejectWithEscapeIndex: null,
+    // `s`, never Enter: the level stays in this session, and the default for new ones is left alone
+    optionSteps: names.map((_, index) => [...keySteps(sliderKeys(index - selectedIndex)), { text: "s" }]),
   });
 }
 
@@ -1656,7 +1822,10 @@ function promptTailIsActive(prompt: ParsedPrompt, screen: string): boolean {
   if (prompt.responder === "omp-approval") return ends(/^(?:[›>❯•]\s*)?(?:Approve|Deny)$|esc.*cancel/i);
   if (prompt.responder === "claude-approval") return ends(/esc to cancel.*(?:tab|ctrl\+e)|ctrl\+e to explain/i);
   if (prompt.responder === "claude-confirm") return ends(CLAUDE_CONFIRM_HINT_RE);
+  // its parser already found the hint over the input box with only the footer under it
+  if (prompt.responder === "claude-held") return true;
   if (prompt.responder === "claude-model") return ends(CLAUDE_MODEL_HINT_RE);
+  if (prompt.responder === "claude-effort") return ends(CLAUDE_EFFORT_HINT_RE);
   if (prompt.responder === "codex-model") return ends(/(?:^|\s)enter select\s*·\s*esc back$|(?:^|\s)enter (?:default|apply)\s*·\s*s session\s*·\s*esc back$/i);
   if (prompt.responder === "omo-question" || prompt.responder === "omo-review" || prompt.responder === "omo-typing") {
     // The form is live only with nothing but OmO's own footer under its hint: blank lines, one
@@ -1963,7 +2132,7 @@ function parsePiDialog(screen: string, moved = false): ParsedPrompt | null {
   });
 }
 
-function parsePrompt(agent: string, screen: string, omoAsk: OmoAsk | null = null, omoTrusted = true, omoOpen: OmoAsk[] = []): ParsedPrompt | null {
+function parsePrompt(agent: string, screen: string, omoAsk: OmoAsk | null = null, omoTrusted = true, omoOpen: OmoAsk[] = [], sent: string | null = null, working = false): ParsedPrompt | null {
   const omo = () => {
     const forms = (ask: OmoAsk | null, trusted: boolean) => [parseOmoQuestion(screen, ask, trusted), parseOmoTyping(screen, ask, trusted), parseOmoReview(screen, ask, trusted)];
     const matched = omoOpen.flatMap((ask) => forms(ask, false)).filter((form) => form !== null);
@@ -1978,7 +2147,7 @@ function parsePrompt(agent: string, screen: string, omoAsk: OmoAsk | null = null
       // `pi` reads pi's own dialogs first: pi's hint is its own, so an omo form never matches
       // it and falls through to omo()'s parsers.
       : agent === "claude"
-        ? [parseClaudeQuestion(screen), parseClaudeSubmit(screen), parseClaudeApproval(screen), parseClaudeConfirm(screen), parseClaudeModel(screen), ...omo()]
+        ? [parseClaudeQuestion(screen), parseClaudeSubmit(screen), parseClaudeApproval(screen), parseClaudeConfirm(screen), parseClaudeModel(screen), parseClaudeEffort(screen), parseClaudeHeld(screen, sent, working), ...omo()]
         : agent === "pi"
           ? [parsePiModel(screen), parsePiDialog(screen), ...omo()]
         : agent === "omo" || agent === ""
@@ -2012,8 +2181,9 @@ export function codexQueuedPrompt(screen: string, unanswered: QueuedQuestion[], 
  * `omoOpen`: every question the session has open (openOmoAsks), for omo's widget of the ones
  * asked without waiting.
  */
-export function parseInteractivePrompt(agent: string, screen: string, omoAsk: OmoAsk | null = null, omoTrusted = true, omoOpen: OmoAsk[] = []): InteractivePrompt | null {
-  const parsed = parsePrompt(agent, screen, omoAsk, omoTrusted, omoOpen);
+/** `sent`: what the chat last sent to the pane, and `working`: whether its agent is under a turn, for a message Claude Code holds back (parseClaudeHeld) */
+export function parseInteractivePrompt(agent: string, screen: string, omoAsk: OmoAsk | null = null, omoTrusted = true, omoOpen: OmoAsk[] = [], sent: string | null = null, working = false): InteractivePrompt | null {
+  const parsed = parsePrompt(agent, screen, omoAsk, omoTrusted, omoOpen, sent, working);
   return parsed ? publicPrompt(parsed) : null;
 }
 
@@ -2021,6 +2191,11 @@ class InvalidAnswer extends Error {}
 
 function navigationKeys(delta: number): string[] {
   return Array.from({ length: Math.abs(delta) }, () => delta > 0 ? KEY.down : KEY.up);
+}
+
+/** a slider's moves: → is the next level, as ↓ is the next row */
+function sliderKeys(delta: number): string[] {
+  return Array.from({ length: Math.abs(delta) }, () => delta > 0 ? KEY.right : KEY.left);
 }
 
 function keySteps(keys: string[]): AnswerStep[] {
@@ -2092,10 +2267,10 @@ export function answerKeys(prompt: InteractivePrompt, answer: Pick<PromptAnswer,
 /**
  * The last resort, for a pane herdr reports blocked that none of the readers above know (a
  * menu a new agent version draws differently, an agent without a reader): the chat must never
- * leave the user without a way to answer. It guesses as little as it can. Only a numbered menu
- * that still owns the screen's end becomes options, each answered by typing its number, so no
- * cursor position is guessed, plus Enter and Esc. Anything else shows the screen's last lines
- * with the keys its hint lines name, plus Enter and Esc.
+ * leave the user without a way to answer. It guesses as little as it can: a numbered menu that
+ * still owns the screen's end becomes options answered by number, and GJC's exact unnumbered
+ * selector becomes options answered by its cursor keys. Anything else shows the screen's last
+ * lines with the keys its hint lines name, plus Enter and Esc.
  */
 /** a question, allowing a trailing choice hint such as "(y/n)" */
 const ASKED_RE = /\?\s*(?:[([][^)\]]*[)\]])?\s*$/;
@@ -2108,6 +2283,7 @@ const ARROWS_RE = /[↑↓]|\barrow keys\b/i;
  * ("Enter recovery code", "Enter your phone number", "Press any key").
  */
 const MENU_HINT_RE = /\b(?:select|choose|pick|confirm|navigate|move|esc|cancel)\b|[↑↓↵⏎]|\b(?:enter|type)\s+(?:(?:a|an|the)\s+)?number\b|\b\d\s*[-–]\s*\d\b/i;
+const GJC_SELECT_HINT_RE = /^(?:\[↑↓ to navigate, enter to select, esc to (?:cancel|go back)\]|up\/down navigate\s+enter select(?:\s+←\/→ question)?\s+esc cancel|↑\/↓ select\s+enter(?:\s+←\/→ question)?\s+esc\s+PgUp\/PgDn\/Ctrl\+u\/d: question · Wheel: transcript)$/i;
 /** an input field waiting at a line's end ("Password:", "Choice: 2") */
 const INPUT_FIELD_RE = /:\s*\S{0,3}$/;
 /** a line that reads as a hint of its own, not a label's wrapped words ("…the selected number", "choose one") */
@@ -2158,7 +2334,9 @@ export function parseFallbackPrompt(agent: string, screen: string): InteractiveP
   const lines = screen.replace(ANSI_RE, "").split(/\r?\n/);
   const shown = lines.flatMap((line, index) => cleanLine(line) && !isDivider(line) ? [index] : []);
   const steady = steadyReader(agent, shown.map((index) => cleanLine(lines[index]!)));
-  const menu = fallbackMenu(lines, shown);
+  // GJC's exact selector first: a label of its that starts with a number is still moved to, never typed
+  const selectionMenu = fallbackGjcSelectionMenu(agent, lines, shown);
+  const menu = selectionMenu ? null : fallbackMenu(lines, shown);
   if (menu) {
     const above = shown.filter((index) => index < menu.start).map((index) => cleanLine(lines[index]!));
     const question = [...above].reverse().find((line) => ASKED_RE.test(line)) ?? above.at(-1);
@@ -2182,6 +2360,35 @@ export function parseFallbackPrompt(agent: string, screen: string): InteractiveP
       checkedOptionIndices: [], customMenuIndex: null, rejectWithEscapeIndex: null,
       optionSteps: choices.map(({ steps }) => steps),
     }, steadyFields(question, body, steady.read)));
+  }
+  if (selectionMenu) {
+    const above = shown.filter((index) => index < selectionMenu.start).map((index) => cleanLine(lines[index]!));
+    // the selector's own heading: the block of lines right above its rows, never an earlier question
+    let headEnd = selectionMenu.start;
+    while (headEnd > 0 && (!cleanLine(lines[headEnd - 1]!) || isDivider(lines[headEnd - 1]!))) headEnd -= 1;
+    let headStart = headEnd;
+    while (headStart > 0 && cleanLine(lines[headStart - 1]!) && !isDivider(lines[headStart - 1]!)) headStart -= 1;
+    const heading = lines.slice(headStart, headEnd).map((line) => cleanLine(line));
+    const question = [...heading].reverse().find((line) => ASKED_RE.test(line)) ?? heading.at(-1);
+    const choiceRows = new Set(selectionMenu.rows.map((row) => row.lineIndex));
+    const choices = [
+      ...selectionMenu.rows.map((row, index) => ({
+        label: row.label,
+        steps: keySteps([...navigationKeys(index - selectionMenu.selectedIndex), KEY.enter]),
+      })),
+      { label: "Esc", steps: keySteps([KEY.escape]) },
+    ];
+    const body = withoutLine(above, question);
+    return screenCard(lines, shown, steady, finishPrompt(agent, {
+      kind: "menu", fallback: true, title: "Waiting for your answer", question: question ?? "The agent is waiting for your answer.",
+      body,
+      options: choices.map(({ label }) => ({ label, description: null })),
+      multi_select: false, custom_option_index: null,
+    }, {
+      responder: "fallback-gjc-menu", menuLabels: choices.map(({ label }) => label), selectedIndex: selectionMenu.selectedIndex,
+      checkedOptionIndices: [], customMenuIndex: null, rejectWithEscapeIndex: null,
+      optionSteps: choices.map(({ steps }) => steps),
+    }, steadyFields(question, body, steady.read)), choiceRows);
   }
   const last = shown.slice(-16).map((index) => cleanLine(lines[index]!));
   // letters and arrows only for the prompt's own last lines, never while an input box ends the
@@ -2220,8 +2427,12 @@ function steadyFields(question: string | undefined, body: string | null, steady:
  * command, footer or wrapped label anywhere on it makes an answer to the old card stale. A working
  * line's spinner, time and token count are the one thing it leaves out (steadyReader).
  */
-function screenCard(lines: string[], shown: number[], steady: SteadyReader, parsed: ParsedPrompt): InteractivePrompt {
-  const screen = shown.map((index) => steady.read(cleanLine(lines[index]!))).join("\n");
+function screenCard(lines: string[], shown: number[], steady: SteadyReader, parsed: ParsedPrompt, cursorRows?: ReadonlySet<number>): InteractivePrompt {
+  const screen = shown.map((index) => {
+    const line = cleanLine(lines[index]!);
+    // GJC moves its cursor within the same menu; the selectedIndex is checked separately on reread.
+    return steady.read(cursorRows?.has(index) ? line.replace(SELECTED_RE, "") : line);
+  }).join("\n");
   parsed.id = createHash("sha256").update(JSON.stringify({ card: parsed.id, screen, ...(steady.working === null ? {} : { working: steady.working }) })).digest("hex").slice(0, 12);
   return publicPrompt(parsed);
 }
@@ -2268,6 +2479,40 @@ function fallbackMenu(lines: string[], shown: number[]): { start: number; rows: 
     row.label = [row.label, ...wrapped].join(" ");
   }
   return { start, rows };
+}
+
+/** GJC's unnumbered selector: a cursor-marked row, two-space rows, and its own selection footer. */
+function fallbackGjcSelectionMenu(agent: string, lines: string[], shown: number[]): { start: number; rows: MenuRow[]; selectedIndex: number } | null {
+  if (agent !== "gjc" || shown.length === 0) return null;
+  let hintStart = -1;
+  for (let length = 1; length <= Math.min(3, shown.length); length += 1) {
+    const suffix = shown.slice(-length).map((index) => cleanLine(lines[index]!)).join(" ");
+    if (GJC_SELECT_HINT_RE.test(suffix)) {
+      hintStart = shown[shown.length - length]!;
+      break;
+    }
+  }
+  if (hintStart < 0) return null;
+
+  // GJC's standard selector separates the footer with a spacer and can outline its rows.
+  // The provider wizard puts its footer directly below them.
+  let end = hintStart;
+  while (end > 0 && (!cleanLine(lines[end - 1]!) || isDivider(lines[end - 1]!))) end -= 1;
+  let start = end;
+  while (start > 0 && cleanLine(lines[start - 1]!) && !isDivider(lines[start - 1]!)) start -= 1;
+  if (start === 0 || (cleanLine(lines[start - 1]!) && !isDivider(lines[start - 1]!))) return null;
+  const rows: MenuRow[] = [];
+  for (let index = start; index < end; index += 1) {
+    const text = cleanLine(lines[index]!);
+    const selected = SELECTED_RE.test(text);
+    const label = normalizeText(text.replace(SELECTED_RE, ""));
+    // A windowed/truncated list is not a complete set of choices. Keep its manual keys.
+    if (!label || /^\(\d+\/\d+\)$/.test(label) || /…|\.\.\./.test(label)) return null;
+    rows.push({ label, selected, checked: false, lineIndex: index });
+  }
+  const selectedIndex = rows.findIndex((row) => row.selected);
+  if (rows.length < 2 || selectedIndex < 0 || rows.filter((row) => row.selected).length !== 1) return null;
+  return { start, rows, selectedIndex };
 }
 
 /**
@@ -2410,6 +2655,16 @@ function sgrRuns(line: string): [string, boolean, boolean][] {
  * one line.
  */
 export function parseClaudeSuggestion(ansi: string): string | null {
+  const grey = claudeGreyInput(ansi);
+  return grey === null || CLAUDE_TIP_RE.test(grey) ? null : grey;
+}
+
+/**
+ * What Claude Code's input box shows in grey while it is empty (a suggested prompt, or the
+ * new-session tip), null when the box holds typed text or nothing. Only an ANSI read tells grey
+ * text from a message: as plain text both are `❯ words`.
+ */
+function claudeGreyInput(ansi: string): string | null {
   const lines = ansi.split("\n").map((line) => line.replace(/\r$/, ""));
   const plain = lines.map((line) => line.replace(ANSI_RE, "").replace(/\u001b\][^\u0007\u001b]*(?:\u0007|\u001b\\)/g, ""));
   let index = plain.length - 1;
@@ -2432,7 +2687,29 @@ export function parseClaudeSuggestion(ansi: string): string | null {
   // a cursor over typed text has nothing grey after it
   if (cursor && !sgrRuns(lines[index]!).some(([run, dim]) => dim && run.trim() !== "")) return null;
   const suggestion = text.replace(/\u00a0/g, " ").trim();
-  return suggestion === "" || CLAUDE_TIP_RE.test(suggestion) ? null : suggestion;
+  return suggestion === "" ? null : suggestion;
+}
+
+/** Whether a card is the one for a message Claude Code holds back (parseClaudeHeld). */
+export function isClaudeHeld(prompt: InteractivePrompt): boolean {
+  return parsedByPublicPrompt.get(prompt)?.responder === "claude-held";
+}
+
+/**
+ * Whether a held-message card was read off Claude's own grey text. Claude's hint outlasts the
+ * message for a moment (sent or cleared in the terminal), over a box that is empty again and shows
+ * its tip or a suggested prompt: Enter there sends Claude's suggestion and Ctrl+C asks to leave
+ * Claude. A read that fails or shows no box says nothing, and the card stays.
+ * herdr gives colors for the viewport alone (an ANSI read of "detection", the live screen the card
+ * is read from, carries no escapes: measured on 0.9.3), and a viewport scrolled into the history
+ * can show an older box. So the grey text counts only when it is the very text the card took for
+ * the message.
+ */
+export async function claudeHeldIsGrey(paneId: string, prompt: InteractivePrompt): Promise<boolean> {
+  if (!isClaudeHeld(prompt)) return false;
+  const same = (text: string | null): boolean => text !== null && normalizeText(text) === normalizeText(prompt.body ?? "");
+  return paneRead({ paneId, source: "visible", format: "ansi", timeoutMs: SUGGESTION_READ_MS })
+    .then((read) => same(claudeGreyInput(read.text)), () => false);
 }
 
 async function readPrompt(paneId: string, codexHome?: string): Promise<{ agent: string; status: string; prompt: InteractivePrompt | null; pane: HerdrPane; panes: HerdrPane[] }> {
@@ -2441,6 +2718,7 @@ async function readPrompt(paneId: string, codexHome?: string): Promise<{ agent: 
   for (const logged of fallbackLogged) if (!panes.some((candidate) => candidate.pane_id === logged)) fallbackLogged.delete(logged);
   for (const known of askings.keys()) if (!panes.some((candidate) => candidate.pane_id === known)) askings.delete(known);
   for (const known of answerTurns.keys()) if (!panes.some((candidate) => candidate.pane_id === known)) answerTurns.delete(known);
+  for (const known of heldCandidates.keys()) if (!panes.some((candidate) => candidate.pane_id === known)) heldCandidates.delete(known);
   const pane = panes.find((candidate) => candidate.pane_id === paneId);
   if (!pane) throw new HerdrError("pane_not_found", `pane ${paneId} not found`);
   const agent = pane.agent ?? "";
@@ -2461,7 +2739,7 @@ async function readPrompt(paneId: string, codexHome?: string): Promise<{ agent: 
   // Codex's collapsed question queue reads blocked while its main prompt takes a message; a
   // model list of Claude Code's or Codex's that no reader could read is left to the terminal
   // (claudeModelListWaits, codexModelListWaits)
-  if ((agent === "codex" && (codexQuestionsCollapsed(screen) || codexModelListWaits(screen))) || claudeModelListWaits(screen)) {
+  if ((agent === "codex" && (codexQuestionsCollapsed(screen) || codexModelListWaits(screen))) || claudeModelListWaits(screen) || claudeModelListWaits(screen, CLAUDE_EFFORT_GUARD_RE)) {
     fallbackLogged.delete(paneId);
     return { agent, status, prompt: asked(paneId, null, turns), pane, panes };
   }
@@ -2501,7 +2779,7 @@ async function readKnownPrompt(
   codexHome?: string,
   panes: HerdrPane[] = [],
 ): Promise<{ prompt: InteractivePrompt | null; screen?: string }> {
-  if (!["claude", "omp", "codex", "omo", "pi", ""].includes(agent)) return { prompt: null };
+  if (!["claude", "omp", "codex", "omo", "pi", "gjc", ""].includes(agent)) return { prompt: null };
   const screen = await liveScreen(paneId);
   // omo's form reads its text from the session's call, the screen showing where the form stands
   const omoAsks = ["omo", "pi", "claude", ""].includes(agent) && pane.cwd && OMO_FORM_RE.test(screen)
@@ -2509,7 +2787,12 @@ async function readKnownPrompt(
   // a pane herdr names claude, or not at all, is omo's only on evidence: herdr reports it waiting
   // on the user, or the session's pending call is the form on screen
   const omoTrusted = (agent !== "claude" && agent !== "") || pane.agent_status === "blocked";
-  const prompt = parseInteractivePrompt(agent, screen, omoAsks[0] ?? null, omoTrusted, omoAsks);
+  const prompt = parseInteractivePrompt(agent, screen, omoAsks[0] ?? null, omoTrusted, omoAsks, agent === "claude" ? heldCandidate(paneId) : null, pane.agent_status === "working");
+  if (prompt && await claudeHeldIsGrey(paneId, prompt)) return { prompt: null, screen };
+  if (!prompt && agent === "gjc") {
+    const fallback = parseFallbackPrompt(agent, screen);
+    if (parsedByPublicPrompt.get(fallback)?.responder === "fallback-gjc-menu") return { prompt: fallback, screen };
+  }
   const count = agent === "codex" && prompt === null ? queuedQuestionCount(screen) : 0;
   if (count === 0 || !pane.cwd) return { prompt, screen };
   let rollout = queueRollouts.get(paneId);
@@ -2742,9 +3025,12 @@ export async function handlePromptRequest(request: Request, url: URL, options: P
         // Claude's unnumbered rows and pi's models are read with no number to aim at: looked at
         // again before the Enter even when it needs no move. So is Claude's model list, picked
         // with a letter: typed after the list has gone, it would stand in the agent's own prompt
-        let moved = responder === "claude-confirm" || responder === "pi-model" || responder === "omo-question" || responder === "claude-model" || responder === "codex-model";
-        // Claude's and Codex's model lists: a window on a list, picked with a letter
-        const list = responder === "claude-model" || responder === "codex-model";
+        let moved = responder === "claude-confirm" || responder === "pi-model" || responder === "omo-question" || responder === "claude-model" || responder === "claude-effort" || responder === "codex-model" || responder === "fallback-gjc-menu";
+        // Claude's and Codex's model lists: a window on a list, picked with a letter; Claude's effort
+        // slider the same way, its levels side by side
+        const list = responder === "claude-model" || responder === "claude-effort" || responder === "codex-model";
+        // ←/→ move the slider; anywhere else they are a menu's own keys (Claude's question tabs)
+        const sideways = responder === "claude-effort";
         /** the menu as the last look before a key showed it */
         let seen: ParsedPrompt | null = null;
         const looked = (shown: ParsedPrompt | null): void => { seen = shown; lastSeen = shown?.id; };
@@ -2794,13 +3080,14 @@ export async function handlePromptRequest(request: Request, url: URL, options: P
         let walked = false;
         for (let index = 0; index < steps.length; index += 1) {
           const step = steps[index]!;
-          const move = step.keys?.every((key) => key === KEY.up || key === KEY.down) ?? false;
+          const move = step.keys?.every((key) => key === KEY.up || key === KEY.down || (sideways && (key === KEY.left || key === KEY.right))) ?? false;
           // the asking ended under the answer: no further key, whatever the screen shows
           if (!asks()) return promptChanged();
           // A model list can be nine rows from the cursor, and an Esc in the terminal hands its
           // keys to the agent's own prompt, where an arrow walks the prompt's history: each move
           // after the first goes only once the list shows the one before it
-          if (move && walked && list && !(await onRow())) return promptChanged();
+          // GJC's selector the same: dismissed under the answer, its composer would take the moves
+          if (move && walked && (list || responder === "fallback-gjc-menu") && !(await onRow())) return promptChanged();
           if (!move && !committed) {
             // An answer is only as good as the menu and the cursor it moves from, and both are
             // as old as the read above by the time its moves are done: the menu answered in the
@@ -2833,7 +3120,7 @@ export async function handlePromptRequest(request: Request, url: URL, options: P
           if (move) {
             moved = true;
             walked = true;
-            for (const key of step.keys!) cursor = key === KEY.down ? cursor + 1 : Math.max(0, cursor - 1);
+            for (const key of step.keys!) cursor = key === KEY.down || key === KEY.right ? cursor + 1 : Math.max(0, cursor - 1);
           }
           if (index < steps.length - 1) await Bun.sleep(30);
         }
@@ -2848,6 +3135,8 @@ export async function handlePromptRequest(request: Request, url: URL, options: P
         if (queueOpened && !answered) await closeOpenQuestion(body.pane_id).catch(() => undefined);
         // answered, or as good as: the same prompt on the screen after this is asked anew
         if (committed) askingEnded(body.pane_id);
+        // sent or dropped from its card: the same words in the box after this are a new message
+        if (committed && parsedByPublicPrompt.get(target)?.responder === "claude-held") heldCandidates.delete(body.pane_id);
       }
       // answered from the chat, the queue closes again: the next question waits collapsed, and
       // the main prompt (where a message typed in the chat goes) has the input back
@@ -2864,7 +3153,7 @@ export async function handlePromptRequest(request: Request, url: URL, options: P
       // A model list closes, or opens its next list, a moment after its key: the same wait, so
       // the card's read right after the answer does not get the list just answered once more
       if (target.steps) form.answered = contentId(target);
-      else if (responder === "claude-model" || responder === "codex-model") form.answered = lastSeen ?? contentId(target);
+      else if (responder === "claude-model" || responder === "claude-effort" || responder === "codex-model") form.answered = lastSeen ?? contentId(target);
       return jsonResponse({ ok: true });
     });
     // the wait for the form's next step only reads the pane: after the pane's turn, so a message

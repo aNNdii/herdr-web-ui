@@ -3,7 +3,7 @@ import { Check, Copy } from "lucide-react";
 
 import "./BlockComments.css";
 
-import { foldCode, mathNestsTooDeep, parseMarkdown, parseMarkdownWithLines, type InlineNode, type ListBlock, type MarkdownBlock, type SourceLines } from "../lib/markdown.ts";
+import { foldCode, mathNestsTooDeep, parseMarkdown, type InlineNode, type ListBlock, type MarkdownBlock, type SourceLines } from "../lib/markdown.ts";
 import { codeIsFilePath, OpenFileContext, splitFilePaths } from "../lib/filePaths.ts";
 import { fileUriPath } from "../lib/terminalFileLinks.ts";
 import { CHAT_HIGHLIGHT_LIMIT, languageForFence } from "../lib/highlight.ts";
@@ -314,23 +314,23 @@ export function MarkdownBlocks({ blocks, quoted = false }: { blocks: MarkdownBlo
   );
 }
 
-interface MarkdownProps {
-  children: string;
-  className?: string;
-  /**
-   * The file viewer's preview: the elements carry the source lines they come from (`BlockView`). The chat never
-   * sets it: its DOM stays as it was.
-   */
-  sourceLines?: boolean;
-}
+/**
+ * Markdown rendered. Every prop is a string, so `memo` skips a parent's re-render: a reply's other
+ * parts are not rendered again while one grows.
+ */
+export const Markdown = memo(function Markdown({ children, className }: { children: string; className?: string }) {
+  const blocks = useMemo(() => parseMarkdown(children), [children]);
+  return <ParsedMarkdown blocks={blocks} className={className} />;
+});
 
 /**
- * Markdown rendered. Every prop is a string or a flag, so `memo` skips a parent's re-render: a long
- * plan in the file viewer is not rendered again every time the app polls. The ref is the
- * `.markdown` root: the file viewer's comments measure selections in it.
+ * Markdown parsed elsewhere, rendered as `Markdown` renders its text: the file viewer parses a file
+ * in a worker, so a file the parser is slow on cannot hold the page. Blocks with their `source`
+ * (`parseMarkdownWithLines`, as the file viewer's are) write the lines they come from on their
+ * elements, where a file comment finds the lines it is on; the chat's blocks carry none, so its DOM stays as it was. The ref is the `.markdown` root: the file viewer's
+ * comments measure selections in it.
  */
-export const Markdown = memo(forwardRef<HTMLDivElement, MarkdownProps>(function Markdown({ children, className, sourceLines = false }, ref) {
-  const blocks = useMemo(() => sourceLines ? parseMarkdownWithLines(children) : parseMarkdown(children), [children, sourceLines]);
+export const ParsedMarkdown = memo(forwardRef<HTMLDivElement, { blocks: MarkdownBlock[]; className?: string }>(function ParsedMarkdown({ blocks, className }, ref) {
   // a final reply part: a selection that comments stays inside one (lib/commentSelection.ts)
   const reply = useContext(BlockCommentContext);
   // the same targets across renders while the reply and its text stay: a part re-renders only for its own comments

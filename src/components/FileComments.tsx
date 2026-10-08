@@ -22,7 +22,6 @@ import { fileAnchor, fileCommentAt, placeFileComment, sortFileComments, type Fil
 import { useT } from "../lib/i18n.ts";
 import { useSettings } from "../lib/settings.ts";
 import { CommentPopover } from "./CommentPopover.tsx";
-import type { MeasuredFileSelection } from "./FileCommentsContext.ts";
 import { useCommentSurface, type CommentSurfaceProps, type SurfaceComment } from "./useCommentSurface.tsx";
 
 /** The file a viewer shows comments on, and of which pane. */
@@ -58,7 +57,8 @@ export interface FileComments {
   all: FileComment[];
 }
 
-export { FileCommentsContext, type MeasuredFileSelection } from "./FileCommentsContext.ts";
+/** A selection in the file the viewer can comment on (`measureFileSelection`). */
+type MeasuredFileSelection = ReturnType<typeof measureFileSelection> & {};
 
 /** Bound once: a class method handed on loses its `this`. */
 const persistFile = blockComments.saveFile.bind(blockComments);
@@ -125,14 +125,13 @@ export function useFileComments(scope: FileCommentScope | null): FileComments {
  * preview's `.markdown` root), for `scope`'s file; the view takes no comments while `scope` is null. The comments are
  * wired by `useCommentSurface`: a click on a line comments on all of it, as a click on a reply's block does in the chat,
  * among the lines loaded whole (`clickedLines`); a mouse's drag over text on what it selected (`measureFileSelection`).
- * `takesComments` goes to the view (`FileCommentsContext`); `overlay` goes into the surface (the pins with the open
+ * `overlay` goes into the surface (the pins with the open
  * popover); `surfaceProps` go on the surface; `escape` is the viewer's Escape asked first (`popoverEscape`): it closes
  * an open popover with its text unchanged, wherever the focus is, and keeps a changed one, its field taking the focus
  * back, so the viewer never closes and loses that text; true while a popover had it, and the viewer then stays;
  * `comments` are the file's comments as placed, for the header's counter and walk (none while comments are off).
  */
 export function useFileCommentLayer(scope: FileCommentScope | null, surface: RefObject<HTMLDivElement>, content: RefObject<HTMLElement>): {
-  takesComments: boolean;
   overlay: ReactNode;
   surfaceProps: CommentSurfaceProps;
   escape: () => boolean;
@@ -234,7 +233,6 @@ export function useFileCommentLayer(scope: FileCommentScope | null, surface: Ref
       };
     },
   });
-  const takesComments = scope !== null;
 
   // the content as drawn now: another one (a view switched, a file reloaded) is watched anew
   const [root, setRoot] = useState<HTMLElement | null>(null);
@@ -258,7 +256,7 @@ export function useFileCommentLayer(scope: FileCommentScope | null, surface: Ref
   // a new watcher, or another file or view: the pending comment is shown again where it is on these lines, else not
   useLayoutEffect(applyPending, [root, owner, path, view]);
 
-  return { takesComments, overlay, surfaceProps, escape, comments };
+  return { overlay, surfaceProps, escape, comments };
 }
 
 /** How long a stop waits for its pin to be drawn (a view switched, a code block unfolded, the pins placed) before it gives up. */

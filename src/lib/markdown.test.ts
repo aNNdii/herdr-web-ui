@@ -1,9 +1,9 @@
 import { describe, expect, it } from "bun:test";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { loadKatex, Markdown } from "../components/Markdown.tsx";
+import { loadKatex, Markdown, ParsedMarkdown } from "../components/Markdown.tsx";
 import { SettingsProvider } from "./settings.ts";
-import { FOLD_CODE_AFTER_LINES, FOLDED_CODE_LINES, foldCode, inlineMarks, isTableSeparator, MAX_QUOTE_DEPTH, mathNestsTooDeep, parseInline, parseMarkdown, parseMarkdownWithLines, previewHosts, safeMarkdownHref, trimUrl, type InlineNode, type ListBlock, type MarkdownBlock } from "./markdown.ts";
+import { FOLD_CODE_AFTER_LINES, FOLDED_CODE_LINES, foldCode, inlineMarks, isTableSeparator, mathNestsTooDeep, parseInline, parseMarkdown, parseMarkdownWithLines, previewHosts, safeMarkdownHref, trimUrl, type InlineNode, type ListBlock, type MarkdownBlock } from "./markdown.ts";
 
 describe("parseMarkdown", () => {
   it("renders inline and display math while leaving fenced code untouched", async () => {
@@ -65,31 +65,6 @@ describe("parseMarkdown", () => {
       expect(parseMarkdown(`\\[unfinished\n\n# Still a heading\n\n\`\`\`tex\n${code}\n\`\`\`\n\n- still a list`).map((block) => block.type)).toEqual([
         "paragraph", "heading", "code", "list",
       ]);
-    }
-  });
-
-  it("nests quotes only so deep, so a file of nothing but `>` neither overflows the stack nor loses its text", () => {
-    const depthOf = (blocks: MarkdownBlock[]): { depth: number; last: MarkdownBlock[] } => {
-      let depth = 0;
-      let last = blocks;
-      while (last.length === 1 && last[0]!.type === "blockquote") { last = (last[0] as { blocks: MarkdownBlock[] }).blocks; depth += 1; }
-      return { depth, last };
-    };
-    const deep = depthOf(parseMarkdown(`${">".repeat(20_000)} x`));
-    expect(deep.depth).toBe(MAX_QUOTE_DEPTH);
-    expect(deep.last).toEqual([{ type: "paragraph", lines: [[{ type: "text", value: `${">".repeat(20_000 - MAX_QUOTE_DEPTH)} x` }]] }]);
-    // a quote as deep as people write one is unchanged
-    expect(depthOf(parseMarkdown("> > > x")).depth).toBe(3);
-    // and it renders: the depth that overflowed was in the parse a render runs
-    const languages = Object.getOwnPropertyDescriptor(navigator, "languages");
-    Object.defineProperty(navigator, "languages", { configurable: true, value: ["en"] });
-    try {
-      const html = renderToStaticMarkup(createElement(SettingsProvider, { children: createElement(Markdown, { children: `${">".repeat(20_000)} deepest` }) }));
-      expect(html.match(/<blockquote>/g)?.length).toBe(MAX_QUOTE_DEPTH);
-      expect(html).toContain("&gt; deepest");
-    } finally {
-      if (languages) Object.defineProperty(navigator, "languages", languages);
-      else Reflect.deleteProperty(navigator, "languages");
     }
   });
 
@@ -593,7 +568,9 @@ describe("parseMarkdownWithLines", () => {
     console.error = (...args: unknown[]) => { if (!String(args[0]).includes("useLayoutEffect does nothing on the server")) error(...args); };
     try {
       return renderToStaticMarkup(createElement(SettingsProvider, {
-        children: createElement(Markdown, { sourceLines, children: markdown }),
+        children: sourceLines
+          ? createElement(ParsedMarkdown, { blocks: parseMarkdownWithLines(markdown) })
+          : createElement(Markdown, { children: markdown }),
       }));
     } finally {
       console.error = error;
@@ -644,8 +621,7 @@ describe("quotes nested beyond reason", () => {
     expect(blocks.map((block) => block.type)).toEqual(["blockquote", "paragraph"]);
     let depth = 0;
     for (let block = blocks[0]; block?.type === "blockquote"; block = block.blocks[0]) depth += 1;
-    // past MAX_QUOTE_DEPTH the remaining markers are the innermost quote's text
-    expect(depth).toBe(MAX_QUOTE_DEPTH);
+    expect(depth).toBe(33);
   });
 
   it("still nests the quotes people write", () => {

@@ -3,7 +3,8 @@ import { Check, Code, Copy, Download, ExternalLink, MessageSquare, TriangleAlert
 
 import "./FileViewer.css";
 import { DirectoryBrowser } from "./DirectoryBrowser.tsx";
-import { FileCommentsContext, useFileCommentLayer, useFileCommentWalk, type FileCommentScope } from "./FileComments.tsx";
+import { useFileCommentLayer, useFileCommentWalk, type FileCommentScope } from "./FileComments.tsx";
+import { useHighlightedLines } from "./HighlightedCode.tsx";
 import { RenderBoundary } from "./RenderBoundary.tsx";
 import { TextFileView } from "./TextFileView.tsx";
 
@@ -16,15 +17,46 @@ import { useMachineApi, useMachineId } from "../lib/machineContext.tsx";
 import { copyText, selectContents } from "../lib/clipboard.ts";
 import { fileLines, pathLabel, type FileComment, type FileView, type LineRange } from "../lib/fileComments.ts";
 import { pathParts } from "../lib/filePaths.ts";
-import { languageForPath, tooLongToHighlight } from "../lib/highlight.ts";
-import { parseMarkdownWithLines, previewHosts } from "../lib/markdown.ts";
+import { languageForPath } from "../lib/highlight.ts";
 import { useT } from "../lib/i18n.ts";
-import { useSettings } from "../lib/settings.ts";
-import { answeredFileSize, decodeStart, hasPreview, loadedText, textView, type LoadedText, type TextViewMode } from "../lib/textPreview.ts";
-import { useFocusTrap } from "../lib/useFocusTrap.ts";
+import { nativeModalOver, useFocusTrap } from "../lib/useFocusTrap.ts";
+import { previewHosts, type MarkdownBlock } from "../lib/markdown.ts";
+import { knownPreview, parsePreviewOffThread } from "../lib/markdownPreview.ts";
+import { hasPreview, readTextStart, TEXT_START_HEADERS, type LoadedText, type TextViewMode } from "../lib/textPreview.ts";
 
 /** Bigger images are offered as a download: a phone decodes an image whole. */
 const MAX_INLINE_IMAGE_BYTES = 20 * 1024 * 1024;
+
+type Preview = { status: "none" | "pending" | "failed" } | { status: "ready"; blocks: MarkdownBlock[] };
+
+const NO_PREVIEW: Preview = { status: "none" };
+const PENDING_PREVIEW: Preview = { status: "pending" };
+const FAILED_PREVIEW: Preview = { status: "failed" };
+
+/**
+ * The Preview of `text` (null: none is asked for), parsed in a worker so the page never waits for
+ * the parser: pending until it answers, failed when it gave up or ran over its budget.
+ */
+function useMarkdownPreview(text: string | null): Preview {
+  const known = useMemo((): Preview | null => {
+    if (text === null) return NO_PREVIEW;
+    const blocks = knownPreview(text);
+    if (blocks === undefined) return null;
+    return blocks === null ? FAILED_PREVIEW : { status: "ready", blocks };
+  }, [text]);
+  const [answer, setAnswer] = useState<{ text: string; blocks: MarkdownBlock[] | null } | null>(null);
+  useEffect(() => {
+    if (known !== null || text === null) return;
+    let live = true;
+    const job = parsePreviewOffThread(text);
+    void job.promise.then((blocks) => { if (live) setAnswer({ text, blocks }); });
+    return () => { live = false; job.cancel(); };
+  }, [known, text]);
+  // a new object each render is fine: only its status and its (stable) blocks are read
+  if (known !== null) return known;
+  if (answer === null || answer.text !== text) return PENDING_PREVIEW;
+  return answer.blocks === null ? FAILED_PREVIEW : { status: "ready", blocks: answer.blocks };
+}
 
 export interface FileViewerProps {
   /** absolute, `~/…`, or relative to the pane's folder */
@@ -76,8 +108,6 @@ function CopyFileButton({ text, sourceRef, onShowSource }: { text: string; sourc
  */
 export function FileViewer({ path: asked, paneId, machineId, paneFolder, onClose, onOpen, commentId = null, keyboardActive = true }: FileViewerProps) {
   const t = useT();
-  const { settings } = useSettings();
-  const { textLoadLimit } = settings;
   const { fetchFileInfo, fileUrl, fetchDirectories } = useMachineApi();
   // a remote PC's bridge reads a relative folder from the pane's folder only from its next bundle
   // on; until then it would list the bridge's own folder, so only an absolute or ~/ one is listed there
@@ -87,6 +117,8 @@ export function FileViewer({ path: asked, paneId, machineId, paneFolder, onClose
   const [path, setPath] = useState(asked);
   const [info, setInfo] = useState<FileInfo | null>(null);
   const [candidates, setCandidates] = useState<string[] | null>(null);
+  // Escape closes it, Tab stays in it, and the focus goes back to the row that opened it
+  const surface = useFocusTrap<HTMLElement>(true);
   // a kind, not a message: it is said in the language of the moment it shows
   const [error, setError] = useState<"missing" | "unreadable" | null>(null);
   const [loaded, setLoaded] = useState<LoadedText | null>(null);
@@ -113,13 +145,12 @@ export function FileViewer({ path: asked, paneId, machineId, paneFolder, onClose
     selectSourceOnCode.current = false;
     if (sourceRef.current) selectContents(sourceRef.current);
   }, [mode, loaded]);
-  // Escape closes it, Tab stays in it, and the focus goes back to the row that opened it
-  const surface = useFocusTrap<HTMLElement>(true);
+
   useEffect(() => setPath(asked), [asked]);
 
   useEffect(() => {
     let cancelled = false;
-    // a closed viewer, or a new limit, stops the download of up to a megabyte
+    // a closed viewer, or another file, stops the download of up to a quarter megabyte
     const download = new AbortController();
     setInfo(null); setCandidates(null); setError(null); setLoaded(null); setDirectory(null);
     fetchFileInfo(path, paneId).then(async (next) => {
@@ -127,17 +158,9 @@ export function FileViewer({ path: asked, paneId, machineId, paneFolder, onClose
       if ("candidates" in next) { setCandidates(next.candidates); return; }
       setInfo(next);
       if (next.kind !== "text") return;
-      // only the first part of a text file travels: a range, whatever the file's size
-      const response = await fetch(fileUrl(next.path, paneId), { headers: { range: `bytes=0-${textLoadLimit - 1}` }, signal: download.signal });
-      const range = response.headers.get("content-range");
-      // an empty file has no first byte to send: its range answers 416, `bytes */0`
-      const empty = response.status === 416 && answeredFileSize(response.status, range, 0) === 0;
-      // an error (the file gone since, a remote PC dropped) answers with JSON, never the file's text
-      if (!response.ok && !empty) throw new Error(`the file answered ${response.status}`);
-      const bytes = new Uint8Array(await response.arrayBuffer());
-      // the size as it was sent, not as the stat saw it: a file grown since is still cut short
-      const size = answeredFileSize(response.status, range, bytes.length);
-      if (!cancelled) setLoaded(loadedText(decodeStart(bytes, textLoadLimit), size, textLoadLimit));
+      // only the first part of a text file travels
+      const text = await readTextStart(await fetch(fileUrl(next.path, paneId), { headers: TEXT_START_HEADERS, signal: download.signal }));
+      if (!cancelled) setLoaded(text);
     }).catch(async (reason: unknown) => {
       if (cancelled) return;
       // a folder is listed from the pane's folder, as a file is found from it
@@ -152,7 +175,7 @@ export function FileViewer({ path: asked, paneId, machineId, paneFolder, onClose
       setError(reason instanceof ApiError && reason.status === 404 ? "missing" : "unreadable");
     });
     return () => { cancelled = true; download.abort(); };
-  }, [path, paneId, fetchFileInfo, fileUrl, fetchDirectories, remote, textLoadLimit]);
+  }, [path, paneId, fetchFileInfo, fileUrl, fetchDirectories, remote]);
 
   // A comment popover is open: Escape is its own first, wherever the focus is. It closes one with nothing typed in it
   // and keeps one with text typed (`popoverEscape`), and the viewer stays either way, so no typed text is lost; the
@@ -162,10 +185,10 @@ export function FileViewer({ path: asked, paneId, machineId, paneFolder, onClose
   useEffect(() => {
     if (!keyboardActive) return;
     // the FilesDialog beneath listens on window too (and stands down while this is open); this
-    // one is the topmost overlay, so it takes the key
+    // one is the topmost overlay, so it takes the key, unless a native modal (Add PC) is over it
     /** Escape closes the open comment popover, else the viewer, from anywhere in it, unless something in it took the key. */
     const onKey = (event: KeyboardEvent): void => {
-      if (event.key !== "Escape" || event.defaultPrevented || walkDialogOpen.current) return;
+      if (event.key !== "Escape" || event.defaultPrevented || walkDialogOpen.current || nativeModalOver(surface.current)) return;
       if (commentEscape.current()) return;
       onClose();
     };
@@ -177,18 +200,25 @@ export function FileViewer({ path: asked, paneId, machineId, paneFolder, onClose
   const url = fileUrl(info?.path ?? path, paneId);
   const textFile = info?.kind === "text";
   const language = languageForPath(info?.path ?? path);
-  const view = textView(language, mode);
+  // a Preview its parser gave up on (too slow, or failed) opens the source instead
+  const preview = useMarkdownPreview(textFile && loaded !== null && mode === "preview" && hasPreview(language) ? loaded.text : null);
+  const previewRefused = preview.status === "failed";
+  const previewable = hasPreview(language) && !previewRefused;
+  const view = previewable && mode === "preview" ? "markdown" : "code";
   const codeShown = textFile && loaded !== null && view === "code";
+  // a file's code has no length limit (the load limit bounds it): only a worker that gave up leaves it plain
+  const code = useHighlightedLines(codeShown ? loaded.text : "", codeShown ? language : null);
   const shownPath = info?.path ?? path;
   const { stem, extension } = pathParts(info?.name ?? shownPath);
   const { folder } = pathParts(shownPath);
   // what holds for the whole file is said with its size, where it is seen first, not after a megabyte of text
   const cutShort = textFile && loaded !== null && loaded.truncated;
-  const leftPlain = codeShown && tooLongToHighlight(loaded.text, language, settings.highlightLimit);
   const notes = [
     cutShort && t("Showing the first {shown}", { shown: formatBytes(loaded.limit) }),
-    leftPlain && t("Too long to highlight"),
+    textFile && loaded !== null && previewRefused && t("Too long to preview"),
+    codeShown && code.tooLong && t("Too long to highlight"),
   ].filter((note): note is string => typeof note === "string");
+  const noticed = notes.length > 0;
   const copyable = textFile && loaded !== null && !loaded.truncated;
   // Comments on the file's lines, kept with the pane the file was opened from: only with a pane, and
   // only on the lines loaded. The lines are numbered as the code view numbers them: a last line
@@ -198,13 +228,10 @@ export function FileViewer({ path: asked, paneId, machineId, paneFolder, onClose
   const sourceLines = useMemo(() => sourceText === null ? null : fileLines(sourceText.replace(/(?:\r\n|\r|\n)$/, "")), [sourceText]);
   const filePath = info?.path ?? null;
   const wholeLines = sourceLines === null || loaded === null ? 0 : loaded.truncated && !/[\r\n]$/.test(loaded.text) ? sourceLines.length - 1 : sourceLines.length;
-  // the preview's blocks; the parse is the one the preview draws (memoized). A text it cannot parse
-  // takes no comments: the preview's own error shows (RenderBoundary below)
-  const previewShown = owner !== null && view === "markdown";
-  const hosts = useMemo<LineRange[] | null>(() => {
-    if (!previewShown || sourceText === null) return null;
-    try { return previewHosts(parseMarkdownWithLines(sourceText)); } catch { return null; }
-  }, [previewShown, sourceText]);
+  // the preview's blocks a card can follow, from the blocks the preview draws (parsed in the worker
+  // with their lines). A preview still parsing takes no comments yet
+  const previewBlocks = owner !== null && view === "markdown" && preview.status === "ready" ? preview.blocks : null;
+  const hosts = useMemo<LineRange[] | null>(() => previewBlocks === null ? null : previewHosts(previewBlocks), [previewBlocks]);
   const commentView = codeShown ? "code" : hosts !== null ? "preview" : null;
   const scope = useMemo<FileCommentScope | null>(() => owner === null || commentView === null || filePath === null || sourceLines === null ? null
     : { owner, path: filePath, label: pathLabel(filePath, paneFolder), view: commentView, lines: sourceLines, loaded: wholeLines, truncated: cutShort },
@@ -223,11 +250,12 @@ export function FileViewer({ path: asked, paneId, machineId, paneFolder, onClose
   // the pane's comments of any kind: the one the viewer was opened at is looked up among them (none while comments are off)
   const paneComments = useBlockComments(owner ?? "");
   // Opened at a comment (the composer's walk): the walk stops at it once the file's comments are
-  // placed, which waits for the file's text. Where the file cannot show it (gone, unreadable, no
-  // longer text, a preview that fails), it opens in a dialog over what the viewer says
+  // placed, which waits for the file's text (and a preview's parse). Where the file cannot show it
+  // (gone, unreadable, no longer text), it opens in a dialog over what the viewer says
   const [pendingStop, setPendingStop] = useState(commentId);
   useEffect(() => setPendingStop(commentId), [commentId]);
   const { goTo, openInEditor } = walk;
+  const previewPending = preview.status === "pending";
   useEffect(() => {
     if (pendingStop === null) return;
     const comment = paneComments.find((c): c is FileComment => !isReplyComment(c) && c.id === pendingStop);
@@ -241,13 +269,13 @@ export function FileViewer({ path: asked, paneId, machineId, paneFolder, onClose
     }
     const unshown = error !== null ? (error === "missing" ? t("No readable file at this path.") : t("The file could not be opened."))
       : directory !== null || (info !== null && info.kind !== "text") ? t("The file could not be opened.")
-      : textFile && loaded !== null ? t("This preview can't be shown.")
+      : textFile && loaded !== null && !previewPending ? t("This preview can't be shown.")
       : null;
     // still opening
     if (unshown === null) return;
     openInEditor(comment, unshown);
     setPendingStop(null);
-  }, [pendingStop, paneComments, scope, error, directory, info, textFile, loaded, goTo, openInEditor, t]);
+  }, [pendingStop, paneComments, scope, error, directory, info, textFile, loaded, previewPending, goTo, openInEditor, t]);
   const fileComments = comments.comments.all.length;
   const commentsShown = owner !== null && fileComments > 0;
   const outdatedCount = comments.comments.outdated.length;
@@ -255,7 +283,7 @@ export function FileViewer({ path: asked, paneId, machineId, paneFolder, onClose
   const countLabel = outdatedCount > 0 ? `${counted} · ${t("{count} outdated", { count: outdatedCount })}` : counted;
   // a phone stacks the actions under the name once there are two or more, and one fits beside it:
   // a text file always has Raw, so a second is Show source, Copy or the comments
-  const stacked = textFile && (hasPreview(language) || copyable || commentsShown);
+  const stacked = textFile && (previewable || copyable || commentsShown);
   /** What the viewer shows below its header: a folder, an error, a choice of files, or the file. */
   const body = (() => {
     if (directory !== null) return <DirectoryBrowser key={directory} start={directory} onOpenFile={onOpen ?? setPath} />;
@@ -277,7 +305,7 @@ export function FileViewer({ path: asked, paneId, machineId, paneFolder, onClose
       case "pdf":
         return <iframe className="file-viewer-pdf" src={url} title={info.name} />;
       case "text":
-        return loaded === null
+        return loaded === null || (view === "markdown" && preview.status !== "ready")
           ? <p className="file-viewer-note">{t("Opening…")}</p>
           // a text the renderer cannot draw fails here, not the app: the header (Show source, Raw,
           // Close) stays, and a Preview that fails offers its source
@@ -287,7 +315,7 @@ export function FileViewer({ path: asked, paneId, machineId, paneFolder, onClose
               <button type="button" className="btn btn-ghost" onClick={() => setChosen({ path, mode: "code" })}>{t("Show source")}</button>
             </div>
             : <p className="file-viewer-note" role="alert">{t("The file could not be opened.")}</p>}>
-            <TextFileView path={info.path} text={loaded.text} language={language} view={view} onOpen={onOpen ?? setPath} sourceRef={sourceRef} previewRef={previewRef} />
+            <TextFileView path={info.path} blocks={view === "markdown" && preview.status === "ready" ? preview.blocks : null} lines={code.lines} onOpen={onOpen ?? setPath} sourceRef={sourceRef} previewRef={previewRef} />
           </RenderBoundary>;
       default:
         return <p className="file-viewer-note">{info.mime}, {formatBytes(info.size)}. This file can't be shown here; download it instead.</p>;
@@ -296,7 +324,7 @@ export function FileViewer({ path: asked, paneId, machineId, paneFolder, onClose
 
   return (
     <div className="modal-scrim file-viewer-scrim" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
-      <section ref={surface} className="modal file-viewer" role="dialog" aria-modal="true" aria-label={info?.name ?? path} tabIndex={-1}>
+      <section className="modal file-viewer" role="dialog" aria-modal="true" aria-label={info?.name ?? path} ref={surface} tabIndex={-1}>
         {/* three groups, spaced apart: how the text shows, the file itself, the window */}
         <header className={stacked ? "modal-header file-viewer-header file-viewer-header-stacked" : "modal-header file-viewer-header"}>
           <div className="file-viewer-title">
@@ -305,7 +333,7 @@ export function FileViewer({ path: asked, paneId, machineId, paneFolder, onClose
             <p className="file-viewer-meta" title={shownPath}>
               {/* a partial view is told by the size ("256 KB of 1.3 MB") in the warning color, beside an
                   icon so the color is not the only sign; what it means is the tooltip (and read out) */}
-              {info && (cutShort || leftPlain
+              {info && (noticed
                 ? <span className="file-viewer-notice" title={notes.join("\n")}>
                   <TriangleAlert aria-hidden="true" />
                   <span>{cutShort ? t("{done} of {total}", { done: formatBytes(loaded.limit), total: formatBytes(loaded.size ?? info.size) }) : formatBytes(info.size)}</span>
@@ -317,6 +345,8 @@ export function FileViewer({ path: asked, paneId, machineId, paneFolder, onClose
             </p>
           </div>
           <div className="file-viewer-actions">
+            {/* how the text shows: Preview or source is one choice of two, so one toggle; wrapping is a
+                setting (Settings → File viewer), not an action here */}
             {/* the comments: this file's, walked one per tap */}
             {commentsShown && <div className="file-viewer-group">
               <button type="button" className="icon-button file-viewer-action file-viewer-comments" aria-label={countLabel} title={`${countLabel}\n${t("Go to the next comment")}`} onClick={walk.next}>
@@ -325,9 +355,7 @@ export function FileViewer({ path: asked, paneId, machineId, paneFolder, onClose
                 <span className="file-viewer-comments-count" aria-hidden="true">{fileComments > 99 ? "99+" : fileComments}</span>
               </button>
             </div>}
-            {/* how the text shows: Preview or source is one choice of two, so one toggle; wrapping is a
-                setting (Settings → File viewer), not an action here */}
-            {textFile && hasPreview(language) && <div className="file-viewer-group">
+            {textFile && previewable && <div className="file-viewer-group">
               <button type="button" className="icon-button file-viewer-action" aria-pressed={mode === "code"} aria-label={t("Show source")} title={t("Show source")} onClick={() => setChosen({ path, mode: mode === "code" ? "preview" : "code" })}><Code aria-hidden="true" /></button>
             </div>}
             {/* the file itself: a new tab shows it whole (Raw for text) and saves it from there, so a
@@ -344,7 +372,7 @@ export function FileViewer({ path: asked, paneId, machineId, paneFolder, onClose
         {/* with comments the body is their surface (lib/commentHighlight.ts), the place the pins and the popover
             are positioned in, and a click on a line in it comments on that line, a mouse's drag on what it selected */}
         <div ref={bodyRef} className="file-viewer-body" {...comments.surfaceProps}>
-          <FileCommentsContext.Provider value={comments.takesComments}>{body}</FileCommentsContext.Provider>
+          {body}
           {comments.overlay}
           {walk.editor}
         </div>

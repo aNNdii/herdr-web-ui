@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { answeredFileSize, decodeStart, hasPreview, loadedText, textView } from "./textPreview.ts";
+import { answeredFileSize, decodeStart, hasPreview, loadedText, readTextStart, TEXT_LOAD_LIMIT, TEXT_START_HEADERS } from "./textPreview.ts";
 
 describe("loadedText", () => {
   it("cuts the incomplete last line of a file longer than the limit only", () => {
@@ -60,14 +60,43 @@ describe("decodeStart", () => {
   });
 });
 
-describe("textView", () => {
-  it("renders Markdown in Preview and shows everything else as code", () => {
-    expect(textView("markdown", "preview")).toBe("markdown");
-    expect(textView("markdown", "code")).toBe("code");
-    expect(textView("typescript", "preview")).toBe("code");
-    expect(textView(null, "preview")).toBe("code");
+describe("readTextStart", () => {
+  const answer = (body: string, status: number, range?: string) => new Response(status === 416 ? null : body, { status, headers: range === undefined ? {} : { "content-range": range } });
+
+  it("asks for the first quarter megabyte, whatever the file's size", () => {
+    expect(TEXT_LOAD_LIMIT).toBe(256 * 1024);
+    expect(TEXT_START_HEADERS).toEqual({ range: `bytes=0-${256 * 1024 - 1}` });
   });
 
+  it("takes a part that is the whole file as the whole file", async () => {
+    expect(await readTextStart(answer("one\ntwo", 206, "bytes 0-6/7"))).toEqual({ text: "one\ntwo", truncated: false, limit: TEXT_LOAD_LIMIT, size: 7 });
+  });
+
+  it("cuts a part of a longer file back to its last whole line", async () => {
+    const part = `${"a".repeat(TEXT_LOAD_LIMIT - 4)}\nbcd`;
+    const loaded = await readTextStart(answer(part, 206, `bytes 0-${TEXT_LOAD_LIMIT - 1}/${TEXT_LOAD_LIMIT * 2}`));
+    expect(loaded.truncated).toBe(true);
+    expect(loaded.size).toBe(TEXT_LOAD_LIMIT * 2);
+    expect(loaded.text).toBe(`${"a".repeat(TEXT_LOAD_LIMIT - 4)}\n`);
+  });
+
+  it("cuts a whole file a server sent despite the range to the limit", async () => {
+    const loaded = await readTextStart(answer("x\n".repeat(TEXT_LOAD_LIMIT), 200));
+    expect(loaded.truncated).toBe(true);
+    expect(loaded.text.length).toBe(TEXT_LOAD_LIMIT);
+  });
+
+  it("loads an empty file, which has no first byte to send", async () => {
+    expect(await readTextStart(answer("", 416, "bytes */0"))).toEqual({ text: "", truncated: false, limit: TEXT_LOAD_LIMIT, size: 0 });
+  });
+
+  it("never takes an error answer for the file's text", async () => {
+    await expect(readTextStart(answer('{"error":{"code":"not_found"}}', 404))).rejects.toThrow("the file answered 404");
+    await expect(readTextStart(answer("", 416, "bytes */99"))).rejects.toThrow("the file answered 416");
+  });
+});
+
+describe("hasPreview", () => {
   it("gives only Markdown a Preview", () => {
     expect(hasPreview("markdown")).toBe(true);
     expect(hasPreview("typescript")).toBe(false);
