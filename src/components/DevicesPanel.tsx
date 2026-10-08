@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Check, MonitorSmartphone, MoreHorizontal, Pencil, Plus, RefreshCw, Trash2, X } from "lucide-react";
+import { Check, Pencil, RefreshCw, Trash2, X } from "lucide-react";
 
 import "./DevicesPanel.css";
 
@@ -7,10 +7,7 @@ import { ApiError, fetchDevices, pairDevice, renameDevice, revokeDevice, startPa
 import { copyText } from "../lib/clipboard.ts";
 import { deviceLabel } from "../lib/phone.ts";
 import type { HealthAuth, PairedDevice, PairingCode } from "../../shared/protocol.ts";
-import { ConfirmDialog } from "./ConfirmDialog.tsx";
 import { QrCode } from "./QrCode.tsx";
-import { RowMenu } from "./RowMenu.tsx";
-import { SettingsGroup, SettingsRow, SettingsTag } from "./settings/SettingsUi.tsx";
 import { currentLocale, t as tt, useT } from "../lib/i18n.ts";
 
 const POLL_MS = 3000;
@@ -41,7 +38,7 @@ function lastSeen(value: string | null): string {
   return new Date(value).toLocaleDateString(currentLocale());
 }
 
-/** Settings → Phone & devices: the paired devices, each with its ⋯ menu, and a code to pair one more. One group of the page. */
+/** Settings → Devices: the paired devices, and a code to pair one more. */
 export function DevicesPanel({ pairUrl, auth, onPaired }: DevicesPanelProps) {
   const t = useT();
   const [devices, setDevices] = useState<PairedDevice[] | null>(null);
@@ -51,9 +48,7 @@ export function DevicesPanel({ pairUrl, auth, onPaired }: DevicesPanelProps) {
   const [code, setCode] = useState<PairingCode | null>(null);
   const [left, setLeft] = useState("");
   const [renaming, setRenaming] = useState<{ id: string; label: string } | null>(null);
-  const [menu, setMenu] = useState<{ anchor: HTMLElement; device: PairedDevice } | null>(null);
-  const closeMenu = useCallback(() => setMenu(null), []);
-  const [revoking, setRevoking] = useState<PairedDevice | null>(null);
+  const [confirming, setConfirming] = useState<string | null>(null);
   const [justPaired, setJustPaired] = useState<string | null>(null);
   const [linkCopied, setLinkCopied] = useState(false);
   const linkRef = useRef<HTMLAnchorElement>(null);
@@ -107,80 +102,77 @@ export function DevicesPanel({ pairUrl, auth, onPaired }: DevicesPanelProps) {
     if (!renaming) return;
     try { await renameDevice(renaming.id, renaming.label); setRenaming(null); await load(); } catch (e) { setError(e instanceof Error ? e.message : String(e)); }
   };
+  const revoke = async (id: string) => {
+    if (confirming !== id) { setConfirming(id); window.setTimeout(() => setConfirming((c) => (c === id ? null : c)), 4000); return; }
+    setConfirming(null);
+    try { await revokeDevice(id); await load(); } catch (e) { setError(e instanceof Error ? e.message : String(e)); }
+  };
 
   const spaced = code ? `${code.code.slice(0, 3)} ${code.code.slice(3)}` : "";
   const qrValue = code && pairUrl ? `${pairUrl.replace(/\/$/, "")}/?pair=${code.code}` : null;
-  const open = auth?.via === "open";
 
   return (
-    <SettingsGroup
-      className="devices-panel"
-      title={t("Paired devices")}
-      intro={t("A paired device signs in on its own until you revoke it. Codes come from here, from a paired device, or from the pair command on the PC.")}
-      // with this browser still open to anyone, pairing it is the page's one main action
-      actions={code === null ? <button type="button" className={`btn ${open ? "btn-secondary" : "btn-primary"}`} onClick={() => void pair()} disabled={unavailable}><Plus aria-hidden="true" />{t("Pair a device")}</button> : undefined}
-    >
-      {auth?.via !== undefined && (
-        <SettingsRow className={open ? "devices-open" : undefined} label={t("This browser")} description={t(VIA[auth.via])} keywords="this browser access signed in local tailscale token paired open"
-          control={open ? <button type="button" className="btn btn-primary" onClick={() => void pairSelf()}>{t("Pair this device now")}</button> : undefined} />
-      )}
-      {devices === null ? <SettingsRow keywords="paired devices"><p className="settings-note" role="status">{t("Loading…")}</p></SettingsRow>
-        : devices.length === 0 ? <SettingsRow keywords="paired devices"><p className="settings-note">{t("No devices paired yet.")}</p></SettingsRow>
-        : devices.map((d) => renaming?.id === d.id ? (
-          <SettingsRow key={d.id} keywords={`paired device rename ${d.label}`} stack control={
-            <form className="settings-field-row" onSubmit={(e) => { e.preventDefault(); void rename(); }}>
-              <input className="input" value={renaming.label} maxLength={48} autoFocus aria-label={t("Device name")} onChange={(e) => setRenaming({ id: d.id, label: e.target.value })} />
-              <button type="submit" className="icon-button" aria-label={t("Save name")}><Check /></button>
-              <button type="button" className="icon-button" aria-label={t("Cancel")} onClick={() => setRenaming(null)}><X /></button>
-            </form>
-          } />
-        ) : (
-          <SettingsRow key={d.id} className="devices-row" icon={<MonitorSmartphone />} label={d.label} tag={d.current ? <SettingsTag>{t("This device")}</SettingsTag> : undefined}
-            description={t("Last seen {when}", { when: lastSeen(d.last_seen_at) })} keywords={`paired device rename revoke ${d.label}`}
-            control={
-              <button type="button" className="icon-button" aria-label={t("More for {title}", { title: d.label })} aria-haspopup="menu" aria-expanded={menu?.device.id === d.id}
-                onClick={(event) => setMenu(menu?.device.id === d.id ? null : { anchor: event.currentTarget, device: d })}>
-                <MoreHorizontal aria-hidden="true" />
-              </button>
-            } />
-        ))}
-      {justPaired !== null && <SettingsRow keywords="paired"><p className="settings-note" role="status">{t("Paired: {name}.", { name: justPaired })}</p></SettingsRow>}
-      {code !== null && (
-        <SettingsRow className="devices-pairing" keywords="pair device code qr link" stack control={
-          <div className="devices-pairing-body" role="status">
-            {qrValue !== null && <QrCode value={qrValue} label={t("QR code that pairs a phone with code {code}", { code: code.code })} />}
-            <div className="devices-pairing-text">
-              <p className="settings-row-label">{t("On the other device, enter this code")}</p>
-              <p className="devices-code">{spaced}</p>
-              <p className="settings-note">
-                {t(qrValue !== null ? "Or scan the QR code: it opens the app with the code filled in." : "Open the app's address on that device and enter it.")} {t("Expires in {time}.", { time: left })}
-              </p>
-              {qrValue !== null && (
-                <p className="devices-link">
-                  <span className="settings-note">{t("Or send this link to it:")}</span>
-                  <a ref={linkRef} href={qrValue}>{qrValue}</a>
-                  <button type="button" className="btn btn-tertiary" onClick={() => void copyText(qrValue, linkRef.current).then((ok) => { if (ok) { setLinkCopied(true); window.setTimeout(() => setLinkCopied(false), 1600); } })}>{t(linkCopied ? "Copied" : "Copy")}</button>
-                </p>
+    <div className="devices-panel">
+      {auth?.via !== undefined && <p className={auth.via === "open" ? "settings-hint devices-open" : "settings-description"}>{t(VIA[auth.via])}</p>}
+      {auth?.via === "open" && <div className="phone-actions"><button type="button" className="btn btn-primary" onClick={() => void pairSelf()}>{t("Pair this device now")}</button></div>}
+      <p className="settings-description">{t("A paired device gets in on its own, from anywhere it can reach this server, until you revoke it here. A code comes from this screen on the PC or on a device already paired, or from the pair command in the PC's terminal.")}</p>
+      {devices === null ? <p className="settings-hint" role="status">{t("Loading…")}</p> : devices.length === 0 ? (
+        <p className="settings-hint">{t("No devices paired yet.")}</p>
+      ) : (
+        <ul className="devices-list">
+          {devices.map((d) => (
+            <li key={d.id} className="devices-row">
+              {renaming?.id === d.id ? (
+                <form className="devices-rename" onSubmit={(e) => { e.preventDefault(); void rename(); }}>
+                  <input className="input" value={renaming.label} maxLength={48} autoFocus aria-label={t("Device name")} onChange={(e) => setRenaming({ id: d.id, label: e.target.value })} />
+                  <button type="submit" className="icon-button" aria-label={t("Save name")}><Check /></button>
+                  <button type="button" className="icon-button" aria-label={t("Cancel")} onClick={() => setRenaming(null)}><X /></button>
+                </form>
+              ) : (
+                <>
+                  <div className="devices-name">
+                    <span className="settings-label">{d.label}{d.current && <span className="devices-current">{t("this device")}</span>}</span>
+                    <span className="settings-description">{t("Last seen {when}", { when: lastSeen(d.last_seen_at) })}</span>
+                  </div>
+                  <div className="devices-actions">
+                    <button type="button" className="icon-button" aria-label={t("Rename {name}", { name: d.label })} onClick={() => setRenaming({ id: d.id, label: d.label })}><Pencil /></button>
+                    <button type="button" className={`btn ${confirming === d.id ? "btn-danger" : "btn-ghost"}`} onClick={() => void revoke(d.id)}>
+                      <Trash2 aria-hidden="true" />{t(confirming === d.id ? "Revoke?" : "Revoke")}
+                    </button>
+                  </div>
+                </>
               )}
-              <div className="settings-field-row">
-                <button type="button" className="btn btn-secondary" onClick={() => void pair()}><RefreshCw aria-hidden="true" />{t("New code")}</button>
-                <button type="button" className="btn btn-tertiary" onClick={() => setCode(null)}>{t("Done")}</button>
-              </div>
+            </li>
+          ))}
+        </ul>
+      )}
+      {justPaired !== null && <p className="settings-hint" role="status">{t("Paired: {name}.", { name: justPaired })}</p>}
+      {code === null ? (
+        <div className="phone-actions"><button type="button" className="btn btn-primary" onClick={() => void pair()} disabled={unavailable}>{t("Pair a device")}</button></div>
+      ) : (
+        <div className="devices-pairing" role="status">
+          {qrValue !== null && <QrCode value={qrValue} label={t("QR code that pairs a phone with code {code}", { code: code.code })} />}
+          <div>
+            <p className="settings-label">{t("On the other device, enter this code")}</p>
+            <p className="devices-code">{spaced}</p>
+            <p className="settings-description">
+              {t(qrValue !== null ? "Or scan the QR code: it opens the app with the code filled in." : "Open the app's address on that device and enter it.")} {t("Expires in {time}.", { time: left })}
+            </p>
+            {qrValue !== null && (
+              <p className="devices-link">
+                <span className="settings-description">{t("Or send this link to it:")}</span>
+                <a ref={linkRef} href={qrValue}>{qrValue}</a>
+                <button type="button" className="btn btn-ghost" onClick={() => void copyText(qrValue, linkRef.current).then((ok) => { if (ok) { setLinkCopied(true); window.setTimeout(() => setLinkCopied(false), 1600); } })}>{t(linkCopied ? "Copied" : "Copy")}</button>
+              </p>
+            )}
+            <div className="phone-actions">
+              <button type="button" className="btn" onClick={() => void pair()}><RefreshCw aria-hidden="true" />{t("New code")}</button>
+              <button type="button" className="btn btn-ghost" onClick={() => setCode(null)}>{t("Done")}</button>
             </div>
           </div>
-        } />
+        </div>
       )}
-      {error !== null && <SettingsRow keywords="paired devices"><p className="settings-note is-error" role="alert">{error}</p></SettingsRow>}
-      {menu && (
-        <RowMenu anchor={menu.anchor} title={menu.device.label} onClose={closeMenu} items={[
-          { id: "rename", label: t("Rename"), icon: Pencil, run: () => setRenaming({ id: menu.device.id, label: menu.device.label }) },
-          { id: "revoke", label: t("Revoke"), icon: Trash2, danger: true, divider: true, run: () => setRevoking(menu.device) },
-        ]} />
-      )}
-      {revoking && (
-        <ConfirmDialog title={t("Revoke {name}?", { name: revoking.label })} body={t("It can get in again only with a new pairing code.")} confirmLabel={t("Revoke")}
-          onConfirm={async () => { await revokeDevice(revoking.id); await load(); setRevoking(null); }} onClose={() => setRevoking(null)} />
-      )}
-    </SettingsGroup>
+      {error !== null && <p className="settings-hint" role="alert">{error}</p>}
+    </div>
   );
 }

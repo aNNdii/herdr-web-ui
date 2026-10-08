@@ -7,6 +7,7 @@ import { join, resolve } from "node:path";
 import { chromium, type Browser } from "playwright-core";
 import { createServer } from "../server/index.ts";
 import { workspaceCreate, workspaceClose, paneSendText, paneSendKeys, paneRead } from "../server/herdr/client.ts";
+import { openSettingsPage } from "./settings-page.ts";
 
 const root = mkdtempSync(join(tmpdir(), "herdr-sticky-qa-"));
 const owned: string[] = [];
@@ -204,15 +205,11 @@ try {
     await until(async () => !(await ctrl.isDisabled()), "key bar enabled again");
     console.log(`${mode} chord while not ready: told, not sent`);
     // Removing the optional Alt button must not leave an invisible held modifier.
+    await page.keyboard.press(settingsShortcut);
     const settings = page.getByRole("dialog", { name: "Settings", exact: true });
-    // the key bar editor is on Settings → Terminal; a phone opens Settings on its list of pages
-    const keyBarSettings = settings;
-    const openKeyBarSettings = async (): Promise<void> => {
-      await page.keyboard.press(settingsShortcut);
-      await settings.locator('.settings-nav-item[data-page="terminal"]').tap();
-      await settings.locator(".key-bar-settings").waitFor();
-    };
-    await openKeyBarSettings();
+    await openSettingsPage(page, "Terminal");
+    await settings.getByRole("button", { name: "Edit key bar", exact: true }).tap();
+    const keyBarSettings = page.getByRole("dialog", { name: "Key bar", exact: true });
     const heldModifierSettings = keyBarSettings.getByRole("group", { name: "Held modifiers", exact: true });
     await heldModifierSettings.getByRole("button", { name: "Alt", exact: true }).tap();
     await keyBarSettings.getByRole("button", { name: "Close settings", exact: true }).tap();
@@ -228,7 +225,9 @@ try {
     await until(() => frames.length > plainBefore, "typing after hiding Alt");
     assert.equal(frames.at(-1).type, "input");
     assert.equal(frames.at(-1).text, "z");
-    await openKeyBarSettings();
+    await page.keyboard.press(settingsShortcut);
+    await openSettingsPage(page, "Terminal");
+    await settings.getByRole("button", { name: "Edit key bar", exact: true }).tap();
     await heldModifierSettings.getByRole("button", { name: "Alt", exact: true }).tap();
     await keyBarSettings.getByRole("button", { name: "Close settings", exact: true }).tap();
     previousMask = 0;

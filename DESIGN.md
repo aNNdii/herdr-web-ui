@@ -13,7 +13,7 @@ buttons). Agent states carry the remaining saturated colors and none of them is 
 chat turns are neutral raised cards, so a long thread never turns into a wall of color. Dark is the
 default, light follows the same hierarchy, and comfortable or compact density changes scale without
 changing information architecture. A dark report look, a neutral charcoal one, Catppuccin and lilac are
-opt-in palettes (Settings → Appearance → Palette); amber stays the default and the look before settings load.
+opt-in palettes (Settings → Appearance → Colors); amber stays the default and the look before settings load.
 
 The sidebar is one grid: a leading cell that says who or what a row is (the coding agent's brand
 mark, else the place's own glyph), a title, and a trailing cell that says how it is. Workspaces
@@ -62,15 +62,17 @@ Only tokens overridden by `[data-theme="light"]` have a light value. Both column
 | Drawer shadow | `--shadow-drawer` | `0 0 40px rgba(0, 0, 0, 0.6)` | `0 0 40px rgba(40, 32, 22, 0.22)` |
 | Popover shadow | `--shadow-pop` | `0 16px 48px rgba(0, 0, 0, 0.55), 0 0 0 1px var(--border)` | `0 16px 48px rgba(40, 32, 22, 0.16), 0 0 0 1px var(--border)` |
 | Card shadow | `--shadow-card` | `0 4px 16px rgba(0, 0, 0, 0.35)` | `0 4px 16px rgba(40, 32, 22, 0.07)` |
+| Document surface | `--pdf-page` | `#ffffff` | `#ffffff` |
+
+`--pdf-page` is the one color with the same value in both columns, on purpose: a PDF page is
+paper, not UI, and the viewer (`.file-viewer-pdf`) must not tint it for the theme. It is named in
+`src/styles.css` under the same note and no theme or palette block overrides it.
 
 ### Opt-in palettes
 
 `settings.palette` (`amber` default, `report`, `charcoal`, `catppuccin`, `lilac`) is written as `data-palette`. The
 tables above are amber, the base blocks; the four opt-in palettes override them in
 `[data-theme][data-palette]` blocks of `src/styles.css`, which hold the complete values.
-The amber dark colours are keyed on `:root, [data-theme="dark"]` and none of the blocks is
-scoped to `<html>`, so any element that carries `data-theme` and `data-palette` itself takes
-that palette's whole colour set: Settings → Appearance draws each palette's preview that way.
 
 `--bubble-border` is the edge of the chat's user bubble. It is `transparent` where `--bg-elevated`
 alone parts the bubble from `--bg`: dark amber, dark report, dark charcoal and dark lilac. It is `var(--border)`
@@ -188,6 +190,7 @@ blue there instead of `--accent`, and Latte's colors are darkened to stay readab
 | Title | `--fs-xl` | `18px` | `17px` | Markdown h1 |
 | Display | `--fs-display` | `22px` | `21px` | The empty chat's greeting |
 | Input | `--fs-input` | `16px` | `16px` | Mobile-safe text input |
+| Pairing | `--fs-pairing` | `32px` | `26px` | The pairing code in Settings → Devices |
 
 | Token | Value | Usage |
 |-------|-------|-------|
@@ -234,7 +237,7 @@ blue there instead of `--accent`, and Latte's colors are darkened to stay readab
 - `theme`: `dark`, `light`, or `system`; default `dark`.
 - `palette`: `amber`, `report`, `charcoal`, `catppuccin` or `lilac`; default `amber`.
 - `density`: `comfortable` or `compact`; default `comfortable`.
-- `sidebarRows`: `one` or `two`; default `one`.
+- `sidebarRows`: `one` or `two`; default `two`.
 - Terminal font size is independent: default `13px`, clamped to `10–22px`.
 - Terminal and chat font families are comma-separated lists, default empty. They go in front of the
   terminal's built-in fonts (after the bundled Symbols Nerd Font Mono, which only draws icons) and of
@@ -295,15 +298,12 @@ Comfortable values are `:root`; the final column is the complete compact overrid
 | `--dot-size` | `7px` | — | Connection dot |
 | `--rail-w` | `3px` | — | Device and quoted-content rails |
 | `--hairline` | `1px` | — | Borders |
-| `--content-w` | `820px` | — | Dialog content |
-| `--settings-w` | `1040px` | — | Settings window width (fixed: switching pages never resizes it) |
-| `--settings-h` | `760px` | — | Settings window height |
-| `--settings-nav-w` | `248px` | — | Settings navigation column |
-| `--settings-content-w` | `640px` | — | Measure of a Settings page's groups |
+| `--content-w` | `820px` | — | Settings and dialog content |
 | `--pending-max-h` | `min(20dvh, 12rem)` | — | Pending-message stack ceiling |
 | `--chat-w` | `--content-w`, then the pane's lane as one length | — | Chat lane: transcript, composer column, held list. Settings → Chat width: Narrow `--content-w`; Default follows the pane (min 820px, max `60rem` = 960px, 71% of the pane between; the px floor wins where 60rem is under it); Wide `72rem` (1152px); Full `100%` |
 | `--palette-w` | `640px` | — | Command palette |
 | `--palette-top` | `12vh` | — | Palette top offset |
+| `--context-line` | `calc(var(--fs-lg) * var(--lh-base))` = `24px` | `21.75px`, through the scale | The selected pane's crumb row, min and max height. Scoped to `.context`, not `:root`, so it follows `--fs-lg`/`--lh-base` in either density |
 
 ### Focus and layers
 
@@ -315,7 +315,8 @@ Comfortable values are `:root`; the final column is the complete compact overrid
 | `--z-popover` | `10` | Composer completions, the Comment button and the comment popover |
 | `--z-scrim` | `15` | Mobile drawer scrim |
 | `--z-drawer` | `20` | Mobile drawer |
-| `--z-modal` | `30` | Dialog and palette scrims |
+| `--z-modal` | `30` | Dialog scrims |
+| `--z-palette` | `35` | Command palette scrim, over every scrim dialog (a `showModal()` dialog sits in the top layer above it) |
 | `--z-droplet` | `40` | In-app alert, over dialogs |
 
 ### In-app alert
@@ -375,17 +376,11 @@ One set for both themes: the card is island black wherever it shows.
 ## 5. Components
 
 ### Button (`.btn`, `.icon-button`)
-- `.btn` is a medium text control. Variants: neutral, `.btn-primary`, `.btn-secondary`,
-  `.btn-tertiary`, `.btn-danger`, `.btn-ghost`. Primary uses `--primary`; danger uses danger
-  tint plus blocked border, and keeps both a shade stronger under the pointer instead of the
+- `.btn` is a medium text control. Variants: neutral, `.btn-primary`, `.btn-danger`, `.btn-ghost`.
+  Primary uses `--primary`; danger uses danger tint plus blocked border, and keeps both a shade stronger under the pointer instead of the
   neutral hover grey; ghost removes fill/edge.
 - A destructive action that is not what its dialog is for (Delete in the comment editor) is
   ghost; danger is for the confirmation.
-- Three weights for a page's actions (Settings): at most one `.btn-primary` per page, the main
-  action (Pair a device, Add PC); `.btn-secondary` for the others, an `--accent` outline and text
-  on no fill that takes `--accent-tint` on hover (Send test, Save key, Check for updates, Add
-  reply); `.btn-tertiary` for the least used, an underlined `--text-dim` text link that turns
-  `--text-strong` on hover (Restore defaults, Reset all shortcuts, Remove key, links out).
 - `.icon-button` is a square unlabeled visual control with mandatory `aria-label`; `.is-outlined`
   adds the border. Both families use `--control-h`, `--radius-md`, focus ring, hover and disabled.
 - Coarse pointers grow controls to `--touch-target`.
@@ -393,7 +388,7 @@ One set for both themes: the card is island black wherever it shows.
 ### Segmented control (`.segmented`)
 - One `aria-pressed="true"` option receives hover fill and strong text; the group itself is an
   elevated, bordered `--radius-md` track.
-- Used for Chat/Terminal and for Settings choices of two to four short options (mode, density, chat width); on a phone a Settings one takes its row's width. It is not a generic tab list.
+- Used for Chat/Terminal, theme and density. It is not a generic tab list.
 
 ### Keyboard hint (`.kbd`)
 - An inline mono keycap: `18px` high, strong bottom edge, `--radius-sm`, `--fs-2xs`.
@@ -425,11 +420,9 @@ One set for both themes: the card is island black wherever it shows.
 - Hover or `aria-selected` uses `--bg-hover`. Headings are dim uppercase micro labels.
 - The sidebar's row menu (`.row-menu`) is a `.menu` drawn through a portal at fixed coordinates,
   under its `⋯` with right edges aligned, above it when the screen ends first, and over the drawer.
-  In workspace mode, a row offers Rename workspace, Rename pane (the pane it opens), New tab,
-  New worktree, Open worktree…, then Close workspace under a hairline. In folder mode, a representative row keeps Rename workspace,
-  Rename pane (the pane the row shows), New tab, New worktree, Open worktree…, then Close
-  (Close workspace when it has several panes). A worktree workspace has no worktree items and
-  ends in **Delete worktree checkout…** after Close. The
+  A row offers Rename workspace, Rename pane (the pane it opens), New tab,
+  New worktree, Open worktree…, then Close workspace under a hairline. A worktree workspace has no worktree items and
+  ends in **Delete worktree checkout…** after Close workspace. The
   danger item takes `--status-blocked`. At `<=640px` it is a `.modal` bottom sheet (`.row-sheet`):
   a grip, the row's name and place, 48px rows and a Cancel button; Tab stays among them. Escape, a press outside and
   focus leaving it close it (on a desktop a scroll or a resize too), and focus returns to the
@@ -478,10 +471,11 @@ One set for both themes: the card is island black wherever it shows.
   Agents takes the height of its rows, at most half the sidebar, docked above the footer; the
   workspace list has the rest. The Agents heading stays outside its scroll area and shows its
   count only while folded. A list that is cut fades out at its lower edge. An empty or folded
-  Agents list gives its space back; PC and workspace folds do not hide agent rows.
+  Agents list gives its space back; PC and workspace folds do not hide agent rows. In the drawer
+  (`max-width: 768px`) the list starts folded.
 - A PC's header is the head of its workspaces, and the caret beside its `+` is the one fold over
   them. The roster has no label or fold of its own.
-- In workspace mode, a repository's parent row keeps `workspace.label`; its opened linked
+- A repository's parent row keeps `workspace.label`; its opened linked
   worktree rows show their actual checkout branches. Each row's compact status
   glyph rolls up all of the workspace's panes as herdr does (blocked, then done, then working,
   then ready); a folded worktree parent rolls up its whole group.
@@ -522,36 +516,32 @@ One set for both themes: the card is island black wherever it shows.
   authoritative when the agent roster and pane status differ. The workspace and agent lists
   share the existing combined machine roster and its SSE updates; neither adds a status subscription.
   A disconnected PC's saved workspace and agent rows are dimmed, inert and draw no state until that PC reconnects.
-- Appearance's **Sidebar rows** is **One line** by default: a workspace row is its name. **Two
-  lines** draws the row as the roster did before it was one line, on an agent row's height and
-  type: the title of the pane the row opens, and under it in `--text-dim` `--fs-xs` the place,
+- Appearance's **Sidebar rows** is **Two lines** by default; on **One line** a workspace row is
+  its name. Two lines draws the row as the roster did before it was one line, on an agent row's
+  height and type: the title of the pane the row opens, and under it in `--text-dim` `--fs-xs` the place,
   "workspace · folder" with no name said twice (`taskRowLines`, lib/paneName.ts). A shell titled
   by its folder leads with the workspace instead; a linked worktree is placed by its branch,
   then its own workspace name. The folder, the mark, the status cell, the menu and the fold
-  count stay where they are, and the menu and rename still act on the workspace. In folder
-  mode the second line is the workspace's name. The choice is per device and applies at once.
-- Appearance's **Group sidebar by** is **Workspace** by default for new settings and saved records
-  without a valid grouping preference. Explicit **Workspace** and **Folder** choices stay as
-  saved. The choice applies immediately and persists in the existing Settings record; folder
-  folds are remembered per PC and path.
-- In folder mode, within each PC, panes with the same full cwd share a folder group, including panes from
-  different workspaces. Trailing separators and Windows slash styles are normalized; case and
-  symlinks are not resolved. Unknown cwd stays with its workspace rather than merging unrelated sessions.
-  A workspace whose panes sit in two folders has a row in each, opening the pane in that folder.
-  Each row represents its current pane: the selected one in that folder, else the last viewed
-  one there, else the pane herdr has focused, else its first. Its compact glyph rolls up those
-  panes' states; the other panes remain reachable from the tab strip, palette and **Agents**.
-- Every folder has an open or closed folder glyph, which with its name is the fold, and a
-  basename, even for one pane. The
-  folder containing the selection names itself in `--text-strong`; only the selected row is filled.
-  Its full path and pane count remain
-  available to screen readers, and the path appears in the tooltip. Contents are indented without
-  tree hairlines. Folder folds are remembered per PC and path; opening a pane unfolds its folder,
-  but status updates do not.
-- Folder order follows the first workspace in server order; dragging workspace rows reorders
-  workspaces, not filesystem directories. Workspace names and rename actions remain inside the group.
-- Each workspace row is one line: its folder (top-level rows), a leading glyph, the name, and
-  the compact state at the right. The leading glyph is the brand mark of the agent in the pane the row opens; a row that opens a
+  count stay where they are, and the menu and rename still act on the workspace. The choice
+  is per device and applies at once.
+- Appearance's **Agents order** is **Workspaces** by default: the Agents list in herdr's
+  workspace, tab and pane order. **Activity** pins a blocked agent on top and orders the rest by
+  their most recent state change (herdr's `state_change_seq`, read from the snapshot's `agents`),
+  within each PC, so the agent just worked in stays on top while it runs and after it finishes.
+  It changes only the Agents list; herdr's order and the workspace rows stay as they are.
+- Appearance's **Quiet opened finishes** is off by default. herdr reports DONE until one of its
+  own clients shows the pane, so an agent opened here would keep its finished dot. On, a DONE
+  opened here (selected while the page is visible) since it finished draws as ready in the
+  Agents list and in its workspace's roll-up. "Opened" is kept per PC in this browser
+  (`herdr-web-ui:seen:<pc>`) and dropped with the PC. The first time it is turned on in a
+  browser, everything open on the connected PCs counts as opened, so the lists start quiet; a PC
+  first seen later starts with nothing opened, so its finishes keep their dots until opened.
+  Storage holds herdr's own counters only, so a page reloaded within the poll window after
+  leaving a finish it watched shows that finish's dot again rather than guess. herdr's counter
+  only goes up within a session, so a look recorded above it is from before a herdr restart and
+  is dropped.
+- Each workspace row holds its folder (top-level rows), a leading glyph, the name (on two lines,
+  the title over the place) and the compact state at the right. The leading glyph is the brand mark of the agent in the pane the row opens; a row that opens a
   shell shows the terminal glyph, and a linked worktree without an agent the branch glyph. The
   mark never stands for another pane's agent; the row's tooltip lists every agent in the
   workspace. A custom worktree workspace name follows the branch on the same line in dim text.
@@ -560,13 +550,11 @@ One set for both themes: the card is island black wherever it shows.
   Dragging is disabled while a name field is open. Each workspace's `⋯` opens its row menu
   (`.row-menu-toggle`: no width at rest; shown on hover, focus, selection and while its menu is
   open; always on touch). Inline server failures
-  stay beside their workspace. In the By workspace view a repository's workspace moves past the
+  stay beside their workspace. A repository's workspace moves past the
   next or previous group with its worktrees, and a worktree moves among its siblings only.
 - A title that is a working directory written out (`/home/me/dev/api`, `~/dev/api`, `C:\work\api`)
   shows as its last folder, here, in the header, the palette and every alert; the full path stays
-  in the row's tooltip. In folder mode, an unlabelled representative pane whose title repeats
-  its folder uses the workspace name, so sibling shell workspaces remain distinguishable.
-  Workspace mode keeps parent workspace names fixed and names linked checkouts by branch;
+  in the row's tooltip. Parent workspace names stay fixed and linked checkouts are named by branch;
   agent rows show their pane's own title. Each row's
   place is available to screen readers, without repeating what its title already says. The
   palette, which has no header, names the workspace and folder once when they are the same.
@@ -579,7 +567,7 @@ One set for both themes: the card is island black wherever it shows.
   caret and shows on hover, focus, while its panel is open, while the PC is not connected, and always
   on touch. Connected is the dot alone; every other state is also written under the name, with the server's
   error clamped to two lines and complete in the tooltip.
-- In the By workspace view, a repository's worktree workspaces (`workspace.worktree.is_linked_worktree`)
+- A repository's worktree workspaces (`workspace.worktree.is_linked_worktree`)
   sit indented under the row of the workspace on its main checkout (`.worktree-children`), without
   a tree hairline; a worktree whose repository workspace is not open stays at the top level.
 - Rows use only shared theme tokens in dark and light. Touch keeps row menus and folds visible,
@@ -1046,8 +1034,8 @@ One set for both themes: the card is island black wherever it shows.
   focus turns its border `--accent` (no inner outline). Above it the completion popover and the
   background-task list; inside, the image strip is its own row at the top, then the auto-growing
   message box as a row of its own at the card's full width, then ONE row of controls under it:
-  on the left the add button (lucide `Plus`, named "Attach files"), the mic when voice input is
-  on, and the background-task chip; on the right the status content and ONE round Send/Stop button.
+  on the left the add button (lucide `Plus`, named "Attach files"), the mic when voice input
+  shows it (see Voice input), and the background-task chip; on the right the status content and ONE round Send/Stop button.
 - Empty chat (`.composer-greeting`): one line on the composer's column, directly over it,
   `What should <agent> do in <folder>?` in `--text-strong`, `--fs-display`, `--fw-semibold`, `--tracking-display`, centred,
   and under it `PC · full path` in `--text-dim`, `--fs-sm`. Both wrap anywhere. While dictation's
@@ -1230,8 +1218,9 @@ One set for both themes: the card is island black wherever it shows.
   still `Discard`.
 - `/` completions come from `GET /api/pane/commands` and group built-in, user and project commands;
   `@` completions query `GET /api/pane/files`. Arrow keys navigate, Enter/Tab accepts, Escape closes.
-- Paste, picker or drag/drop accepts up to four png/jpeg/gif/webp files per action. Each gets a local
-  preview, uploads through `POST /api/pane/image`, and inserts a removable editable `@path` mention.
+- Paste, picker or drag/drop accepts up to four files per action; an image is stored as a paste, any other
+  file under its own sanitised name. Each uploads through `POST /api/pane/image` and inserts a removable
+  editable `@path` mention.
 - While a phone's keyboard is up, a tap on the transcript or a drag down it (`32px`) puts the
   keyboard away. Each only blurs the field, so the draft stays. The prompt card, which can stand
   where the transcript was on a short screen, does the same: a tap on its text (never on an
@@ -1248,116 +1237,87 @@ One set for both themes: the card is island black wherever it shows.
 ### Voice input
 - A mic button sits beside the add button in the composer and beside Send in the terminal input line; it
   fills with `--accent` while recording. Dictated text is inserted at the caret, never sent.
+- `voiceInput`: `auto`, `on` or `off`; default `auto`. Auto puts the mic in the composer only, not on
+  a phone (the composer's `(max-width: 640px), (pointer: coarse)`), and leaves it out where dictation
+  cannot work (no HTTPS, or no key and no browser recognition). On shows it in both inputs and on a
+  phone, disabled with its reason where it cannot work.
 - The recording pill shows Cancel, a **Recording** label, the level bars, a mono timer and Done.
   Amber only; `--danger` stays for errors.
 
 ### Command palette
 - `Mod+Shift+K` opens a top-offset `--palette-w` dialog searching panes and actions. Recent panes
-  lead an empty query; arrows cycle, Enter activates and Escape closes.
+  lead an empty query; arrows in the search field cycle through visible results, Enter activates
+  and Escape closes. IME candidate, commit and cancel keys stay with composition. Buttons reached
+  with Tab keep their native activation, and arrow navigation scrolls the selected result into view.
 - Actions cover new workspace, lens/sidebar/theme, settings, notifications, lock and refresh, with
   `.kbd` hints where a global shortcut exists.
 
 ### Settings dialog
-- A fixed-size window (`--settings-w` × `--settings-h`, capped by the screen) over the app, which
-  stays in view behind the scrim, so an appearance change shows at once. `--bg` with a
-  `--settings-nav-w` navigation column on `--bg-panel` and a hairline between them. Mounted only
-  while open: each opening starts from its page, and each page asks the server for what it shows
-  when it mounts.
-- Navigation (`.settings-nav`): the title, the search field (`.settings-search`, a `/` keycap;
-  `/` moves there from anywhere not editable), then three groups of pages, each a dim semibold
-  `--fs-xs` heading over 36px items (lucide glyph and name, `--fs-sm`): **This device** (Appearance,
-  Terminal, Chat, Voice input, Notifications, File viewer, Keyboard shortcuts), **Server & connections** (Phone &
-  devices, Remote PCs, Plan usage) and **herdr web ui** (About & updates). Items are 2px apart, so a
-  hovered item's fill never touches the open one's. The open page's item (`aria-current="page"`)
-  takes `--bg-hover`, a `--rail-w` `--accent` rail on its left edge and an `--accent` glyph, as
-  the selected pane row. A footer line, a `--status-done` check and **Changes save automatically**.
-- The page (`.settings-content`): a header with the page's name (`--fs-display`, semibold), one
-  dim line under it and the close button, over a scrolling body whose groups keep to
-  `--settings-content-w`.
-- A page is groups (`settings/SettingsUi.tsx`). A group (`.settings-group`) is a sentence-case
-  `--fs-md` semibold title, an optional one-line intro in `--text-dim`, then one card
-  (`.settings-card`: `--bg-panel`, hairline `--border`, `--radius-lg`) of rows parted by
-  hairlines (the card's `--border` showing through a 1px gap, so a hidden row takes its line with
-  it), then the group's own buttons under the card. `--space-8` between groups, less inside them.
-  A row (`.settings-row`, `--row-h` at least) is the label (`--fs-md`, medium, `--text-strong`)
-  with an optional short description (`--fs-sm`, `--text-dim`) on the left and its control on the
-  right; a stacked row (`.is-stack`) puts the control under them at the row's width (fields,
-  lists, tiles, radios). Notes and errors (`.settings-note`) go under the row's line.
-- Controls: the switch (`.settings-toggle`, `role="switch"`): a 44×26 pill in a 48×40 target,
-  `--bg-input` with a `--border-strong` edge and a `--text-dim` thumb when off, solid
-  `--primary` with a `--primary-text` thumb when on. The stepper (`.settings-stepper`): −, the
-  value in mono, + on one bordered `--bg-input` field. Segmented controls are the primitive. A few
-  choices that need a line each are radios (`.settings-radio`, the checked one `--accent-tint`
-  with an `--accent` edge). A tag (`.settings-tag`) is a `--chip-h` pill after a label: a state
-  (`--status-done` on its tint for On, Connected, Up to date), or **Saved on the server PC** with a
-  monitor glyph on what the server keeps for every device (the OpenAI key, the bridge switch).
-- Search: while the field has text every page is drawn at once and only the rows that match stay;
-  a group or page left without one hides (`:has()`), each page's name heads its groups in
-  `--accent`, intros hide, and the header reads **Search results** / **Across all sections**.
-  A row matches when each word is in its label, its description, its group's or page's title (in
-  the language shown) or its English keywords. Controls work in the results. Nothing found reads
-  **No settings match “…”.** Escape clears a search first, and closes Settings after that.
-- The open page is in the address: `#settings/<page>` (`lib/settingsSearch.ts`) opens Settings
-  on it, at load or typed into an open tab; switching pages rewrites it (`history.replaceState`)
-  and closing removes it. The update line's **Details** opens About & updates.
-- Focus: a keyboard starts in the search; a touch screen focuses nothing that raises its keyboard.
-  While Settings is up, focus that lands in the app under it (a terminal attaching, a Tab past the
-  last control) comes back; a menu or a confirm Settings opens keeps it.
-- Phones (`<=640px`): the whole screen, as a phone's own settings. First the list: each page a
-  56px row in its group's card (glyph, name, and under it its current values in one dim line, such
-  as **Dark · Catppuccin · Comfortable** or **13 px · JetBrains Mono**, where they are known without
-  asking the server; a chevron). A tap opens the page, whose header has **All settings** (back),
-  the name and close. Segmented controls and selects take the row's width; palette tiles go two
-  by two. While searching, the field stays at the top and the results take the list's place.
-- Appearance: Mode (Dark / Light / System), Palette as five radio tiles, each a small picture of
-  the app drawn with that palette's own tokens (the tile's preview carries `data-theme` and
-  `data-palette`), Density, Group sidebar by (Workspace / Folder), Sidebar rows (One line / Two lines) and Language (a select: System
-  with the language it resolves to, then each by its own name).
-- Terminal: a preview in the terminal's colours, font and size; font size `10–22px`; font family;
-  Typing (Automatic: the input line on a touch screen, direct typing with a mouse and keyboard /
-  Input line / Direct typing); wheel scroll speed; then the Key bar group, the key bar editor (`KeyBarSettings`) in a stacked row:
-  the terminal keys in their display order, each removed or moved with up/down buttons that keep
-  `--touch-target` hit areas on phones. Add key offers the supported key catalog, and
-  Ctrl/Alt/Shift toggles add or remove held-modifier buttons. Custom combination chooses one key
-  or printable character plus modifiers, with its cap previewed before Add. Saved combinations
-  send exactly those modifiers; ordinary keys inherit the held modifiers. Restore defaults
-  returns the original row. The keyboard mode control stays first.
-- Chat: Panes open in; Show thinking, Width on large screens (Narrow 820px / Default, following the
-  pane / Wide 1152px / Full, the pane less its gutters), chat font size and family; Enter sends
-  (its description names the Mod+Enter keys as keycaps) and the suggested prompt chip; quick
-  replies: a switch, then one field per reply with move up, move down and remove, Add reply and
-  Restore defaults.
-- A font family is a text field saved when it is left, on Enter or when the field unmounts (the
-  dialog closing, another page or a search taking its place), not per keystroke.
-- Voice input: the mic button; Speech recognition (what recognizes the speech now and where the
-  audio goes, the OpenAI key with Save key and Remove key); tidying, while the mic button is on.
-- Notifications: this device's push state with Send test (and **Turn alerts on again** when it
-  needs it), what to be told about, and the in-app banner and sound.
-- File viewer: Wrap long lines and Markdown width (Default / Full width), then Large files: Load
-  text files up to and Highlight syntax up to (256 KB / 1 MB each).
-- Keyboard shortcuts: one row per shortcut with its key select (Default, Off, any free
-  Mod+Shift+key), Dictate's fixed keycaps, and Reset all shortcuts.
-- Phone & devices: the address a phone can open (or the step still missing), Keep screen on,
-  Install as an app (installed, promptable or the browser's steps), then Paired devices: how this
-  browser got in, a row per device with a `⋯` menu (the row menu: Rename, Revoke after a
-  confirm), the pairing code with its QR code and link while one is out, and **Pair a device**.
-- Remote PCs: a row per PC (Host for this one, its state as a tag, its SSH address or error);
-  an SSH PC's `⋯` holds its sidebar group's manage actions (Rename, Connect / Disconnect,
-  Reconnect / setup, Update bridge…, Remove PC after a confirm). **Add PC** under them opens the
-  PC setup dialog and closes Settings behind it, never waiting for the server's settings; when
-  that dialog closes, focus lands on the header's workspace-list toggle. Bridges holds the server's
-  bridge auto-update switch, once the server has answered.
-- Plan usage: Show plan limits, then (when on) Meters show (Used / Remaining) and Limit shown
-  (Weekly / Session), and Accounts: a row per account (mark, name, dim ellipsized email, then
-  move up, move down in fixed columns and a show switch; a move that cannot happen keeps its
-  column but is not shown). A hidden account's row fades; it stays listed so it can be shown again.
-- About & updates: a row for herdr web ui and one for herdr, then Star on GitHub and Website. The
-  running versions are always written, since the sidebar carries none: **Running vX.Y.Z
-  (commit)**, the server's version and commit, or the client's own build version before the
-  server answers and where it names neither. While the server runs another version than this tab
-  was built from (updated, not yet reloaded), a note names the tab's own. The herdr row reads
+- A Settings shortcut opened over a file preview places Settings above it (`--z-modal + 2`, one
+  above the preview). Settings owns Escape until it closes; the preview keeps its history entry
+  underneath for the next Back or close. With no preview open Settings stays at `--z-modal`. The
+  command palette opened from its shortcut shows above both (`--z-palette`).
+- One page at a time. From 641px the dialog is two columns at a fixed size (`--content-w` wide,
+  `40rem` tall, so turning a page never moves its edge): a `13rem` list of pages on `--bg`
+  (icon + name, the open one on `--bg-hover` with its glyph in `--accent`) and the open page
+  beside it under its own title and the close button. A phone shows one of the two: the sheet
+  (`92%` tall) opens on the list, drawn as one card of rows with a chevron each, and a page
+  replaces it under a Back to settings control. The dialog's accessible name stays **Settings**
+  on every page; the list is a vertical `tablist` with one Tab stop, and the arrows walk it
+  (beside an open page they turn the page too). Escape closes the dialog from any page.
+- Each step into Settings is an entry of the browser's history (`lib/settingsHistory.ts`): the
+  dialog, the page a phone opens from its list, the key bar editor. The system Back button (and
+  an edge swipe) takes one step out and never leaves the app from inside Settings; the Back
+  control, the X, Escape and the scrim take the same entries off. Beside the list, turning pages
+  replaces the one entry. A reload steps out of the entries it finds; Forward reopens the page.
+- Pages, in order: **Appearance** (theme, colors, density, language, sidebar rows), **Chat**
+  (panes open in, show thinking, chat width, chat font size and family; then **Composer**: Enter
+  sends, suggestion chip; then **Quick replies**), **Terminal** (font size and family, wheel
+  speed, input mode, Key bar), **File viewer** (wrap long lines, Markdown width; then **Large
+  files**: how much of a text file loads and up to what size it is highlighted), **Alerts**, **Voice input**, **Subscription usage**,
+  **Shortcuts** (the complete platform-resolved list), **Phone & devices** (the phone address,
+  Keep screen on, Install; then paired devices), **Remote PCs**, **About** (Updates, herdr,
+  the repository links). A button that points at Updates opens the dialog on About.
+- Every page is built from the same parts (`components/SettingsControls.tsx`). A group is an
+  optional caption (`--fs-sm`, `--fw-semibold`, `--text-dim`, sentence case) over one card:
+  `--bg-elevated`, hairline `--border`, `--radius-lg`, its rows parted by hairlines and never
+  boxed on their own. A row is a label (`--fs-sm`, `--fw-medium`, `--text-strong`) with at most
+  one dim sentence under it (`--fs-xs`, no wider than `54ch`) and one control at the end of the
+  line. The controls are a switch, a segmented control for two to four short choices, a select
+  for five or more, a stepper (minus, value in `--font-mono`, plus, in one bordered well) and a
+  text field; inside a card they sit on `--bg-input`. On a phone a control that needs the line
+  (three or more segments, a text field, or a long sentence above it) goes under its label at
+  the card's width, its segments sharing it equally; the rest stay on the label's line.
+- Terminal keeps Key bar as a compact description and Edit key bar button. That button opens
+  a detail screen in the same dialog with its own scroll body and a Back to settings control.
+  Back or Escape returns to the Terminal page's scroll position and focuses Edit key bar;
+  closing the dialog resets it for the next open. The detail lists the terminal keys
+  in their display order. Every key can be
+  removed or moved with up/down buttons; those controls keep `--touch-target` hit areas on phones.
+  Add key offers the supported key catalog, and Ctrl/Alt/Shift toggles add or remove held-modifier
+  buttons. Custom combination chooses one key or printable character plus modifiers, with its cap
+  previewed before Add. Saved combinations send exactly those modifiers; ordinary keys inherit the
+  held modifiers. Restore defaults returns the original row. The keyboard mode control stays first.
+- A font family is a text field saved when it is left, on Enter or when the dialog closes, not
+  per keystroke.
+- Remote PCs: an **Add PC** row (label, one-line description, button) opens the PC
+  setup dialog and closes Settings behind it; when that dialog closes, focus lands on the header's
+  workspace-list toggle. Under the row, once the server has answered, the bridge auto-update switch.
+- Install (a row of the Phone group) reflects installed, promptable or browser-instructions state;
+  About links the repository.
+- The running versions are always written, since the sidebar carries none. Updates opens with
+  **Running vX.Y.Z (commit)**: the server's version and commit, or the client's own build version
+  before the server answers and where it names neither. While the server runs another version than
+  this tab was built from (updated, not yet reloaded), a second line names the tab's own. The
+  **herdr** section opens with
   **Running herdr X.Y.Z**; where herdr cannot be updated from here (Windows, an older server) the
-  row is that line alone, from the health check.
+  section is that line alone, from the health check.
+- Subscription usage: the on switch with one description, then (when on) Used / Remaining,
+  Weekly / Session and, under an **Accounts** caption, one card of accounts (`.usage-accounts`):
+  one `--touch-target` row per account
+  (mark, name, dim ellipsized email, then 28px move-up, move-down and eye controls in fixed columns;
+  a move that cannot happen keeps its column but is not shown). A hidden account's row fades and
+  its eye closes; it stays listed so it can be shown again.
 
 ### Terminal host, key bar and drawer
 - xterm has `scrollback: 0`; wheel/touch gestures reach herdr's alternate-screen scrollback. The
@@ -1366,7 +1326,7 @@ One set for both themes: the card is island black wherever it shows.
 - The mobile key bar is Esc, Tab, sticky Ctrl/Alt/Shift, Enter, arrows and `^C`;
   it never steals typing focus. Modifiers remain highlighted until toggled off,
   leaving the pane/lens or disconnecting; each exposes `aria-pressed`.
-- That is the default row. Settings → Appearance → Key bar can add, remove and reorder every
+- That is the default row. Settings → Terminal → Key bar can add, remove and reorder every
   terminal key and register exact combinations. Removing a held modifier clears it immediately.
   A deliberately empty row retains only the keyboard mode control on a touch screen.
 - The mobile drawer slides over a scrim. Closed visibility removes its controls from the tab order.

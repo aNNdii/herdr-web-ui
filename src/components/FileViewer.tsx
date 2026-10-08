@@ -21,6 +21,7 @@ import { parseMarkdownWithLines, previewHosts } from "../lib/markdown.ts";
 import { useT } from "../lib/i18n.ts";
 import { useSettings } from "../lib/settings.ts";
 import { answeredFileSize, decodeStart, hasPreview, loadedText, textView, type LoadedText, type TextViewMode } from "../lib/textPreview.ts";
+import { useFocusTrap } from "../lib/useFocusTrap.ts";
 
 /** Bigger images are offered as a download: a phone decodes an image whole. */
 const MAX_INLINE_IMAGE_BYTES = 20 * 1024 * 1024;
@@ -34,6 +35,8 @@ export interface FileViewerProps {
   /** the pane's working folder (null: not known here): a comment names a file inside it relative to it */
   paneFolder: string | null;
   onClose: () => void;
+  /** Settings can open above this preview; its Escape must not also close the file. */
+  keyboardActive?: boolean;
   /** a file chosen in a folder's listing: opened as the preview, so history and a reload keep it */
   onOpen?: (path: string) => void;
   /** a file comment of the pane to open at (the composer's walk): its view shows, and the walk stops at it */
@@ -71,7 +74,7 @@ function CopyFileButton({ text, sourceRef, onShowSource }: { text: string; sourc
  * play and seek at once), PDFs, and the start of a text file. Each opens whole in a new tab (a
  * text file raw), where it can be saved too; a file no tab can show is offered as a download.
  */
-export function FileViewer({ path: asked, paneId, machineId, paneFolder, onClose, onOpen, commentId = null }: FileViewerProps) {
+export function FileViewer({ path: asked, paneId, machineId, paneFolder, onClose, onOpen, commentId = null, keyboardActive = true }: FileViewerProps) {
   const t = useT();
   const { settings } = useSettings();
   const { textLoadLimit } = settings;
@@ -110,7 +113,8 @@ export function FileViewer({ path: asked, paneId, machineId, paneFolder, onClose
     selectSourceOnCode.current = false;
     if (sourceRef.current) selectContents(sourceRef.current);
   }, [mode, loaded]);
-
+  // Escape closes it, Tab stays in it, and the focus goes back to the row that opened it
+  const surface = useFocusTrap<HTMLElement>(true);
   useEffect(() => setPath(asked), [asked]);
 
   useEffect(() => {
@@ -153,6 +157,7 @@ export function FileViewer({ path: asked, paneId, machineId, paneFolder, onClose
   // a comment form is open: Escape is the form's (it gives up while nothing is typed), not the viewer's
   const formOpen = useRef(false);
   useEffect(() => {
+    if (!keyboardActive) return;
     // the FilesDialog beneath listens on window too (and stands down while this is open); this
     // one is the topmost overlay, so it takes the key
     /** Escape closes the viewer from anywhere in it, unless a comment form or something in it took the key. */
@@ -161,7 +166,7 @@ export function FileViewer({ path: asked, paneId, machineId, paneFolder, onClose
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
+  }, [onClose, keyboardActive]);
 
   // the file found (a bare name may have been found deeper in the folder), else as asked
   const url = fileUrl(info?.path ?? path, paneId);
@@ -284,7 +289,7 @@ export function FileViewer({ path: asked, paneId, machineId, paneFolder, onClose
 
   return (
     <div className="modal-scrim file-viewer-scrim" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
-      <section className="modal file-viewer" role="dialog" aria-modal="true" aria-label={info?.name ?? path}>
+      <section ref={surface} className="modal file-viewer" role="dialog" aria-modal="true" aria-label={info?.name ?? path} tabIndex={-1}>
         {/* three groups, spaced apart: how the text shows, the file itself, the window */}
         <header className={stacked ? "modal-header file-viewer-header file-viewer-header-stacked" : "modal-header file-viewer-header"}>
           <div className="file-viewer-title">

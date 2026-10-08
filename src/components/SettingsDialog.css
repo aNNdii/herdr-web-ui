@@ -1,24 +1,18 @@
-/* Settings (SettingsDialog.tsx): a fixed-size window, the navigation beside the page. A phone
-   gets the whole screen, the list of pages first. The pages' own pieces are in
-   settings/SettingsUi.css. */
-
-.settings-scrim {
-  padding: var(--space-8);
+/* The Settings shortcut can open it while a file preview still holds its history entry: only
+   then is it raised, over the preview. On its own it stays on the layer every dialog shares, so
+   the file browser, later in the document, still opens above it; the palette has a layer of its own. */
+.settings-over-preview {
+  z-index: calc(var(--z-modal) + 2);
 }
 
-/* one size whatever the page: switching pages never makes the window jump */
+/* Two columns from 641px: the list of pages, and the page it opened. A phone shows one of the
+   two at a time, as a sheet of a fixed height so that turning a page never moves its edge. */
 .settings-dialog {
   display: grid;
-  grid-template-columns: var(--settings-nav-w) minmax(0, 1fr);
-  grid-template-rows: minmax(0, 1fr);
-  width: min(100%, var(--settings-w));
-  height: min(100%, var(--settings-h));
-  max-height: none;
-  background: var(--bg);
-}
-
-.settings-dialog:focus {
-  outline: none;
+  grid-template-columns: 13rem minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr);
+  width: min(100%, var(--content-w));
+  height: min(100%, 40rem);
 }
 
 .settings-dialog .icon-button svg {
@@ -26,118 +20,48 @@
   height: var(--icon-size);
 }
 
-/* ---------- navigation ---------- */
+.settings-header {
+  grid-column: 2;
+  grid-row: 1;
+}
 
 .settings-nav {
   display: flex;
+  grid-column: 1;
+  grid-row: 1 / 3;
   flex-direction: column;
-  min-width: 0;
+  gap: var(--space-3);
   min-height: 0;
-  background: var(--bg-panel);
+  padding: var(--space-4) var(--space-3);
+  overflow-y: auto;
+  background: var(--bg);
   border-right: var(--hairline) solid var(--border);
-}
-
-.settings-nav-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-2);
-  padding: var(--space-5) var(--space-4) var(--space-3) var(--space-5);
 }
 
 .settings-nav-title {
   margin: 0;
+  padding: var(--space-1) var(--space-3) 0;
   color: var(--text-strong);
   font-size: var(--fs-lg);
   font-weight: var(--fw-semibold);
-  line-height: var(--lh-tight);
 }
 
-/* the content's header has the close button, except in a phone's list */
-.settings-nav-close {
-  display: none;
-}
-
-.settings-search {
-  display: flex;
-  flex: 0 0 auto;
-  align-items: center;
-  gap: var(--space-2);
-  height: var(--control-h);
-  margin: 0 var(--space-3) var(--space-3);
-  padding: 0 var(--space-2) 0 var(--space-3);
-  background: var(--bg-input);
-  border: var(--hairline) solid var(--border-strong);
-  border-radius: var(--radius-md);
-  color: var(--text-dim);
-  cursor: text;
-}
-
-.settings-search:focus-within {
-  border-color: var(--accent);
-}
-
-.settings-search svg {
-  flex: 0 0 auto;
-  width: 16px;
-  height: 16px;
-}
-
-.settings-search input {
-  flex: 1 1 auto;
-  min-width: 0;
-  height: 100%;
-  padding: 0;
-  background: transparent;
-  border: 0;
-  outline: none;
-  color: var(--text-strong);
-  font: inherit;
-  font-size: var(--fs-sm);
-}
-
-.settings-search input::placeholder {
-  color: var(--text-dim);
-}
-
-.settings-nav-list {
-  flex: 1 1 auto;
-  min-height: 0;
-  overflow-y: auto;
-  overscroll-behavior: contain;
-  padding: 0 var(--space-3) var(--space-3);
-}
-
-.settings-nav-group {
-  margin: var(--space-4) var(--space-2) var(--space-1);
-  color: var(--text-dim);
-  font-size: var(--fs-xs);
-  font-weight: var(--fw-semibold);
-}
-
-.settings-nav-section:first-child .settings-nav-group {
-  margin-top: var(--space-1);
-}
-
-/* 2px between items: a hovered item's fill never touches the selected one's */
-.settings-nav-items {
+.settings-tabs {
   display: flex;
   flex-direction: column;
   gap: 2px;
 }
 
-.settings-nav-item {
-  position: relative;
+.settings-tab {
   display: flex;
   align-items: center;
   gap: var(--space-3);
-  width: 100%;
-  min-height: 36px;
+  min-height: var(--control-h);
   padding: 0 var(--space-3);
   background: transparent;
   border: 0;
   border-radius: var(--radius-md);
-  color: var(--text-dim);
+  color: var(--text);
   font-size: var(--fs-sm);
   font-weight: var(--fw-medium);
   text-align: left;
@@ -145,342 +69,258 @@
   transition: background-color var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
 }
 
-.settings-nav-icon {
+.settings-tab svg {
   flex: 0 0 auto;
   width: 16px;
   height: 16px;
   color: var(--text-dim);
 }
 
-.settings-nav-text {
-  display: flex;
+.settings-tab > span {
   flex: 1 1 auto;
-  flex-direction: column;
   min-width: 0;
-}
-
-.settings-nav-label,
-.settings-nav-summary {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-/* a phone's list only */
-.settings-nav-summary,
-.settings-nav-chevron {
+/* only a list that leads somewhere else points there: a phone's */
+.settings-tab-chevron {
   display: none;
 }
 
 @media (hover: hover) {
-  .settings-nav-item:hover {
-    background: var(--bg-hover);
-    color: var(--text-strong);
+  .settings-tab:hover {
+    background: var(--bg-elevated);
   }
 }
 
-/* the open page: the hover fill, the amber rail and an amber glyph, as the selected pane row */
-.settings-nav-item[aria-current="page"] {
+.settings-tab[aria-selected="true"] {
   background: var(--bg-hover);
   color: var(--text-strong);
 }
 
-.settings-nav-item[aria-current="page"]::before {
-  position: absolute;
-  top: var(--space-2);
-  bottom: var(--space-2);
-  left: 0;
-  width: var(--rail-w);
-  content: "";
-  background: var(--accent);
-  border-radius: var(--radius-pill);
-}
-
-.settings-nav-item[aria-current="page"] .settings-nav-icon {
+/* the open page carries the selection color on its glyph, as a chosen segment does */
+.settings-tab[aria-selected="true"] svg {
   color: var(--accent);
 }
 
-.settings-nav-foot {
+.settings-body,
+.settings-key-bar-body {
+  grid-column: 2;
+  grid-row: 2;
+}
+
+.settings-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+  padding-bottom: var(--space-6);
+}
+
+.settings-body > * {
+  flex: 0 0 auto;
+}
+
+.settings-body[hidden] {
+  display: none;
+}
+
+.settings-keys {
+  display: inline-flex;
+  gap: var(--space-1);
+}
+
+.settings-shortcut-select {
+  width: 11rem;
+}
+
+.settings-link {
+  color: var(--accent);
+  font-size: var(--fs-xs);
+  overflow-wrap: anywhere;
+}
+
+/* a column, not a grid: a grid's track is as wide as a text field asks to be, and on a phone
+   that pushed each row's Remove button out of the card */
+.quick-replies-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.quick-replies-list:empty {
+  display: none;
+}
+
+.quick-replies-list li {
+  display: flex;
+  gap: var(--space-2);
+  align-items: center;
+}
+
+.quick-replies-list .input {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+/* Voice input: the key field and its buttons share a row, the notes stay dim */
+.voice-key {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  align-items: center;
+}
+
+.voice-key-input {
+  flex: 1 1 12rem;
+  min-width: 0;
+}
+
+.voice-error {
+  display: block;
+  color: var(--danger-text);
+}
+
+/* Subscription usage: a row per account: mark, name, account, then move and show */
+.usage-accounts ol {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.usage-accounts-row {
   display: flex;
   align-items: center;
   gap: var(--space-2);
-  margin: 0;
-  padding: var(--space-3) var(--space-5);
+  min-height: var(--touch-target);
+  padding: 0 var(--space-2) 0 var(--space-4);
+}
+
+.usage-accounts-row + .usage-accounts-row {
   border-top: var(--hairline) solid var(--border);
+}
+
+.usage-accounts-name {
+  flex: 0 0 auto;
+  color: var(--text-strong);
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-medium);
+}
+
+.usage-accounts-account {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
   color: var(--text-dim);
   font-size: var(--fs-xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.settings-nav-foot svg {
+.usage-accounts-actions {
+  display: flex;
   flex: 0 0 auto;
-  width: 14px;
-  height: 14px;
-  color: var(--status-done);
+  align-items: center;
 }
 
-/* ---------- the page ---------- */
-
-.settings-content {
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-  min-height: 0;
-}
-
-.settings-content-head {
-  display: flex;
-  align-items: flex-start;
-  gap: var(--space-3);
-  padding: var(--space-5) var(--space-5) var(--space-4) var(--space-8);
-}
-
-.settings-back {
-  display: none;
-}
-
-.settings-content-titles {
-  flex: 1 1 auto;
-  min-width: 0;
-}
-
-.settings-content-title {
-  margin: 0;
-  color: var(--text-strong);
-  font-size: var(--fs-display);
-  font-weight: var(--fw-semibold);
-  letter-spacing: var(--tracking-tight);
-  line-height: var(--lh-tight);
-}
-
-.settings-content-subtitle {
-  margin: var(--space-1) 0 0;
-  color: var(--text-dim);
-  font-size: var(--fs-sm);
-}
-
-.settings-content-body {
-  flex: 1 1 auto;
-  min-height: 0;
-  overflow-y: auto;
-  overscroll-behavior: contain;
-  padding: var(--space-2) var(--space-8) var(--space-8);
-}
-
-.settings-results {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-8);
-  max-width: var(--settings-content-w);
-}
-
-/* ---------- search: every page at once, only the rows that match ---------- */
-
-.settings-empty {
-  display: none;
-  margin: 0;
-  padding: var(--space-8) 0;
+.usage-accounts-actions .icon-button {
   color: var(--text-dim);
 }
 
-.settings-content-body.is-searching .settings-results:not(:has(.settings-row.is-hit)) .settings-empty {
-  display: block;
+/* the ends of the list cannot move further: that arrow keeps its place in the column, unseen */
+.usage-accounts-actions .icon-button:disabled {
+  visibility: hidden;
 }
 
-.settings-content-body.is-searching .settings-row:not(.is-hit),
-.settings-content-body.is-searching .settings-group:not(:has(.settings-row.is-hit)),
-.settings-content-body.is-searching .settings-page:not(:has(.settings-row.is-hit)),
-.settings-content-body.is-searching .settings-group-intro {
-  display: none;
+.usage-accounts-visibility[aria-checked="true"] {
+  color: var(--text);
 }
 
-.settings-content-body.is-searching .settings-page {
-  gap: var(--space-4);
+/* a hidden account stays in the list, faded, so it can be shown again */
+.usage-accounts-row.is-hidden > :not(.usage-accounts-actions) {
+  opacity: 0.45;
 }
 
-.settings-content-body.is-searching .settings-page-heading {
-  display: flex;
-}
+@media (pointer: fine) {
+  .usage-accounts-actions .icon-button {
+    width: 28px;
+    height: 28px;
+  }
 
-/* ---------- touch ---------- */
-
-@media (pointer: coarse) {
-  .settings-nav-item {
-    min-height: var(--touch-target);
+  .usage-accounts-actions .icon-button svg {
+    width: 16px;
+    height: 16px;
   }
 }
-
-/* ---------- a phone: the whole screen, the list of pages, then a page ---------- */
 
 @media (max-width: 640px) {
-  .settings-scrim {
-    align-items: stretch;
-    padding: 0;
-  }
-
   .settings-dialog {
     grid-template-columns: minmax(0, 1fr);
-    width: 100%;
-    height: 100%;
-    max-height: none;
-    padding: env(safe-area-inset-top, 0px) env(safe-area-inset-right, 0px) env(safe-area-inset-bottom, 0px) env(safe-area-inset-left, 0px);
-    border-radius: 0;
+    height: 92%;
   }
 
+  .settings-header,
+  .settings-body,
+  .settings-key-bar-body {
+    grid-column: 1;
+  }
+
+  /* the list is the sheet's whole body here, drawn as one card of rows */
   .settings-nav {
+    grid-column: 1;
+    grid-row: 2;
+    padding: var(--space-4);
+    background: transparent;
     border-right: 0;
   }
 
-  .settings-nav-head {
-    padding: var(--space-4) var(--space-3) var(--space-3) var(--space-4);
-  }
-
   .settings-nav-title {
-    font-size: var(--fs-display);
-  }
-
-  .settings-nav-close {
-    display: inline-flex;
-  }
-
-  .settings-search {
-    height: 44px;
-    margin: 0 var(--space-4) var(--space-3);
-  }
-
-  /* the one size iOS does not zoom into */
-  .settings-search input {
-    font-size: var(--fs-input);
-  }
-
-  .settings-search .kbd {
     display: none;
   }
 
-  .settings-nav-list {
-    padding: 0 var(--space-4) var(--space-6);
-  }
-
-  .settings-nav-group {
-    margin: var(--space-6) var(--space-1) var(--space-2);
-  }
-
-  .settings-nav-section:first-child .settings-nav-group {
-    margin-top: var(--space-2);
-  }
-
-  /* each group a card of 56px rows, hairlines between them */
-  .settings-nav-items {
+  .settings-tabs {
     gap: 0;
-    overflow: hidden;
-    background: var(--bg);
+    background: var(--bg-elevated);
     border: var(--hairline) solid var(--border);
     border-radius: var(--radius-lg);
   }
 
-  .settings-nav-item {
-    min-height: 56px;
-    padding: var(--space-2) var(--space-4);
+  .settings-tab {
+    min-height: var(--keybar-h);
+    padding: 0 var(--space-3) 0 var(--space-4);
     border-radius: 0;
-    color: var(--text-strong);
     font-size: var(--fs-md);
   }
 
-  .settings-nav-item + .settings-nav-item {
+  .settings-tab + .settings-tab {
     border-top: var(--hairline) solid var(--border);
   }
 
-  .settings-nav-item[aria-current="page"] {
-    background: transparent;
-  }
-
-  .settings-nav-item[aria-current="page"]::before {
-    display: none;
-  }
-
-  .settings-nav-item[aria-current="page"] .settings-nav-icon {
-    color: var(--text-dim);
-  }
-
-  .settings-nav-icon {
+  .settings-tab svg {
     width: var(--icon-size);
     height: var(--icon-size);
   }
 
-  .settings-nav-summary {
+  .settings-tab-chevron {
     display: block;
-    color: var(--text-dim);
-    font-size: var(--fs-sm);
-    font-weight: var(--fw-regular);
   }
 
-  .settings-nav-chevron {
-    display: block;
-    flex: 0 0 auto;
-    width: 16px;
-    height: 16px;
-    color: var(--text-dim);
+  .settings-shortcut-select {
+    width: 9.5rem;
   }
 
-  .settings-nav-foot {
-    display: none;
-  }
-
-  .settings-content {
-    display: none;
-  }
-
-  .settings-dialog.is-detail .settings-nav {
-    display: none;
-  }
-
-  .settings-dialog.is-detail .settings-content {
-    display: flex;
-  }
-
-  .settings-content-head {
-    align-items: center;
-    gap: var(--space-1);
-    padding: var(--space-2) var(--space-2) var(--space-3);
-  }
-
-  .settings-back {
-    display: inline-flex;
-  }
-
-  .settings-content-title {
-    font-size: var(--fs-xl);
-  }
-
-  .settings-content-subtitle {
-    display: none;
-  }
-
-  .settings-content-body {
-    padding: 0 var(--space-4) var(--space-8);
-  }
-
-  /* searching: the field stays where it was typed in, the results take the list's place */
-  .settings-dialog.is-searching {
-    grid-template-rows: auto minmax(0, 1fr);
-  }
-
-  .settings-dialog.is-searching .settings-nav {
-    display: flex;
-    background: var(--bg);
-  }
-
-  .settings-dialog.is-searching .settings-nav-list,
-  .settings-dialog.is-searching .settings-content-head {
-    display: none;
-  }
-
-  .settings-dialog.is-searching .settings-content {
-    display: flex;
+  /* the key takes the line; Save and Remove share the next one */
+  .voice-key-input {
+    flex-basis: 100%;
   }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .settings-nav-item {
+  .settings-tab {
     transition: none;
   }
 }

@@ -5,7 +5,7 @@ import { basename, join } from "node:path";
 import { createServer } from "./index.ts";
 import type { AgentKind, AgentStatus, ApiError, HealthAuth, PushKey, RemoteAccess, SessionSnapshot, PaneReadResult, UsageReport, WorkspaceCreated, WorktreeListing, WorktreeOpened, WorktreeRemoved } from "../shared/protocol.ts";
 import { HerdrUpdater } from "./herdr-update.ts";
-import type { HerdrUpdateStatus } from "../shared/update.ts";
+import { noInstalledNotes, unmanagedUpdateStatus, type HerdrUpdateStatus, type InstalledNotes, type UpdateNotes } from "../shared/update.ts";
 import { USAGE_PROVIDERS, UsageService } from "./usage.ts";
 import { VoiceService } from "./voice.ts";
 import { herdrRpc, ping, sessionSnapshot, tabCreate, workspaceCreate, workspaceClose } from "./herdr/client.ts";
@@ -140,6 +140,39 @@ describe("update API", () => {
     expect((await response.json() as { managed: boolean }).managed).toBe(false);
   });
 
+  it("answers what the available update brings, and nothing where no supervisor told it", async () => {
+    const none = await fetch(`${base()}/api/updates/notes`);
+    expect(none.status).toBe(200);
+    expect(none.headers.get("cache-control")).toBe("no-store");
+    expect(await none.json()).toEqual({ revision: null, releases: [], omitted: 0 });
+    expect((await fetch(`${base()}/api/updates/notes`, { method: "POST", headers: { "x-herdr-update": "1" } })).status).toBe(405);
+
+    const notes: UpdateNotes = { revision: "b".repeat(40), releases: [{ version: "9.9.9", date: "2026-10-07", notes: "### Added\n- A thing." }], omitted: 2 };
+    const managedState = mkdtempSync(join(tmpdir(), "herdr-update-notes-"));
+    const managed = createServer({ port: 0, stateDir: managedState,
+      updates: { status: () => ({ ...unmanagedUpdateStatus(), managed: true, available: true }), notes: () => notes, installed: noInstalledNotes, request() {} } });
+    try {
+      expect(await (await fetch(`http://localhost:${managed.port}/api/updates/notes`)).json()).toEqual(notes);
+    } finally { managed.stop(); rmSync(managedState, { recursive: true, force: true }); }
+  });
+
+  it("answers what the last update brought, and nothing where no update was installed", async () => {
+    const none = await fetch(`${base()}/api/updates/installed`);
+    expect(none.status).toBe(200);
+    expect(none.headers.get("cache-control")).toBe("no-store");
+    expect(await none.json()).toEqual({ revision: null, version: null, previous_version: null, installed_at: null, releases: [], omitted: 0 });
+    expect((await fetch(`${base()}/api/updates/installed`, { method: "POST", headers: { "x-herdr-update": "1" } })).status).toBe(405);
+
+    const installed: InstalledNotes = { revision: "c".repeat(40), version: "9.9.9", previous_version: "9.9.8", installed_at: "2026-10-07T00:00:00.000Z",
+      releases: [{ version: "9.9.9", date: "2026-10-07", notes: "### Added\n- A thing.", summary: { en: { new: ["A thing."] }, ko: { new: ["기능 하나."] } } }], omitted: 0 };
+    const managedState = mkdtempSync(join(tmpdir(), "herdr-update-installed-"));
+    const managed = createServer({ port: 0, stateDir: managedState,
+      updates: { status: () => ({ ...unmanagedUpdateStatus(), managed: true }), notes: () => ({ revision: null, releases: [], omitted: 0 }), installed: () => installed, request() {} } });
+    try {
+      expect(await (await fetch(`http://localhost:${managed.port}/api/updates/installed`)).json()).toEqual(installed);
+    } finally { managed.stop(); rmSync(managedState, { recursive: true, force: true }); }
+  });
+
   it("refuses cross-site/form update requests and unmanaged installs", async () => {
     for (const headers of [{}, { "x-herdr-update": "1", origin: "https://untrusted.invalid" },
       { "x-herdr-update": "1", "sec-fetch-site": "cross-site" }] as Record<string, string>[]) {
@@ -155,9 +188,9 @@ describe("update API", () => {
     const protectedState = mkdtempSync(join(tmpdir(), "herdr-update-auth-"));
     const protectedServer = createServer({ port: 0, stateDir: protectedState, token: "test-update-token" });
     try {
-      for (const path of ["/api/updates", "/api/updates/check", "/api/updates/install"]) {
+      for (const path of ["/api/updates", "/api/updates/notes", "/api/updates/installed", "/api/updates/check", "/api/updates/install"]) {
         const response = await fetch(`http://localhost:${protectedServer.port}${path}`, {
-          method: path === "/api/updates" ? "GET" : "POST", headers: { "x-herdr-update": "1" },
+          method: path === "/api/updates/check" || path === "/api/updates/install" ? "POST" : "GET", headers: { "x-herdr-update": "1" },
         });
         expect(response.status).toBe(401);
       }
