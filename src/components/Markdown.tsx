@@ -3,7 +3,7 @@ import { Check, Copy } from "lucide-react";
 
 import "./BlockComments.css";
 
-import { foldCode, parseMarkdown, parseMarkdownWithLines, type InlineNode, type ListBlock, type MarkdownBlock, type SourceLines } from "../lib/markdown.ts";
+import { foldCode, mathNestsTooDeep, parseMarkdown, parseMarkdownWithLines, type InlineNode, type ListBlock, type MarkdownBlock, type SourceLines } from "../lib/markdown.ts";
 import { codeIsFilePath, OpenFileContext, splitFilePaths } from "../lib/filePaths.ts";
 import { fileUriPath } from "../lib/terminalFileLinks.ts";
 import { CHAT_HIGHLIGHT_LIMIT, languageForFence } from "../lib/highlight.ts";
@@ -61,9 +61,13 @@ function useKatex(): Katex | null {
 function MathExpression({ value, displayMode = false }: { value: string; displayMode?: boolean }) {
   const katex = useKatex();
   const source = displayMode ? `\\[${value}\\]` : `\\(${value}\\)`;
-  if (!katex) return <span>{source}</span>;
+  if (!katex || mathNestsTooDeep(value)) return <span>{source}</span>;
   try {
-    // KaTeX escapes text and rejects untrusted commands by default.
+    // KaTeX escapes text and rejects untrusted commands by default, and an unknown command
+    // throws - the catch below then draws the source form. `trust` stays at its default, which
+    // is what keeps \href and \includegraphics refused. `strict` only governs input LaTeX would
+    // not accept: "ignore" draws Korean, Japanese or Chinese text inside an expression, which
+    // `strict: true` throws on.
     const html = katex.renderToString(value, { displayMode, strict: "ignore" });
     return <span className={displayMode ? "markdown-math-display" : "markdown-math"} dangerouslySetInnerHTML={{ __html: html }} />;
   } catch {
@@ -243,8 +247,11 @@ function BlockView({ block, path, commentable }: { block: MarkdownBlock; path: n
   const fileNotes = commentable && block.type !== "hr" && block.type !== "list" && block.source !== undefined && <FileNotes line={block.source[0]} />;
   switch (block.type) {
     case "heading": {
-      const Tag = `h${block.level}` as "h1" | "h2" | "h3" | "h4" | "h5" | "h6";
-      return <><Tag ref={ref} className={className} {...sourceAttributes(block.source)}><Inline nodes={block.content} /></Tag>{comment.after}{fileNotes}</>;
+      // agent headings are h3 whatever the agent wrote: the app's own h1/h2 (Brand, the dialog
+      // titles) stay the outline above them. The level rides on a class, so the stylesheet
+      // keeps drawing each level as it did (ChatView.css `.markdown-h1`...`.markdown-h6`).
+      const level = `markdown-h${block.level}`;
+      return <><h3 ref={ref} className={className ? `${level} ${className}` : level} {...sourceAttributes(block.source)}><Inline nodes={block.content} /></h3>{comment.after}{fileNotes}</>;
     }
     case "paragraph": {
       const lineNumbers = block.lineNumbers;

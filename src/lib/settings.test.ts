@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { FONT_FAMILY_MAX_CHARS } from "./fontFamily.ts";
 import { DEFAULT_KEY_BAR_ITEMS, migrateKeyBarItems } from "./keyBar.ts";
-import { alertPrefs, CHAT_FONT_MAX, CHAT_FONT_MIN, CHAT_LANE_MAX_REM, CHAT_LANE_MIN, CHAT_WIDTHS, chatFontSize, chatLaneLength, chatLaneWidth, DEFAULT_SETTINGS, MARKDOWN_WIDTHS, QUICK_REPLIES_MAX, QUICK_REPLY_MAX_CHARS, quickReplyButtons, sanitizeSettings, terminalTheme, forgetPaneViews } from "./settings.ts";
+import { alertPrefs, CHAT_FONT_MAX, CHAT_FONT_MIN, CHAT_LANE_MAX_REM, CHAT_LANE_MIN, CHAT_WIDTHS, chatFontSize, chatLaneLength, chatLaneWidth, DEFAULT_SETTINGS, MARKDOWN_WIDTHS, QUICK_REPLIES_MAX, QUICK_REPLY_MAX_CHARS, quickReplyButtons, sanitizeSettings, terminalTheme, forgetPaneViews, VOICE_BUTTONS, wantsVoiceInput } from "./settings.ts";
 
 it("keeps the screen wake lock off until this device explicitly enables it", () => {
   expect(DEFAULT_SETTINGS.keepScreenOn).toBe(false);
@@ -20,21 +20,16 @@ it("keeps the screen wake lock off until this device explicitly enables it", () 
   expect(sanitizeSettings({ terminalWheelSpeed: "3" }).terminalWheelSpeed).toBe(1);
 });
 
-it("keeps sidebar rows on one line unless two lines were chosen", () => {
-  expect(sanitizeSettings({}).sidebarRows).toBe("one");
-  expect(sanitizeSettings({ sidebarRows: "two" }).sidebarRows).toBe("two");
+it("keeps sidebar rows on two lines unless one line was chosen", () => {
+  expect(sanitizeSettings({}).sidebarRows).toBe("two");
+  expect(sanitizeSettings({ sidebarRows: "one" }).sidebarRows).toBe("one");
   for (const sidebarRows of [null, true, "three", 2]) {
-    expect(sanitizeSettings({ sidebarRows }).sidebarRows).toBe("one");
+    expect(sanitizeSettings({ sidebarRows }).sidebarRows).toBe("two");
   }
 });
 
-it("defaults legacy records to workspace grouping and accepts only supported modes", () => {
-  expect(sanitizeSettings({}).sidebarGrouping).toBe("workspace");
-  expect(sanitizeSettings({ sidebarGrouping: "workspace" }).sidebarGrouping).toBe("workspace");
-  expect(sanitizeSettings({ sidebarGrouping: "directory" }).sidebarGrouping).toBe("directory");
-  for (const sidebarGrouping of [null, true, "folder", 1]) {
-    expect(sanitizeSettings({ sidebarGrouping }).sidebarGrouping).toBe("workspace");
-  }
+it("drops the folder grouping an older version stored", () => {
+  expect(sanitizeSettings({ sidebarGrouping: "directory" })).not.toHaveProperty("sidebarGrouping");
 });
 
 describe("chat font size", () => {
@@ -88,11 +83,10 @@ describe("chat width", () => {
     expect(css("components/PaneTerminal.tsx")).toContain(`setProperty("--chat-w", chatLaneLength(`);
     // the root font size is not read in JS: the ceiling is 60rem in the length itself
     expect(css("components/PaneTerminal.tsx")).not.toContain("chatLaneWidth(");
-    // New workspace stays on --content-w and Settings on its own fixed --settings-w. That the chat
-    // columns share the lane is measured in the browser (scripts/ui-regression.ts), not read from
-    // the stylesheets
-    for (const [file, width] of [["components/SettingsDialog.css", "var(--settings-w)"], ["components/NewSessionDialog.css", "var(--content-w)"]] as const) {
-      expect(css(file)).toContain(width);
+    // Settings and New workspace stay on --content-w. That the chat columns share the lane is
+    // measured in the browser (scripts/ui-regression.ts), not read from the stylesheets
+    for (const file of ["components/SettingsDialog.css", "components/NewSessionDialog.css"]) {
+      expect(css(file)).toContain("var(--content-w)");
       expect(css(file)).not.toContain("var(--chat-w)");
     }
   });
@@ -288,12 +282,36 @@ describe("quick replies", () => {
   });
 });
 
+describe("microphone button", () => {
+  it("is automatic until chosen, and reads a record from before it had three places", () => {
+    expect(DEFAULT_SETTINGS.voiceInput).toBe("auto");
+    expect(sanitizeSettings({}).voiceInput).toBe("auto");
+    for (const voiceInput of VOICE_BUTTONS) expect(sanitizeSettings({ voiceInput }).voiceInput).toBe(voiceInput);
+    // the old toggle: on was a choice, off was also what an untouched device stored
+    expect(sanitizeSettings({ voiceInput: true }).voiceInput).toBe("on");
+    expect(sanitizeSettings({ voiceInput: false }).voiceInput).toBe("auto");
+    for (const voiceInput of [null, 1, "yes", "ON"]) expect(sanitizeSettings({ voiceInput }).voiceInput).toBe("auto");
+  });
+
+  it("is asked for in the chat off a phone on auto, everywhere when on and nowhere when off", () => {
+    expect(wantsVoiceInput("auto", "chat", false)).toBe(true);
+    expect(wantsVoiceInput("auto", "chat", true)).toBe(false);
+    expect(wantsVoiceInput("auto", "terminal", false)).toBe(false);
+    for (const mode of ["chat", "terminal"] as const) {
+      for (const phone of [false, true]) {
+        expect(wantsVoiceInput("on", mode, phone)).toBe(true);
+        expect(wantsVoiceInput("off", mode, phone)).toBe(false);
+      }
+    }
+  });
+});
+
 describe("suggestion chip", () => {
-  it("stays off until chosen in settings", () => {
-    expect(DEFAULT_SETTINGS.showSuggestionChip).toBe(false);
-    expect(sanitizeSettings({}).showSuggestionChip).toBe(false);
-    expect(sanitizeSettings({ showSuggestionChip: true }).showSuggestionChip).toBe(true);
-    expect(sanitizeSettings({ showSuggestionChip: "yes" }).showSuggestionChip).toBe(false);
+  it("stays on until turned off in settings", () => {
+    expect(DEFAULT_SETTINGS.showSuggestionChip).toBe(true);
+    expect(sanitizeSettings({}).showSuggestionChip).toBe(true);
+    expect(sanitizeSettings({ showSuggestionChip: false }).showSuggestionChip).toBe(false);
+    expect(sanitizeSettings({ showSuggestionChip: "no" }).showSuggestionChip).toBe(true);
   });
 });
 
@@ -336,20 +354,18 @@ describe("palette", () => {
     return css.slice(start, css.indexOf("}", start));
   };
   const paper = '[data-theme="light"]:is([data-palette="report"], [data-palette="charcoal"])';
-  // the amber dark colors: :root, and any element that carries data-theme="dark" itself
-  const base = ':root,\n[data-theme="dark"]';
   // each case lists its blocks from the most specific to the base; the first one naming a token wins
   const cases = [
-    { theme: "dark", palette: "amber", layers: [base] },
-    { theme: "light", palette: "amber", layers: ['[data-theme="light"]', base] },
-    { theme: "dark", palette: "report", layers: ['[data-theme="dark"][data-palette="report"]', base] },
-    { theme: "light", palette: "report", layers: [paper, '[data-theme="light"]', base] },
-    { theme: "dark", palette: "charcoal", layers: ['[data-theme="dark"][data-palette="charcoal"]', base] },
-    { theme: "light", palette: "charcoal", layers: ['[data-theme="light"][data-palette="charcoal"]', paper, '[data-theme="light"]', base] },
-    { theme: "dark", palette: "catppuccin", layers: ['[data-theme="dark"][data-palette="catppuccin"]', base] },
-    { theme: "light", palette: "catppuccin", layers: ['[data-theme="light"][data-palette="catppuccin"]', '[data-theme="light"]', base] },
-    { theme: "dark", palette: "lilac", layers: ['[data-theme="dark"][data-palette="lilac"]', base] },
-    { theme: "light", palette: "lilac", layers: ['[data-theme="light"][data-palette="lilac"]', '[data-theme="light"]', base] },
+    { theme: "dark", palette: "amber", layers: [":root"] },
+    { theme: "light", palette: "amber", layers: ['[data-theme="light"]', ":root"] },
+    { theme: "dark", palette: "report", layers: ['[data-theme="dark"][data-palette="report"]', ":root"] },
+    { theme: "light", palette: "report", layers: [paper, '[data-theme="light"]', ":root"] },
+    { theme: "dark", palette: "charcoal", layers: ['[data-theme="dark"][data-palette="charcoal"]', ":root"] },
+    { theme: "light", palette: "charcoal", layers: ['[data-theme="light"][data-palette="charcoal"]', paper, '[data-theme="light"]', ":root"] },
+    { theme: "dark", palette: "catppuccin", layers: ['[data-theme="dark"][data-palette="catppuccin"]', ":root"] },
+    { theme: "light", palette: "catppuccin", layers: ['[data-theme="light"][data-palette="catppuccin"]', '[data-theme="light"]', ":root"] },
+    { theme: "dark", palette: "lilac", layers: ['[data-theme="dark"][data-palette="lilac"]', ":root"] },
+    { theme: "light", palette: "lilac", layers: ['[data-theme="light"][data-palette="lilac"]', '[data-theme="light"]', ":root"] },
   ] as const;
   const tokens = (layers: readonly string[]) => (name: string): string =>
     layers.map((selector) => block(selector).match(new RegExp(`--${name}: ([^;]+);`))?.[1]).find((value) => value !== undefined)!;
@@ -401,9 +417,7 @@ describe("palette", () => {
 
   it("paints amber before settings load: the base blocks are the default palette's", () => {
     const css = readFileSync(join(import.meta.dir, "..", "styles.css"), "utf8");
-    const start = css.indexOf(':root,\n[data-theme="dark"] {');
-    expect(start).toBeGreaterThanOrEqual(0);
-    const root = css.slice(start, css.indexOf("}", start));
+    const root = css.slice(css.indexOf(":root {"), css.indexOf("}", css.indexOf(":root {")));
     expect(root).toContain(`--term-bg: ${terminalTheme("dark").background};`);
     expect(root).toContain(`--term-cursor: ${terminalTheme("dark").cursor};`);
     expect(terminalTheme("dark")).toEqual(terminalTheme("dark", "amber"));

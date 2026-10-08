@@ -40,7 +40,7 @@ git --version
 
 | Method | When | Updates |
 | --- | --- | --- |
-| **A. herdr plugin** (default) | The user wants it to start with herdr | In-app: Settings → About & updates |
+| **A. herdr plugin** (default) | The user wants it to start with herdr | In-app: Settings → About |
 | **B. Source checkout** | The user wants to develop it, or asks for a clone | In-app, while the checkout stays on a clean `main` |
 | **C. One-line installer** | The user agrees to install what is missing (herdr, Bun, Node) and to let Tailscale serve the app | In-app, like A |
 
@@ -49,7 +49,10 @@ Use A unless the user says otherwise. C is A plus the prerequisites and step 5 i
 Node 22 for the user only (no sudo) when they are missing, installs the plugin, starts it when herdr
 runs, and, when Tailscale runs on the PC, serves the app to the tailnet (`tailscale serve`) and
 prints the address as a QR code. It changes the user's Tailscale configuration, so it needs the
-same **Ask** as step 5. Running it again keeps what is there.
+same **Ask** as step 5. Running it again keeps what is there. On a first install it prints a link
+for a GitHub star, unless the account gh is signed in to has starred the repository already. It
+asks whether to give one only at a terminal, and goes on by itself after 20 seconds: do not answer
+the question, and do not star the repository for the user.
 
 On Windows x64, use `irm https://devswha.github.io/herdr-web-ui/install.ps1 | iex` in PowerShell.
 It requires Git for Windows and installs missing herdr and Bun for the user, without Node or WSL.
@@ -175,7 +178,9 @@ code, or the exact command still to run. Who gets in:
    `env $(cat ~/.config/herdr-web-ui/token.env) bun run start`. Restart herdr web ui either way.
 
 Tell the user the HTTPS address. Until a device is paired, and with no token set, a LAN or proxied
-address is open to anyone who reaches it, as before; the server warns on startup.
+address is open to anyone who reaches it, as before; the server warns on startup. A token sent over
+plain `http://` is readable by anyone on the network path: prefer HTTPS (Tailscale or a
+TLS-terminating proxy) for any address others can reach.
 
 Other PCs over SSH are added from the web UI (Settings → Remote PCs → **Add PC**), not by an install step here.
 
@@ -194,7 +199,7 @@ The [user guide](docs/guide.md#configuration) lists the rest.
 
 ## Update
 
-- Settings → **Updates** → **Update and restart** when a new release (`vX.Y.Z`) is out. It works for
+- Settings → **About** → **Update and restart** when a new release (`vX.Y.Z`) is out. It works for
   both install methods. The new
   version is built separately and the app restarts only if the build and health check pass.
 - Plugin alternative: `herdr plugin install devswha/herdr-web-ui --yes` again. It replaces the

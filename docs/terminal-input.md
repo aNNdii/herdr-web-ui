@@ -5,11 +5,11 @@ input boundary; the terminal screen is still rendered from the attach stream.
 
 ## Input modes and drafts
 
-Settings → Terminal → Typing offers Automatic, Input line and Direct typing.
+Settings → Terminal → Terminal input mode offers Automatic, Input line and Direct typing.
 Automatic keeps the existing device preference: a touch screen uses the input line unless the
 user previously chose direct typing; a fine pointer uses direct typing. The key bar's keyboard
 button switches modes too, on a touch screen only: a desktop changes the mode in Settings.
-Settings → Keyboard shortcuts can change each app action's Mod+Shift key or return its keys to the
+Settings → Shortcuts can change each app action's Mod+Shift key or return its keys to the
 terminal. The hold-to-dictate binding remains fixed. Conflicts include the legacy New workspace
 alias, and Reset restores the defaults. Browser-reserved keys still depend on the browser and
 installed-app mode.
@@ -41,12 +41,15 @@ path; each agent controls when it consumes that input. It is not a native app-se
 
 Direct input arriving before readiness or during a disconnect is held for explicit Send/Discard.
 An IME may commit several code points at once, so printable chunks (including emoji) are retained.
-Control sequences are counted as discarded, never saved for later execution. No draft is replayed
-on reconnect. The input-line and chat Send buttons preserve an active composition, and the key bar
+Control sequences are left out, never saved for later execution, and not counted: xterm's own
+answers to a program (cursor position, focus, mouse) arrive the same way. Send transmits the held
+text alone, without an Enter typed meanwhile. The draft holds 1,024 characters; text past that is
+left out whole and the notice says some input was left out, also when nothing else is held. No
+draft is replayed on reconnect. The input-line and chat Send buttons preserve an active composition, and the key bar
 waits for composition to finish. Leaving the input clears its composition guard.
 
 The key bar defaults to Esc, Tab, Ctrl, Alt, Shift, Enter, the arrows and ^C.
-Settings → Terminal → Key bar shows the complete list: add or remove keys, move each key up or
+Settings → Terminal → Key bar → Edit key bar opens the complete list: add or remove keys, move each key up or
 down, and register a custom combination such as Ctrl+W. The catalog includes editing keys and
 F1–F12; a custom combination can use any single printable character, including space and `+`.
 Existing extra-key preferences migrate to the same visible order. Restore defaults returns the

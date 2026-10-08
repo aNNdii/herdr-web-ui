@@ -1,15 +1,62 @@
 import { useEffect, useState } from "react";
-import type { UpdateStatus } from "../../shared/update.ts";
+import { SUMMARY_GROUPS, type SummaryGroup, type UpdateNotes, type UpdateStatus } from "../../shared/update.ts";
 import { useHerdrUpdate } from "../lib/herdrUpdate.ts";
 import { runningAppVersion, runningHerdrVersion, staleClientVersion, versionLabel } from "../lib/runningVersion.ts";
+import { useSettings } from "../lib/settings.ts";
+import { announcesUpdate, readAnnounced, summaryFor, watchAnnounced, writeAnnounced } from "../lib/updateNotes.ts";
 import { describeUpdate } from "../lib/updateProgress.ts";
 import type { UpdatesModel } from "../lib/updates.ts";
+import { Markdown } from "./Markdown.tsx";
+import { RenderBoundary } from "./RenderBoundary.tsx";
 import "./Machines.css";
 import "./UpdateControls.css";
-import { currentLocale, useT } from "../lib/i18n.ts";
-import { SettingsRow, SettingsTag } from "./settings/SettingsUi.tsx";
+import { useLocale, useT } from "../lib/i18n.ts";
 
 declare const __APP_VERSION__: string;
+
+const CHANGELOG = "https://github.com/devswha/herdr-web-ui/blob/main/CHANGELOG.md";
+
+/**
+ * What an update brings, or brought: each release it installs, newest first. A release is told
+ * as patch notes, short lines in the app's language under what is new, improved and fixed, with
+ * its changelog section folded under them; a release that wrote none shows the section as the
+ * release wrote it (English). The box scrolls on its own, so the buttons under it stay in reach. The text comes
+ * from the Git remote: a section that cannot be drawn says so and takes nothing else down
+ * with it.
+ */
+function ReleaseNotes({ notes, label }: { notes: Pick<UpdateNotes, "releases" | "omitted">; label: string }) {
+  const t = useT();
+  const { resolvedLanguage } = useSettings();
+  // the lists of a release's highlights, as patch notes name them
+  const groups: Record<SummaryGroup, string> = { new: t("New features"), improved: t("Improvements"), fixed: t("Bug fixes") };
+  return <>
+    <span className="settings-label">{label}</span>
+    <div className="update-notes" role="region" aria-label={label} tabIndex={0}>
+      {notes.releases.map((release) => {
+        const summary = summaryFor(release, resolvedLanguage);
+        const section = <RenderBoundary resetKey={release.notes} fallback={() => <p className="settings-hint">{t("These notes could not be shown.")} <a href={CHANGELOG} target="_blank" rel="noopener noreferrer">{t("Full changelog")}</a></p>}>
+          <Markdown>{release.notes}</Markdown>
+        </RenderBoundary>;
+        return <section key={release.version}>
+          <h4>v{release.version}{release.date && <time>{release.date}</time>}</h4>
+          {summary === null ? section : <>
+            <div className="update-summary">
+              {SUMMARY_GROUPS.map((group) => summary[group] && <div key={group}>
+                <h5>{groups[group]}</h5>
+                <ul>{summary[group].map((line, index) => <li key={index}>{line}</li>)}</ul>
+              </div>)}
+            </div>
+            <details className="update-details">
+              <summary>{t("Show every change")}</summary>
+              {section}
+            </details>
+          </>}
+        </section>;
+      })}
+      {notes.omitted > 0 && <p className="settings-hint">{t("Earlier releases not shown here: {count}.", { count: notes.omitted })} <a href={CHANGELOG} target="_blank" rel="noopener noreferrer">{t("Full changelog")}</a></p>}
+    </div>
+  </>;
+}
 
 /**
  * An install as a step and a bar. A server that names no step (the one being replaced may be
@@ -27,40 +74,37 @@ function UpdateProgress({ status, fallback }: { status: UpdateStatus | null; fal
   </div>;
 }
 
-/**
- * Settings → About & updates: this app's running version, its update check and install, and the
- * reload a finished install asks for. One row of the page's card.
- */
 export function UpdateControls({ updates, bridgesFollow = false }: { updates: UpdatesModel; bridgesFollow?: boolean }) {
   const t = useT();
-  const { status, error, busy, needsReload, request } = updates;
+  const { status, error, busy, needsReload, notes, installed, request } = updates;
+  const locale = useLocale();
   const installing = busy && (status?.phase === "building" || status?.phase === "restarting");
   const tabVersion = staleClientVersion(status, __APP_VERSION__);
-  const problem = error ?? status?.error ?? status?.blocked_reason ?? null;
-  const upToDate = !problem && !busy && !status?.available && !!status?.checked_at;
-  return <SettingsRow
-    className="settings-updates"
-    label="herdr web ui"
-    tag={status?.available ? <SettingsTag>{t("Update available")}</SettingsTag> : upToDate ? <SettingsTag tone="ok">{t("Up to date")}</SettingsTag> : undefined}
-    // always a version: the sidebar no longer carries one
-    description={t("Running {version}", { version: runningAppVersion(status, __APP_VERSION__) })}
-    keywords="about version update updates check install restart herdr web ui"
-    control={status?.managed ? <button type="button" className="btn btn-secondary" disabled={busy} onClick={() => void request("check")}>{t("Check for updates")}</button> : undefined}
-  >
-    {tabVersion && <p className="settings-note">{t("This tab still runs {version} until it is reloaded.", { version: tabVersion })}</p>}
-    {installing && !error ? <div role="status"><UpdateProgress status={status} fallback={t(status?.phase === "building" ? "Installing dependencies and building…" : "Restarting the bridge…")} /></div> : <p className="settings-note" role="status">
-      {upToDate ? null : problem ?? (busy ? t("Checking for updates…") :
-        status?.available ? t("Version {version} is available.", { version: versionLabel(status.latest_version, status.latest_revision) ?? "" }) : t("Waiting for an update check…"))}
+  // focusable from code only: a button that points here (the header line's) lands on it
+  return <section className="settings-section settings-updates" tabIndex={-1} aria-labelledby="settings-updates-title">
+    <h3 id="settings-updates-title">{t("Updates")}</h3>
+    <div className="settings-card"><div className="settings-item">
+    {/* always a version: the sidebar no longer carries one */}
+    <p className="settings-hint">{t("Running {version}", { version: runningAppVersion(status, __APP_VERSION__) })}</p>
+    {tabVersion && <p className="settings-hint">{t("This tab still runs {version} until it is reloaded.", { version: tabVersion })}</p>}
+    {installing && !error ? <div role="status"><UpdateProgress status={status} fallback={t(status?.phase === "building" ? "Installing dependencies and building…" : "Restarting the bridge…")} /></div> : <p className="settings-hint" role="status">
+      {error ?? status?.error ?? status?.blocked_reason ?? (busy ? t("Checking for updates…") :
+        status?.available ? t("Version {version} is available.", { version: versionLabel(status.latest_version, status.latest_revision) ?? "" }) : status?.checked_at ? t("Up to date.") : t("Waiting for an update check…"))}
     </p>}
+    {notes && <ReleaseNotes notes={notes} label={t("What's new")} />}
+    {/* under the release on offer, when there is one: what runs now stays to be read */}
+    {installed && installed.releases.length > 0 && <ReleaseNotes notes={installed} label={t("What the last update brought")} />}
     {status?.managed && <>
-      <p className="settings-note">{t("Checks for new releases every 5 minutes.")} {t(status.auto_update ? "Automatic installation is enabled." : "Install when you are ready; the bridge briefly reconnects and herdr sessions keep running.")}{bridgesFollow ? ` ${t("Remote PCs' bridges are updated afterwards when the new version needs it.")}` : ""}</p>
+      <p className="settings-hint">{t("Checks for new releases every 5 minutes.")} {t(status.auto_update ? "Automatic installation is enabled." : "Install when you are ready; the bridge briefly reconnects and herdr sessions keep running.")}{bridgesFollow ? ` ${t("Remote PCs' bridges are updated afterwards when the new version needs it.")}` : ""}</p>
       <div className="update-actions">
+        <button type="button" className="btn" disabled={busy} onClick={() => void request("check")}>{t("Check for updates")}</button>
         <button type="button" className="btn btn-primary" disabled={busy || !status.available || !!status.blocked_reason} onClick={() => void request("install")}>{t("Update and restart")}</button>
       </div>
     </>}
-    {status?.checked_at && <p className="settings-note">{t("Last checked {time}", { time: new Date(status.checked_at).toLocaleString(currentLocale()) })}</p>}
-    {needsReload && <p className="settings-note">{t("The server was updated. Save any unsent drafts, then")} <button type="button" className="btn btn-secondary" onClick={() => window.location.reload()}>{t("Reload app")}</button></p>}
-  </SettingsRow>;
+    {status?.checked_at && <p className="settings-hint">{t("Last checked {when}", { when: new Date(status.checked_at).toLocaleString(locale) })}</p>}
+    {needsReload && <p className="settings-hint">{t("The server was updated. Save any unsent drafts, then")} <button type="button" className="btn" onClick={() => window.location.reload()}>{t("Reload app")}</button></p>}
+    </div></div>
+  </section>;
 }
 
 /**
@@ -71,35 +115,43 @@ export function HerdrUpdateControls({ enabled, herdrVersion }: { enabled: boolea
   const t = useT();
   const { status, error, busy, request } = useHerdrUpdate(enabled);
   const version = runningHerdrVersion(status, herdrVersion);
-  const description = version ? t("Running herdr {version}", { version }) : undefined;
   // Windows, an older server, a herdr that does not answer: nothing to offer, and the version
   // the health check reported is still read here, since the sidebar no longer carries it
   if (!status?.supported) {
-    return version ? <SettingsRow className="settings-herdr-update" label="herdr" description={description} keywords="about version herdr" /> : null;
+    return version ? <section className="settings-section settings-herdr-update">
+      <h3>herdr</h3>
+      <div className="settings-card"><p className="settings-item settings-hint">{t("Running herdr {version}", { version })}</p></div>
+    </section> : null;
   }
   const stale = status.stale && !!status.binary_version && !!status.server_version;
-  return <SettingsRow
-    className="settings-herdr-update"
-    label="herdr"
-    description={description}
-    keywords="about version herdr update install"
-    control={<button type="button" className={stale ? "btn btn-primary" : "btn btn-secondary"} disabled={busy} onClick={() => void request()}>{t("Update herdr")}</button>}
-  >
-    {stale && <p className="settings-note">{t("herdr {installed} is installed, but the running server is {running}. Updating moves your panes onto the installed version.", { installed: status.binary_version ?? "", running: status.server_version ?? "" })}</p>}
-    <p className="settings-note">{t("Installs the newest herdr on the PC this app runs on and moves its running panes onto it. Panes and agents keep running, and open terminals reconnect.")}</p>
-    {(error || busy) && <p className="settings-note" role="status">{error ?? t("Updating herdr…")}</p>}
+  return <section className="settings-section settings-herdr-update">
+    <h3>herdr</h3>
+    <div className="settings-card"><div className="settings-item">
+    {version && <p className="settings-hint">{t("Running herdr {version}", { version })}</p>}
+    {stale && <p className="settings-hint">{t("herdr {installed} is installed, but the running server is {running}. Updating moves your panes onto the installed version.", { installed: status.binary_version ?? "", running: status.server_version ?? "" })}</p>}
+    <p className="settings-hint">{t("Installs the newest herdr on the PC this app runs on and moves its running panes onto it. Panes and agents keep running, and open terminals reconnect.")}</p>
+    <div className="update-actions">
+      <button type="button" className={stale ? "btn btn-primary" : "btn"} disabled={busy} onClick={() => void request()}>{t("Update herdr")}</button>
+    </div>
+    {(error || busy) && <p className="settings-hint" role="status">{error ?? t("Updating herdr…")}</p>}
     {/* herdr's own words: what it installed, or why it did not */}
     {!busy && status.output && <pre className="update-output" data-failed={status.phase === "error" || undefined}>{status.output}</pre>}
-  </SettingsRow>;
+    </div></div>
+  </section>;
 }
 
 /**
  * The app-wide line for a release: one button installs it from here, and the line follows the
- * install to the reload. Settings is only where a failure is read in full.
+ * install to the reload, then tells of the update once the new version runs. Settings is
+ * where its notes and a failure are read in full.
  */
 export function UpdateNotice({ updates, onOpen }: { updates: UpdatesModel; onOpen: () => void }) {
   const t = useT();
-  const { status, error, busy, needsReload, request } = updates;
+  const { status, error, busy, needsReload, notes, installed, request } = updates;
+  // the version whose line this device closed: opening its notes closes it too, in every tab
+  const [announced, setAnnounced] = useState(readAnnounced);
+  // subscribed first, then read: a dismissal in another tab between this tab's first read and its subscription is not lost
+  useEffect(() => { const stop = watchAnnounced(setAnnounced); setAnnounced(readAnnounced()); return stop; }, []);
   // the check an install starts with reports nothing available until it is done: the line this
   // button sits on must not leave between the tap and the first step
   const [started, setStarted] = useState(false);
@@ -112,7 +164,16 @@ export function UpdateNotice({ updates, onOpen }: { updates: UpdatesModel; onOpe
   const installing = status?.phase === "building" || status?.phase === "restarting";
   // Try again after such a failure looks for the release again, and the line waits with it
   const looking = attempted && busy;
-  if (!needsReload && !status?.available && !installing && !started && !looking && !(attempted && failed)) return null;
+  if (!needsReload && !status?.available && !installing && !started && !looking && !(attempted && failed)) {
+    if (!installed?.version || !announcesUpdate(status, installed, announced, Date.now())) return null;
+    const version = installed.version;
+    const close = () => { writeAnnounced(version); setAnnounced(version); };
+    return <div className="update-notice" role="status">
+      <span>{t("herdr web ui was updated to v{version}.", { version })}</span>
+      {installed.releases.length > 0 && <button type="button" className="btn btn-ghost" onClick={() => { close(); onOpen(); }}>{t("What's new")}</button>}
+      <button type="button" className="btn btn-ghost" onClick={close}>{t("Dismiss")}</button>
+    </div>;
+  }
   if (installing || started || looking) {
     return <div className="update-notice is-progress" role="status">
       <UpdateProgress status={status} fallback={t(installing ? status?.phase === "building" ? "Installing dependencies and building…" : "Restarting the bridge…" : started ? "Starting the update…" : "Checking for updates…")} />
@@ -128,7 +189,8 @@ export function UpdateNotice({ updates, onOpen }: { updates: UpdatesModel; onOpe
   const retry = status?.available ? "install" : "check";
   return <div className="update-notice" role="status">
     <span>{failed ? t("The update could not be installed.") : status?.latest_version ? t("herdr web ui v{version} is available.", { version: status.latest_version }) : t("A herdr web ui update is available.")}</span>
-    {failed && <button type="button" className="btn btn-ghost" onClick={onOpen}>{t("Details")}</button>}
+    {failed ? <button type="button" className="btn btn-ghost" onClick={onOpen}>{t("Details")}</button>
+      : notes && <button type="button" className="btn btn-ghost" onClick={onOpen}>{t("What's new")}</button>}
     <button type="button" className="btn btn-primary" disabled={busy} onClick={() => { setAttempted(true); setStarted(retry === "install"); void request(retry); }}>{t(failed ? "Try again" : "Update")}</button>
   </div>;
 }

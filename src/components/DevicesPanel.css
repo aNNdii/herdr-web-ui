@@ -1,15 +1,63 @@
-/* Paired devices (DevicesPanel.tsx): rows of the Settings card, a pairing code while one is out */
-
-/* this browser is open to anyone who can reach the address: the row says so in the danger colours */
-.settings-row.devices-open {
-  background: var(--danger-tint);
+.devices-panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
 }
 
-.devices-open .settings-row-desc {
-  color: var(--danger-text);
+.devices-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  border-top: var(--hairline) solid var(--border);
 }
 
-.devices-pairing-body {
+.devices-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  min-height: var(--row-h);
+  padding: var(--space-2) 0;
+  border-bottom: var(--hairline) solid var(--border);
+}
+
+.devices-name {
+  display: flex;
+  flex: 1 1 auto;
+  min-width: 0;
+  flex-direction: column;
+}
+
+.devices-current {
+  margin-left: var(--space-2);
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-pill);
+  background: var(--accent-tint);
+  color: var(--accent);
+  font-size: var(--fs-2xs);
+  font-weight: var(--fw-semibold);
+  letter-spacing: var(--tracking-caps);
+  text-transform: uppercase;
+  vertical-align: middle;
+}
+
+.devices-actions,
+.devices-rename {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.devices-rename {
+  flex: 1 1 auto;
+}
+
+.devices-rename .input {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.devices-pairing {
   display: flex;
   align-items: flex-start;
   gap: var(--space-4);
@@ -20,23 +68,35 @@
   border-radius: var(--radius-md);
 }
 
-.devices-pairing-text {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-2);
-  min-width: 0;
-}
-
-.devices-pairing-text p {
-  margin: 0;
+.devices-pairing .settings-label {
+  display: block;
 }
 
 .devices-code {
+  margin: var(--space-1) 0 var(--space-2);
   font-family: var(--font-mono);
-  font-size: 32px;
+  font-size: var(--fs-pairing);
   font-weight: var(--fw-semibold);
   letter-spacing: 0.12em;
   color: var(--text-strong);
+}
+
+.devices-pairing .phone-actions {
+  margin-top: var(--space-3);
+}
+
+@media (max-width: 640px) {
+  .devices-pairing {
+    flex-direction: column;
+  }
+}
+
+.devices-open {
+  padding: var(--space-2) var(--space-3);
+  border: var(--hairline) solid var(--status-blocked);
+  border-radius: var(--radius-sm);
+  background: var(--danger-tint);
+  color: var(--danger-text);
 }
 
 .devices-link {
@@ -44,6 +104,7 @@
   flex-wrap: wrap;
   align-items: center;
   gap: var(--space-1) var(--space-2);
+  margin: var(--space-2) 0 0;
   font-family: var(--font-mono);
   font-size: var(--fs-xs);
   overflow-wrap: anywhere;
@@ -51,10 +112,4 @@
 
 .devices-link a {
   color: var(--accent);
-}
-
-@media (max-width: 640px) {
-  .devices-pairing-body {
-    flex-direction: column;
-  }
 }

@@ -6,11 +6,13 @@ import { ApiError, authenticate, fetchHealth, fetchBridgeHealth, fetchMachines, 
 import { deviceLabel, takePairCode } from "./lib/phone.ts";
 import { displayPaneTitle } from "./components/Sidebar.tsx";
 import { PaneTerminal } from "./components/PaneTerminal.tsx";
+import { PANE_TABPANEL_ID, paneTabPanelLabel } from "./lib/paneRegion.ts";
 import { AccessGate } from "./components/AccessGate.tsx";
 import { AgentMark } from "./components/AgentMark.tsx";
 import { NewSessionDialog, type NewTabTarget } from "./components/NewSessionDialog.tsx";
 import { TabStrip } from "./components/TabStrip.tsx";
 import { SettingsDialog } from "./components/SettingsDialog.tsx";
+import { onSettingsHistory, recordSettings } from "./lib/settingsHistory.ts";
 import { CommandPalette } from "./components/CommandPalette.tsx";
 import { MachineContext } from "./lib/machineContext.tsx";
 import { MachineActionBanner, MachineSidebar } from "./components/MachineSidebar.tsx";
@@ -22,12 +24,12 @@ import { focusWorkspaceListToggle } from "./lib/focus.ts";
 import { headerCrumb, showsChat } from "./lib/headerCrumb.ts";
 import { paneStorageId, type Machine, type MachineEvent } from "../shared/machines.ts";
 import { takeAuthTokenFromUrl } from "./lib/authLink.ts";
-import { parseSettingsHash, type SettingsPageId } from "./lib/settingsSearch.ts";
 import { applyPaneStatus } from "./lib/snapshot.ts";
 import { rosterPanes } from "./lib/dagPane.ts";
 import { SnapshotRequests } from "./lib/snapshotRequests.ts";
 import { alertPrefs, useSettings, type DefaultView } from "./lib/settings.ts";
 import { useShortcuts } from "./lib/shortcuts.ts";
+import { useMediaQuery } from "./lib/useMediaQuery.ts";
 import type { AppActions, PaneView } from "./lib/actions.ts";
 import {
   notificationState,
@@ -192,6 +194,10 @@ export function App() {
   const [autoSelected, setAutoSelected] = useState(false);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const drawerOpenRef = useRef(drawerOpen); drawerOpenRef.current = drawerOpen;
+  // from 769px the drawer is a plain sidebar column and its toggle is hidden, so a drawer a
+  // narrow window opened must not come back (with its scrim) the next time the window narrows
+  const wideScreen = useMediaQuery("(min-width: 769px)");
+  useEffect(() => { if (wideScreen) setDrawerOpen(false); }, [wideScreen]);
   const selectionRef = useRef({ machineId: selectedMachineId, paneId: selectedPaneId });
   selectionRef.current = { machineId: selectedMachineId, paneId: selectedPaneId };
   // on a phone the drawer follows a swipe in from the left edge, and a swipe back (lib/edgeSwipe.ts)
@@ -224,15 +230,18 @@ export function App() {
   const viewFileComment = useCallback((paneId: string, machineId: string, comment: FileComment) => {
     openFile({ path: comment.path, paneId, machineId, comment: comment.id });
   }, [openFile]);
-  // an address ending in #settings/<page> opens Settings on that page (the dialog reads the page)
-  const [settingsOpen, setSettingsOpen] = useState(() => parseSettingsHash(window.location.hash) !== null);
-  // the page Settings opens on when App knows better than the address: the update line's Details
-  const [settingsPage, setSettingsPage] = useState<SettingsPageId | null>(null);
-  const closeSettings = useCallback(() => setSettingsOpen(false), []);
-  const openSettingsAt = useCallback((page: SettingsPageId | null) => {
-    setSettingsPage(page);
-    setSettingsOpen(true);
-  }, []);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  // set by a button that points at one section of Settings, for that opening alone
+  const [settingsSection, setSettingsSection] = useState<"updates" | null>(null);
+  const closeSettings = useCallback(() => { setSettingsOpen(false); setSettingsSection(null); }, []);
+  // Settings is in the history (lib/settingsHistory.ts): Back out of its last entry closes it,
+  // Forward onto one opens it again, and closing it any other way takes its entries off
+  useEffect(() => onSettingsHistory((entry, own) => {
+    if (own) return;
+    if (entry === null) closeSettings();
+    else setSettingsOpen(true);
+  }), [closeSettings]);
+  useEffect(() => { if (!settingsOpen) recordSettings([]); }, [settingsOpen]);
   const [newSessionOpen, setNewSessionOpen] = useState(false);
   // the dialog makes a tab in this workspace instead of a workspace, while set
   const [newTab, setNewTab] = useState<NewTabTarget | null>(null);
@@ -478,12 +487,6 @@ export function App() {
   // of the fragment instead; a wrong token just leaves the gate as it is.
   useEffect(() => {
     const onHashChange = (): void => {
-      // a Settings link typed into an open tab (#settings/terminal) opens it there
-      const settingsLink = parseSettingsHash(window.location.hash);
-      if (settingsLink !== null) {
-        openSettingsAt(settingsLink.page);
-        return;
-      }
       const linkToken = takeAuthTokenFromUrl();
       if (linkToken === null) return;
       void authenticate(linkToken)
@@ -492,7 +495,7 @@ export function App() {
     };
     window.addEventListener("hashchange", onHashChange);
     return () => window.removeEventListener("hashchange", onHashChange);
-  }, [unlock, openSettingsAt]);
+  }, [unlock]);
 
   const lock = useCallback(async () => {
     setDrawerOpen(false);
@@ -552,8 +555,7 @@ export function App() {
 
   // the ?pane= a notification opened us with has done its job once it selected the pane
   useEffect(() => {
-    // the hash stays: it may be a Settings link (#settings/<page>)
-    if (paneFromUrl() !== null) window.history.replaceState(window.history.state, "", window.location.pathname + window.location.hash);
+    if (paneFromUrl() !== null) window.history.replaceState(window.history.state, "", window.location.pathname);
   }, []);
 
   const selectedPane = snapshot?.panes.find((pane) => pane.pane_id === selectedPaneId) ?? null;
@@ -563,6 +565,9 @@ export function App() {
     : null;
   const targetHerdr = selectedMachineId === "local" ? health?.herdr : selectedMachine?.herdr;
   const selectedTitle = selectedPane ? displayPaneTitle(selectedPane) : null;
+  // the tab that governs the pane region, so the strip's tabs and the pane they select are
+  // one thing to a screen reader (A4); null while no tab owns this pane
+  const tabPanelLabel = paneTabPanelLabel(snapshot, selectedPane, t);
   const selectedAgent = selectedPane?.agent ?? null;
   // unknown herdr (offline, or a server that predates the flag) counts as attach-capable
   // a server that repaints the pane's screen instead (terminal_mirror) has a terminal lens too
@@ -597,15 +602,15 @@ export function App() {
   // asked by the item; one that has answered gets a plain switch.
   const bell: { state: string; title: string; on: boolean; run: () => Promise<unknown> } =
     !alertsOn
-      ? { state: t("Off on this device"), title: t("Alerts off on this device — tap to turn them on"), on: false, run: enableNotifications }
+      ? { state: t("Off on this device"), title: t("Alerts off on this device. Tap to turn them on"), on: false, run: enableNotifications }
       : notifications !== "granted"
         ? !settings.alertInApp
           ? { state: t("Off on this device"), title: t("Notify me when a pane needs input or finishes"), on: false, run: enableNotifications }
           : notifications === "default"
-            ? { state: t("On in the app"), title: t("Alerts show while the app is open. Tap to allow them when it is closed too"), on: true, run: enableNotifications }
-            : { state: t("On in the app"), title: t("Alerts show while the app is open. Tap to turn them off"), on: true, run: disableNotifications }
+            ? { state: t("On in the app"), title: t("Alerts on in the app. Tap to allow them when it is closed too"), on: true, run: enableNotifications }
+            : { state: t("On in the app"), title: t("Alerts on in the app. Tap to turn them off"), on: true, run: disableNotifications }
         : pushOn
-          ? { state: t("On, pushed to this device"), title: t("Alerts on — pushed to this device, even with the app closed. Tap to turn them off"), on: true, run: disableNotifications }
+          ? { state: t("On, pushed to this device"), title: t("Alerts on, pushed to this device, even with the app closed. Tap to turn them off"), on: true, run: disableNotifications }
           : {
               state: t("On in this tab"),
               // turning them off and on again retries the push subscription
@@ -669,7 +674,8 @@ export function App() {
       openPalette: () => setPaletteOpen(true),
       openSettings: () => {
         setDrawerOpen(false);
-        openSettingsAt(null);
+        setSettingsSection(null);
+        setSettingsOpen(true);
       },
       openAddPc: () => {
         // the new PC reports its progress in the sidebar: nothing should sit over it
@@ -867,12 +873,16 @@ export function App() {
         <FileCommentNavContext.Provider value={viewFileComment}>
         <div className={`pane-column${chatShown ? " is-chat" : ""}`}>
         {/* over the pane only: a bar across the window would cut the sidebar off from its top row in the header */}
-        <UpdateNotice updates={updates} onOpen={() => openSettingsAt("about")} />
+        <UpdateNotice updates={updates} onOpen={() => { setSettingsSection("updates"); setSettingsOpen(true); }} />
         <MachineActionBanner machines={machines} onSetup={(machine, update = false) => { setDrawerOpen(false); setUpdateRemote(update); setMachineDialog(machine); }} />
         {snapshot && selectedPane && selectedWorkspace && (
           <TabStrip snapshot={snapshot} workspace={selectedWorkspace} selectedPane={selectedPane} onSelectPane={selectPane} onNewTab={() => actions.openNewTab()} />
         )}
+        {/* the tab strip's panel: its id is what each tab's aria-controls points at. No tabIndex -
+            the terminal (PaneTerminal) and the composer are the focusable things inside it. */}
         <main className="terminal-host">
+          {/* the panel sits inside main, so the page keeps its main landmark; it draws no box */}
+          <div id={PANE_TABPANEL_ID} className="terminal-tabpanel" role={tabPanelLabel === null ? undefined : "tabpanel"} aria-label={tabPanelLabel ?? undefined}>
           <PaneTerminal
             key={selectedMachineId}
             paneId={selectedPane?.restore_error ? null : selectedPaneId}
@@ -894,6 +904,7 @@ export function App() {
             onConnectionChange={(next) => { setConnected(next); if (next) setOutputStopped(false); }}
             onServerMessage={handleServerMessage}
           />
+          </div>
         </main>
         </div>
         </FileCommentNavContext.Provider>
@@ -921,16 +932,7 @@ export function App() {
         setFilesOpen(false);
         selectTargetRef.current(machineId, paneId);
       }} />
-      <SettingsDialog auth={auth} herdrVersion={health?.herdr?.version ?? null} open={settingsOpen} page={settingsPage} onClose={closeSettings} actions={actions} updates={updates} onEnableNotifications={enableNotifications}
-        machines={machines}
-        onSetupMachine={(machine, update = false) => {
-          // as Add PC: the PC's dialog reports its progress, and nothing should sit over it
-          setSettingsOpen(false);
-          setUpdateRemote(update);
-          addPcFocusReturn.current = true;
-          setMachineDialog(machine);
-        }}
-        onMachineRemoved={(machineId) => { if (selectionRef.current.machineId === machineId) selectTarget("local", null); }} />
+      <SettingsDialog auth={auth} herdrVersion={health?.herdr?.version ?? null} open={settingsOpen} section={settingsSection} onClose={closeSettings} actions={actions} updates={updates} onEnableNotifications={enableNotifications} overPreview={viewing !== null} />
       {filesOpen && selectedPane && (
         <FilesDialog start={selectedPane.foreground_cwd ?? selectedPane.cwd ?? ""} viewing={viewing !== null} onOpenFile={viewFile} onClose={() => setFilesOpen(false)} />
       )}
@@ -942,7 +944,7 @@ export function App() {
             const pane = snapshot?.panes.find((p) => p.pane_id === viewing.paneId);
             return pane === undefined ? null : pane.foreground_cwd ?? pane.cwd ?? null;
           })()}
-          onClose={closeFile} onOpen={(path) => openFile({ path, paneId: viewing.paneId, machineId: viewing.machineId })} />
+          onClose={closeFile} onOpen={(path) => openFile({ path, paneId: viewing.paneId, machineId: viewing.machineId })} keyboardActive={!settingsOpen} />
       </MachineContext.Provider>}
       <CommandPalette key={selectedMachineId} open={paletteOpen} onClose={() => setPaletteOpen(false)} snapshot={snapshot} selectedPaneId={selectedPaneId} view={view} actions={actions} />
     </div></MachineContext.Provider>
