@@ -1,3 +1,4 @@
+import { memoizeLast } from "./memoizeLast.ts";
 import { fileUriPath } from "./terminalFileLinks.ts";
 
 export type InlineNode =
@@ -11,6 +12,8 @@ export type InlineNode =
 
 export interface ListItem {
   content: InlineNode[];
+  /** a task list item (`- [x] done`, `- [ ] open`): whether its box is checked */
+  checked?: boolean;
   /** what is indented under the item's text, in order: a nested list, a table */
   blocks?: MarkdownBlock[];
 }
@@ -249,11 +252,18 @@ function parseTable(lines: string[], start: number, within = 0): { block: Markdo
   return { block: { type: "table", header, rows }, next: index };
 }
 
-
+/** Whether a line opens a block of its own (math, fence, heading, quote, rule, list, table), so it ends a paragraph. */
 function startsBlock(lines: string[], index: number): boolean {
   const line = lines[index] ?? "";
   return /^\s*\\\[/.test(line) || /^\s{0,3}```/.test(line) || /^#{1,6}\s+/.test(line) || /^\s*>/.test(line) || /^(?:\s*[-*_]){3,}\s*$/.test(line) || listLine.test(line)
     || startsTable(lines, index);
+}
+
+/** An item's text, with a GitHub task box (`[x]`, `[X]`, `[ ]`) read off its start. */
+function listItem(text: string): ListItem {
+  const task = /^\[([ xX])\](?:\s+(.*))?$/.exec(text);
+  if (task === null) return { content: parseInline(text) };
+  return { content: parseInline(task[2] ?? ""), checked: task[1] !== " " };
 }
 
 function parseList(lines: string[], start: number): { block: ListBlock; next: number } {
@@ -314,7 +324,7 @@ function parseList(lines: string[], start: number): { block: ListBlock; next: nu
       continue;
     }
     if ((match[1] ?? "").length !== baseIndent || /\d/.test(match[2] ?? "") !== ordered) break;
-    block.items.push({ content: parseInline(match[3] ?? "") });
+    block.items.push(listItem(match[3] ?? ""));
     index += 1;
   }
   return { block, next: index };
@@ -352,7 +362,8 @@ export function foldCode(value: string): { head: string; lines: number } | null 
 /** Quotes nest by one call each: past this many levels, what is left is read as plain lines. */
 const MAX_QUOTE_DEPTH = 32;
 
-export function parseMarkdown(source: string, depth = 0): MarkdownBlock[] {
+/** Markdown source as blocks, uncached; `parseMarkdown` is the entry, and a quote's contents recurse here. */
+function parseBlocks(source: string, depth: number): MarkdownBlock[] {
   const lines = source.replace(/\r\n?/g, "\n").split("\n");
   const blocks: MarkdownBlock[] = [];
   let index = 0;
@@ -420,7 +431,7 @@ export function parseMarkdown(source: string, depth = 0): MarkdownBlock[] {
       const quoted: string[] = [];
       while (index < lines.length && /^\s*>/.test(lineAt(lines, index))) quoted.push(lineAt(lines, index++).replace(/^\s*>\s?/, ""));
       // a line of thousands of ">" (text nobody wrote by hand) would otherwise overflow the stack
-      blocks.push({ type: "blockquote", blocks: depth < MAX_QUOTE_DEPTH ? parseMarkdown(quoted.join("\n"), depth + 1)
+      blocks.push({ type: "blockquote", blocks: depth < MAX_QUOTE_DEPTH ? parseBlocks(quoted.join("\n"), depth + 1)
         : [{ type: "paragraph", lines: quoted.map((quotedLine) => parseInline(quotedLine)) }] });
       continue;
     }
@@ -448,3 +459,9 @@ export function parseMarkdown(source: string, depth = 0): MarkdownBlock[] {
   }
   return blocks;
 }
+
+/**
+ * Markdown source as blocks. The last call is remembered (`memoizeLast`): a file viewer's Preview,
+ * toggled to the source and back, mounts anew and would parse a long document again.
+ */
+export const parseMarkdown = memoizeLast((source: string): MarkdownBlock[] => parseBlocks(source, 0));

@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { FONT_FAMILY_MAX_CHARS } from "./fontFamily.ts";
 import { DEFAULT_KEY_BAR_ITEMS, migrateKeyBarItems } from "./keyBar.ts";
-import { alertPrefs, CHAT_FONT_MAX, CHAT_FONT_MIN, CHAT_LANE_MAX_REM, CHAT_LANE_MIN, CHAT_WIDTHS, chatFontSize, chatLaneLength, chatLaneWidth, DEFAULT_SETTINGS, QUICK_REPLIES_MAX, QUICK_REPLY_MAX_CHARS, quickReplyButtons, sanitizeSettings, terminalTheme, forgetPaneViews, VOICE_BUTTONS, wantsVoiceInput } from "./settings.ts";
+import { alertPrefs, CHAT_FONT_MAX, CHAT_FONT_MIN, CHAT_LANE_MAX_REM, CHAT_LANE_MIN, CHAT_WIDTHS, chatFontSize, chatLaneLength, chatLaneWidth, DEFAULT_SETTINGS, MARKDOWN_WIDTHS, QUICK_REPLIES_MAX, QUICK_REPLY_MAX_CHARS, quickReplyButtons, sanitizeSettings, terminalTheme, forgetPaneViews, VOICE_BUTTONS, wantsVoiceInput } from "./settings.ts";
 
 it("keeps the screen wake lock off until this device explicitly enables it", () => {
   expect(DEFAULT_SETTINGS.keepScreenOn).toBe(false);
@@ -95,7 +95,8 @@ describe("chat width", () => {
     expect(step("narrow")).toBe("var(--content-w)");
     expect(step("wide")).toBe("72rem");
     expect(step("full")).toBe("100%");
-    // the default step has no rule here: PaneTerminal writes its pane's lane on .terminal-stack
+    // the default step has no rule here: PaneTerminal writes its pane's lane on the document, where
+    // a file viewer's Markdown preview, outside the pane, takes it too
     expect(step("default")).toBeUndefined();
     // a percentage in the token would resolve against each column's own box; Full is the one
     // step that means exactly that
@@ -492,4 +493,27 @@ describe("default lens", () => {
     expect(forgetPaneViews(storage)).toBe(2);
     expect([...data.keys()]).toEqual(["herdr-web-ui:settings"]);
   });
+});
+
+it("keeps the file viewer's wrap setting only when it is a boolean, and no size limits", () => {
+  expect(DEFAULT_SETTINGS.wrapCode).toBe(false);
+  expect(sanitizeSettings({ wrapCode: true }).wrapCode).toBe(true);
+  expect(sanitizeSettings({ wrapCode: "yes" }).wrapCode).toBe(false);
+  // the limits are fixed now: a record stored with them drops them
+  const stored = sanitizeSettings({ textLoadLimit: 1024 * 1024, highlightLimit: 1024 * 1024 }) as unknown as Record<string, unknown>;
+  expect("textLoadLimit" in stored).toBe(false);
+  expect("highlightLimit" in stored).toBe(false);
+});
+
+it("highlights code unless turned off, and keeps a stored choice only when it is a boolean", () => {
+  expect(DEFAULT_SETTINGS.highlightCode).toBe(true);
+  expect(sanitizeSettings({ highlightCode: false }).highlightCode).toBe(false);
+  expect(sanitizeSettings({ highlightCode: "no" }).highlightCode).toBe(true);
+  expect(sanitizeSettings({}).highlightCode).toBe(true);
+});
+
+it("keeps the Markdown preview's width to readable or full, readable by default", () => {
+  expect(DEFAULT_SETTINGS.markdownWidth).toBe("readable");
+  for (const width of MARKDOWN_WIDTHS) expect(sanitizeSettings({ markdownWidth: width }).markdownWidth).toBe(width);
+  for (const bad of ["narrow", "medium", "wide", "", null, 80]) expect(sanitizeSettings({ markdownWidth: bad }).markdownWidth).toBe("readable");
 });

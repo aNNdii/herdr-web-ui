@@ -201,23 +201,29 @@ export function PaneTerminal({
   /** read by the OSC 52 handler, which is attached once for the terminal's life */
   const osc52AllowedRef = useRef(settings.paneClipboard);
   osc52AllowedRef.current = settings.paneClipboard;
-  // Settings → Chat width, Default: the lane follows this pane. One length on the stack, which
-  // the transcript, the composer column, the held list and the menus all inherit: a percentage
-  // would resolve against each one's own box and leave them a gutter apart. The other steps are
-  // fixed and stay with the stylesheet (styles.css). The lane's ceiling stays 60rem inside the
-  // length, so a change of the browser's font size moves it at once, as it moves Wide's 72rem
+  // Settings → Chat width, Default: the lane follows this pane. One length on the document, which
+  // the transcript, the composer column, the held list, the menus and a file viewer's Markdown
+  // preview (outside the stack, over the app) all inherit: a percentage would resolve against
+  // each one's own box and leave them a gutter apart. The other steps are fixed and stay with the
+  // stylesheet (styles.css), so the length is removed for them. The lane's ceiling stays 60rem
+  // inside the length, so a change of the browser's font size moves it at once, as it moves Wide's 72rem.
+  // The document holds one length, so this assumes one PaneTerminal is mounted (src/App.tsx mounts
+  // one): a second would overwrite it, and the first to unmount would remove it from both.
   useLayoutEffect(() => {
     const stack = stackRef.current;
-    if (!stack) return;
-    if (settings.chatWidth !== "default") {
-      stack.style.removeProperty("--chat-w");
+    const root = document.documentElement;
+    if (!stack || settings.chatWidth !== "default") {
+      root.style.removeProperty("--chat-w");
       return;
     }
-    const apply = (): void => stack.style.setProperty("--chat-w", chatLaneLength(stack.clientWidth));
+    const apply = (): void => root.style.setProperty("--chat-w", chatLaneLength(stack.clientWidth));
     apply();
     const observer = new ResizeObserver(apply);
     observer.observe(stack);
-    return () => observer.disconnect();
+    return () => {
+      observer.disconnect();
+      root.style.removeProperty("--chat-w");
+    };
   }, [settings.chatWidth]);
   const directTyping = settings.terminalInputMode === "direct" || (settings.terminalInputMode === "auto" && (!coarse || storedDirectTyping()));
   const inputLine = !directTyping && !chatView;

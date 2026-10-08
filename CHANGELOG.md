@@ -15,6 +15,19 @@ between releases do not reach them. Remote-PC runtime bundles are versioned sepa
   `HERDR_WEB_TELEMETRY=0` or `DO_NOT_TRACK=1` turns it off on the server.
   ([Anonymous usage counts](docs/guide.md#anonymous-usage-counts),
   [#599](https://github.com/devswha/herdr-web-ui/pull/599))
+- The file viewer renders a Markdown file as a **Preview**, with **Show source** for its text,
+  and shows every text file as highlighted code with line numbers. **Raw** opens the file in a new
+  tab and **Copy** copies the file; a file cut short says so in its size (`256 KB of 1.3 MB`), and a
+  warning sign there marks it, or one too long to color or to preview, with the reason as its
+  tooltip. Code blocks in the chat are highlighted too. Highlighting (TanStack Highlight) and the
+  Preview's parsing run in a worker for anything longer than a few lines, so no file or reply can
+  freeze the page: what takes longer than 2 s is shown plain. **Settings → Chat → File viewer** turns
+  highlighting off and sets line wrapping and the width of a Markdown preview. A Markdown preview
+  has the chat's font size and font, and by default the chat's width.
+  ([#429](https://github.com/devswha/herdr-web-ui/pull/429) by @aNNdii)
+- A task list (`- [x] done`, `- [ ] open`) in the chat and in a Markdown preview shows a checked or
+  empty box instead of the brackets.
+  ([#429](https://github.com/devswha/herdr-web-ui/pull/429) by @aNNdii)
 
 ### Changed
 - **Settings → Terminal → Clipboard from a pane** is on again: vim, tmux and Claude Code copy to
@@ -23,6 +36,10 @@ between releases do not reach them. Remote-PC runtime bundles are versioned sepa
   you do not trust.
 - A GitHub release opens with its patch notes, short lines under New features, Improvements and
   Bug fixes as an install shows them, with the full changelog folded underneath.
+- The file viewer offers a download only for a file it cannot show; every other file opens whole in
+  a new tab, where it can be saved. A size under 10 MB shows one decimal (`1.3 MB`), in the viewer
+  and in a bridge update's progress.
+  ([#429](https://github.com/devswha/herdr-web-ui/pull/429) by @aNNdii)
 
 ### Fixed
 - macOS Safari direct terminal input preserves Korean syllables when the input method
@@ -536,6 +553,11 @@ between releases do not reach them. Remote-PC runtime bundles are versioned sepa
   squeezed every column to fit, down to a letter or two, so words and file paths broke after
   any letter. A column is now never narrower than its longest word.
   ([#481](https://github.com/devswha/herdr-web-ui/pull/481) by @aNNdii)
+- A Markdown quote nested deeper than 32 levels shows its remaining `>` as text. A few kilobytes of
+  nested quotes overflowed the renderer: a chat message showed that it can't be shown, and a
+  Markdown file blanked the app. A preview that still cannot be drawn now says so in the file
+  viewer and offers its source.
+  ([#429](https://github.com/devswha/herdr-web-ui/pull/429) by @aNNdii)
 - In the chat of an OmO pane, a background task that ends shows where OmO reported it: a
   card that says how many tasks ended, and for each its summary, whether it finished, failed
   or was cancelled, the agent and model it ran as, how long it took, its turns, tool calls and

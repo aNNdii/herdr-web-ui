@@ -1,9 +1,11 @@
-import { useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { memo, useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Check, Copy } from "lucide-react";
 
 import { foldCode, mathNestsTooDeep, parseMarkdown, type InlineNode, type ListBlock, type MarkdownBlock } from "../lib/markdown.ts";
 import { codeIsFilePath, OpenFileContext, splitFilePaths } from "../lib/filePaths.ts";
 import { fileUriPath } from "../lib/terminalFileLinks.ts";
+import { CHAT_HIGHLIGHT_LIMIT, languageForFence } from "../lib/highlight.ts";
+import { HighlightedCode } from "./HighlightedCode.tsx";
 import { useT } from "../lib/i18n.ts";
 
 type Katex = typeof import("katex").default;
@@ -88,13 +90,18 @@ function Inline({ nodes, interactive = true }: { nodes: InlineNode[]; interactiv
   })}</>;
 }
 
+/** A list, nested lists and tables in its items; a task item's box stands in for its bullet. */
 function List({ block }: { block: ListBlock }) {
   const Tag = block.ordered ? "ol" : "ul";
+  const id = useId();
   return (
     <Tag className="markdown-list" start={block.ordered ? block.start : undefined}>
       {block.items.map((item, index) => (
-        <li key={index}>
-          <Inline nodes={item.content} />
+        <li key={index} className={item.checked === undefined ? undefined : "markdown-task"}>
+          {/* a task's box shows its state; the agent's text owns it, so it cannot be ticked here. Drawn,
+              not an <input>: a disabled checkbox is greyed by the browser and ignores the accent */}
+          {item.checked !== undefined && <span className="markdown-task-box" role="checkbox" aria-checked={item.checked} aria-disabled="true" aria-labelledby={`${id}-${index}`}>{item.checked && <Check aria-hidden="true" />}</span>}
+          {item.checked === undefined ? <Inline nodes={item.content} /> : <span id={`${id}-${index}`}><Inline nodes={item.content} /></span>}
           {item.blocks !== undefined && <Blocks blocks={item.blocks} />}
         </li>
       ))}
@@ -109,12 +116,14 @@ function CodeBlock({ language, value }: { language: string; value: string }) {
   const block = useRef<HTMLDivElement>(null);
   // no inner scroll: a long block folds, with a visible "Show all" row
   const fold = useMemo(() => foldCode(value), [value]);
+  /** Copies the whole block, folded lines included, and flips the button to "copied" for a moment. */
   const copy = async (): Promise<void> => {
     await navigator.clipboard.writeText(value);
     setCopied(true);
     window.setTimeout(() => setCopied(false), 1500);
   };
   const folding = useRef(false);
+  /** Shows all lines or folds them again; after folding, the block's top is brought back into view. */
   const toggle = (): void => {
     folding.current = expanded;
     setExpanded(!expanded);
@@ -136,7 +145,7 @@ function CodeBlock({ language, value }: { language: string; value: string }) {
           {copied ? <Check aria-hidden="true" /> : <Copy aria-hidden="true" />}
         </button>
       </div>
-      <pre><code>{fold !== null && !expanded ? fold.head : value}</code></pre>
+      <HighlightedCode code={fold !== null && !expanded ? fold.head : value} language={languageForFence(language)} limit={CHAT_HIGHLIGHT_LIMIT} />
       {fold !== null && (
         <button type="button" className="markdown-code-more" aria-expanded={expanded} onClick={toggle}>
           {expanded ? t("Show less") : t("Show all {n} lines", { n: fold.lines })}
@@ -146,6 +155,7 @@ function CodeBlock({ language, value }: { language: string; value: string }) {
   );
 }
 
+/** Parsed blocks in order: the one renderer for a reply, a quote's contents and a list item's. */
 function Blocks({ blocks }: { blocks: MarkdownBlock[] }) {
   return <>{blocks.map((block, index): ReactNode => {
     const key = `${block.type}-${index}`;
@@ -173,7 +183,19 @@ function Blocks({ blocks }: { blocks: MarkdownBlock[] }) {
   })}</>;
 }
 
-export function Markdown({ children, className }: { children: string; className?: string }) {
+/**
+ * Markdown rendered. Both props are strings, so `memo` skips a parent's re-render: a long plan in
+ * the file viewer is not rendered again every time the app polls.
+ */
+export const Markdown = memo(function Markdown({ children, className }: { children: string; className?: string }) {
   const blocks = useMemo(() => parseMarkdown(children), [children]);
+  return <ParsedMarkdown blocks={blocks} className={className} />;
+});
+
+/**
+ * Markdown parsed elsewhere, rendered as `Markdown` renders its text: the file viewer parses a file
+ * in a worker, so a file the parser is slow on cannot hold the page.
+ */
+export const ParsedMarkdown = memo(function ParsedMarkdown({ blocks, className }: { blocks: MarkdownBlock[]; className?: string }) {
   return <div className={className === undefined ? "markdown" : `markdown ${className}`}><Blocks blocks={blocks} /></div>;
-}
+});

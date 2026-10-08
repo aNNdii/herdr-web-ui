@@ -75,6 +75,13 @@ export const JA: Record<string, string> = {
   "Increase chat font size": "チャットの文字を大きく",
   "Chat font": "チャットのフォント",
   "Message text; code stays monospace. Comma-separated, tried in order. A font this device does not have falls back to the default.": "メッセージ本文に適用され、コードは等幅フォントのままです。カンマ区切りで、先頭から順に使います。このデバイスにないフォントは既定のフォントで表示します。",
+  "File viewer": "ファイルビューア",
+  "Wrap long lines": "長い行を折り返す",
+  "Highlight code": "コードのシンタックスハイライト",
+  "Colors code in the chat and the file viewer. Off, code is plain text.": "チャットとファイルビューアのコードを色分けします。オフにするとコードはプレーンテキストで表示されます。",
+  "Markdown width": "Markdown の幅",
+  "Full width": "全幅",
+  "Show source": "ソースを表示",
   "Shortcuts": "ショートカット",
   "Phone": "スマートフォン",
   "Devices": "デバイス",
@@ -308,12 +315,17 @@ export const JA: Record<string, string> = {
   // ---- files ----
   "Files": "ファイル",
   "Close files": "ファイルを閉じる",
-  "Showing the first {shown} of {total}.": "{total} 件中、最初の {shown} 件を表示しています。",
+  "Showing the first {shown}": "最初の {shown} を表示",
   "Open in a new tab": "新しいタブで開く",
+  "This image is {size}; open it in a new tab to view it.": "この画像は {size} です。新しいタブで開いて表示してください。",
+  "Raw": "元のファイル",
+  "Copy file": "ファイルをコピー",
+  "File copied": "ファイルをコピーしました",
   "Download": "ダウンロード",
   "Close file": "ファイルを閉じる",
   "No readable file at this path.": "このパスに読み取り可能なファイルはありません。",
   "The file could not be opened.": "ファイルを開けませんでした。",
+  "This preview can't be shown.": "このプレビューは表示できません。",
   "Open {path}": "{path} を開く",
 
   // ---- PC dialog ----
@@ -448,6 +460,8 @@ export const JA: Record<string, string> = {
   "Copy code": "コードをコピー",
   "Show less": "折りたたむ",
   "Show all {n} lines": "{n} 行すべて表示",
+  "Too long to highlight": "長すぎるため構文ハイライトを省略しました",
+  "Too long to preview": "長すぎるためプレビューを省略しました",
 
   // ---- composer ----
   "Reconnecting… message held here, never queued": "再接続しています… メッセージはここに保持され、キューには入りません",

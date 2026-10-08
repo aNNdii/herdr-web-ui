@@ -57,6 +57,7 @@ Only tokens overridden by `[data-theme="light"]` have a light value. Both column
 | Done/tint | `--status-done-tint` | `rgba(147, 195, 107, 0.14)` | `rgba(47, 99, 23, 0.12)` |
 | Danger/tint | `--danger-tint` | `rgba(255, 123, 112, 0.12)` | `rgba(168, 35, 35, 0.1)` |
 | Danger/text | `--danger-text` | `#ffd9d4` | `#8f1d1d` |
+| Notice | `--notice` | `#e8c55c` | `#7a5a00` |
 | Overlay/scrim | `--scrim` | `rgba(8, 6, 4, 0.55)` | `rgba(40, 32, 22, 0.35)` |
 | Drawer shadow | `--shadow-drawer` | `0 0 40px rgba(0, 0, 0, 0.6)` | `0 0 40px rgba(40, 32, 22, 0.22)` |
 | Popover shadow | `--shadow-pop` | `0 16px 48px rgba(0, 0, 0, 0.55), 0 0 0 1px var(--border)` | `0 16px 48px rgba(40, 32, 22, 0.16), 0 0 0 1px var(--border)` |
@@ -126,6 +127,39 @@ CSS tokens verbatim for each resolved theme and palette (`settings.test.ts` chec
 | Foreground | `--term-fg` | `#d8d0c3` | `#2a251f` | `foreground` |
 | Cursor | `--term-cursor` | `#f0a830` | `#8c5000` | `cursor` |
 | Selection | `--term-selection` | `#4a3d26` | `#f0d9ae` | `selectionBackground` |
+
+### Syntax highlighting
+
+Code in chat and in the file viewer is colored by `--syntax-*` tokens. Four follow the palette:
+`--syntax-comment` is `--text-dim`, `--syntax-function` is `--accent`, `--syntax-inserted` is
+`--status-done` and `--syntax-deleted` is `--status-blocked`. The other six are literals per block
+(each at least 4.5:1 on `--bg-panel` and `--bg-elevated`); light charcoal uses the light report
+column. Catppuccin follows Catppuccin's own mapping: keywords are mauve, so `--syntax-function` is
+blue there instead of `--accent`, and Latte's colors are darkened to stay readable.
+
+| Block | keyword | string | number | type | variable | meta |
+|-------|---------|--------|--------|------|----------|------|
+| Dark amber | `#e8875f` | `#a8c17c` | `#d6a0c9` | `#6cb8d6` | `#e0c08f` | `#b49dd6` |
+| Light amber | `#a33a17` | `#4b6b18` | `#8a3f7a` | `#155a72` | `#7a5418` | `#5d4791` |
+| Dark report | `#f78c6c` | `#3ddc97` | `#f5b544` | `#7fd4ff` | `#c9d1dc` | `#b392f0` |
+| Light report and charcoal | `#b3261e` | `#22743a` | `#8a5300` | `#0b6e8a` | `#3b3b3b` | `#6f42c1` |
+| Dark charcoal | `#d7a08a` | `#a7b789` | `#c2a2af` | `#9fb4c2` | `#dcd8d0` | `#b8a5c9` |
+| Catppuccin Mocha | `#cba6f7` | `#a6e3a1` | `#fab387` | `#f9e2af` | `#f5e0dc` | `#f5c2e7` |
+| Catppuccin Latte | `#712fc6` | `#2f7620` | `#b44201` | `#905c13` | `#4c4f69` | `#bc1d91` |
+
+`--syntax-function` in Catppuccin: Mocha `#89b4fa`, Latte `#0b59f4`.
+
+### File viewer
+
+- `--notice` colors a note that the view is partial (a file cut short, code too long to color): the
+  size in the header's meta line becomes `256 KB of 1.3 MB`, always beside a warning icon so the
+  color is not the only sign. It is a warning yellow, at least 4.5:1 on
+  `--bg`, `--bg-panel` and `--bg-elevated`: amber `#e8c55c` / `#7a5a00`, dark report `#f5b544`, light
+  report and charcoal `#8a5300`, dark charcoal `#d9b26a`, Catppuccin Mocha `#f9e2af` (yellow), Latte
+  `#8a5710`.
+- `--line-number` colors the line numbers beside code: tertiary text, quieter than the code. It is
+  `--text-dim`, except in Catppuccin, whose `--text-dim` (subtext1) is nearly `--text`: Mocha
+  overlay2 `#9399b2` (5.8:1), Latte `#64677d` (subtext0 darkened to 4.9:1 on `--bg`).
 
 ### Rules
 - Amber is the one chrome color. Accent (selected, focused, informational) and primary (the user's
@@ -208,9 +242,15 @@ CSS tokens verbatim for each resolved theme and palette (`settings.test.ts` chec
 - Terminal and chat font families are comma-separated lists, default empty. They go in front of the
   terminal's built-in fonts (after the bundled Symbols Nerd Font Mono, which only draws icons) and of
   `--font-ui` in the chat's prose (as `--font-chat`), never in place of them; code in the chat keeps
-  `--font-mono`. At most 200 characters, with `;`, `{`, `}`, `<`,
+  `--font-mono`. A file viewer's Markdown preview takes the chat font size and family too. At most 200 characters, with `;`, `{`, `}`, `<`,
   `>`, `\` and control characters stripped and names with spaces quoted.
 - Composer Enter behavior and folded thinking visibility are preferences, not typography tokens.
+- File viewer: `wrapCode` (wrap long lines instead of scrolling sideways; default off),
+  `highlightCode` (color code in the chat and the file viewer; default on, off shows plain text),
+  and `markdownWidth`: `readable` (the chat lane, `--chat-w`, centered; default) or `full`. The
+  viewer loads the first 256 KB of a text file, a fixed limit. A Markdown file its Preview cannot
+  be parsed for within 2 s opens as its source with a notice; code a worker cannot highlight
+  within 2 s stays plain with one.
 - All settings share one sanitized `localStorage["herdr-web-ui:settings"]` record.
 
 ## 4. Spacing & Layout
@@ -633,7 +673,8 @@ One set for both themes: the card is island black wherever it shows.
 - The chat lens is a centered `--chat-w` transcript over the still-attached terminal surface.
   At the Default chat width the lane follows the pane: min 820px, max 60rem (960px at a 16px
   root), 71% of the pane (`.terminal-stack`) between. `PaneTerminal` measures the pane and writes
-  the lane on it as one length, `min(max(820px, 60rem), <the pane's share>px)` (`chatLaneLength`,
+  the lane on the document as one length, so a file viewer's Markdown preview over the app has it
+  too, `min(max(820px, 60rem), <the pane's share>px)` (`chatLaneLength`,
   `lib/settings.ts`); `--chat-w` never holds that percentage, because each column would resolve
   it against its own box and they would differ by their gutters.
   The ceiling is in rem because Wide is (`72rem`), and it stays `60rem` inside the length, so
@@ -655,7 +696,9 @@ One set for both themes: the card is island black wherever it shows.
   text button in the regular weight beside it. Otherwise the answer keeps two labelled buttons,
   glyph + MD and glyph + TXT; where the primary pointer is coarse each is a `--touch-target` target on a
   one-line row, as is a user turn's copy, and a skill list under a user turn clears that target.
-- Markdown supports headings, lists, links, quotes, tables, inline/fenced code and code-copy actions.
+- Markdown supports headings, lists (a task item `- [x]` / `- [ ]` shows a checked or empty box in
+  place of its bullet, not clickable), links, quotes, tables, inline/fenced code and code-copy
+  actions. Fenced code is syntax-highlighted by role (`--syntax-*`) up to 100 KB.
   A link keeps `--accent` and a file chip reads in `--text-strong` with a dotted underline; both
   underlines are `--text-dim` at rest and both take the accent on hover and focus-visible.
   Code blocks are `--radius-lg` and never scroll inside: one longer than 30 lines opens at its
@@ -971,7 +1014,8 @@ One set for both themes: the card is island black wherever it shows.
   replaces the one entry. A reload steps out of the entries it finds; Forward reopens the page.
 - Pages, in order: **Appearance** (theme, colors, density, language, sidebar rows), **Chat**
   (panes open in, show thinking, chat width, chat font size and family; then **Composer**: Enter
-  sends, suggestion chip; then **Quick replies**), **Terminal** (font size and family, wheel
+  sends, suggestion chip; then **Quick replies**; then **File viewer**: wrap long lines, highlight
+  code, Markdown width), **Terminal** (font size and family, wheel
   speed, input mode, Key bar), **Alerts**, **Voice input**, **Subscription usage**,
   **Shortcuts** (the complete platform-resolved list), **Phone & devices** (the phone address,
   Keep screen on, Install; then paired devices), **Remote PCs**, **About** (Updates, herdr,
