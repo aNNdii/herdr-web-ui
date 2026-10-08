@@ -200,14 +200,16 @@ export function PaneTerminal({
   const tRef = useRef(t);
   tRef.current = t;
   /** read by the OSC 52 handler, which is attached once for the terminal's life */
-  const osc52AllowedRef = useRef(settings.terminalOsc52);
-  osc52AllowedRef.current = settings.terminalOsc52;
+  const osc52AllowedRef = useRef(settings.paneClipboard);
+  osc52AllowedRef.current = settings.paneClipboard;
   // Settings → Chat width, Default: the lane follows this pane. One length on the document, which
   // the transcript, the composer column, the held list, the menus and a file viewer's Markdown
   // preview (outside the stack, over the app) all inherit: a percentage would resolve against
   // each one's own box and leave them a gutter apart. The other steps are fixed and stay with the
   // stylesheet (styles.css), so the length is removed for them. The lane's ceiling stays 60rem
-  // inside the length, so a change of the browser's font size moves it at once, as it moves Wide's 72rem
+  // inside the length, so a change of the browser's font size moves it at once, as it moves Wide's 72rem.
+  // The document holds one length, so this assumes one PaneTerminal is mounted (src/App.tsx mounts
+  // one): a second would overwrite it, and the first to unmount would remove it from both.
   useLayoutEffect(() => {
     const stack = stackRef.current;
     const root = document.documentElement;
@@ -750,8 +752,9 @@ export function PaneTerminal({
     // OSC 52: the pane program asked the terminal to set the clipboard - the pty
     // cannot reach the browser clipboard by itself, so xterm hands us the sequence and
     // navigator.clipboard completes the hop (text only; queries are ignored).
-    // Off until the user turns it on in Settings -> Appearance: any process in the pane, an
-    // agent's tool calls included, could plant text the user then pastes somewhere else.
+    // On unless turned off in Settings -> Terminal -> Clipboard from a pane: vim, tmux and Claude Code
+    // copy this way, but any process in the pane, an agent's tool calls included, can plant text the
+    // user then pastes somewhere else.
     const osc52 = term.parser.registerOscHandler(52, (payload) => {
       if (osc52AllowedRef.current) {
         const text = parseOsc52(payload);

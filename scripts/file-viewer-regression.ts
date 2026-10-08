@@ -8,6 +8,7 @@ import { join } from "node:path";
 import { chromium } from "playwright-core";
 import { createServer } from "../server/index.ts";
 import { herdrRpc, workspaceClose, workspaceCreate } from "../server/herdr/client.ts";
+import { openSettingsPage } from "./settings-page.ts";
 
 const root = mkdtempSync(join(tmpdir(), "herdr-web-ui-file-back-"));
 const codexHome = join(root, "codex-home");
@@ -17,7 +18,9 @@ const transcript = join(codexHome, "sessions", `rollout-2026-09-28T00-00-00-${th
 writeFileSync(transcript, [
   { type: "session_meta", payload: { id: thread, cwd: root } },
   { type: "response_item", payload: { type: "message", role: "user", content: [{ type: "input_text", text: "Show me the demo video." }] } },
-  { type: "response_item", payload: { type: "message", role: "assistant", phase: "final_answer", content: [{ type: "output_text", text: `Open [demo video](./preview.webm) or [notes](./notes.txt) or [guide](./docs/guide.md) or [big](./big.txt) or [big code](./big.ts) or [deep quotes](./deep.md) or [empty](./empty.txt) or [file URI notes](${new URL(`file://${join(root, "notes.txt")}`).href}) or [folder](${new URL(`file://${root}`).href}).\n\n${new URL(`file://${join(root, "notes.txt")}`).href}\n\n\`\`\`ts\nconst answer = 42;\n\nexport { answer };\n\`\`\`` }] } },
+  { type: "response_item", payload: { type: "message", role: "assistant", phase: "final_answer", content: [{ type: "output_text", text: `Open [demo video](./preview.webm) or [notes](./notes.txt) or [guide](./docs/guide.md) or [big](./big.txt) or [big code](./big.ts) or [deep quotes](./deep.md) or [empty](./empty.txt) or [slow preview](./slow.md) or [long notes](./long.md) or [file URI notes](${new URL(`file://${join(root, "notes.txt")}`).href}) or [folder](${new URL(`file://${root}`).href}).\n\n${new URL(`file://${join(root, "notes.txt")}`).href}\n\n\`\`\`ts\nconst answer = 42;\n\nexport { answer };\n\`\`\`` }] } },
+  // a block the highlighter is quadratic on (a line of dashes in YAML): seconds on the page
+  { type: "response_item", payload: { type: "message", role: "assistant", phase: "final_answer", content: [{ type: "output_text", text: `Dashes:\n\n\`\`\`yaml\n${"-".repeat(90_000)}\n\`\`\`` }] } },
 ].map((row) => JSON.stringify(row)).join("\n"));
 const db = new Database(join(codexHome, "state_5.sqlite"));
 db.exec("CREATE TABLE threads (id TEXT, rollout_path TEXT, cwd TEXT, archived INTEGER, agent_role TEXT, created_at INTEGER, updated_at INTEGER, source TEXT, first_user_message TEXT)");
@@ -31,13 +34,17 @@ writeFileSync(join(root, "notes.txt"), "File preview history regression\n");
 // in a subfolder, so a link is resolved from the file's folder (../notes.txt), not the pane's
 mkdirSync(join(root, "docs"));
 writeFileSync(join(root, "docs", "guide.md"), "# Guide\n\nSee [notes](../notes.txt).\n\n```ts\nconst x = 1;\n```\n");
-// the load limit is seeded below at its smallest choice, so this file, a little past it, stays small
+// the viewer loads the first 256 KB of a text file (TEXT_LOAD_LIMIT in src/lib/textPreview.ts)
 const TEXT_LOAD_LIMIT = 256 * 1024;
 writeFileSync(join(root, "big.txt"), "a line of plain text, 0123456789\n".repeat(Math.ceil(TEXT_LOAD_LIMIT / 30)).slice(0, TEXT_LOAD_LIMIT + 10));
-// code past the highlight limit (256 KB) but within the larger load limit (1 MB): shown whole, in plain text
+// code past the load limit: its first 256 KB, still highlighted
 writeFileSync(join(root, "big.ts"), "export const value = 1;\n".repeat(Math.ceil((TEXT_LOAD_LIMIT + 1024) / 24)));
 // 20 KB of nested quotes: parsed one level per `>`, they overflowed the stack and blanked the app
 writeFileSync(join(root, "deep.md"), `${">".repeat(20_000)} deepest\n`);
+// one line of "[a" at the load limit (256 KB): seconds for the highlighter (the Markdown parser reads it in linear time)
+writeFileSync(join(root, "slow.md"), "[a".repeat(128 * 1024));
+// ordinary Markdown past the load limit: its start is previewed
+writeFileSync(join(root, "long.md"), "# Notes\n\nA paragraph of ordinary notes, with *emphasis* and a [link](./notes.txt).\n\n".repeat(4_000));
 // an empty file has no first byte: its range answers 416, which is not an error
 writeFileSync(join(root, "empty.txt"), "");
 let workspace: string | undefined;
@@ -61,11 +68,11 @@ try {
   browser = await chromium.launch({ executablePath: process.env.CHROME_PATH ?? "/opt/google/chrome/chrome", headless: true, args: ["--no-sandbox"] });
   const context = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
   const page = await context.newPage();
-  // seeded once: a later step raises the load limit and reloads. The chat's own font size and
+  // seeded once: a later step changes a setting and reloads. The chat's own font size and
   // family are set, so a Markdown preview can be shown to take them over
-  await page.addInitScript((textLoadLimit) => {
-    if (localStorage.getItem("herdr-web-ui:settings") === null) localStorage.setItem("herdr-web-ui:settings", JSON.stringify({ language: "en", textLoadLimit, chatFontSize: 17, chatFontFamily: "Georgia" }));
-  }, TEXT_LOAD_LIMIT);
+  await page.addInitScript(() => {
+    if (localStorage.getItem("herdr-web-ui:settings") === null) localStorage.setItem("herdr-web-ui:settings", JSON.stringify({ language: "en", chatFontSize: 17, chatFontFamily: "Georgia" }));
+  });
   page.setDefaultTimeout(10_000);
   const errors: string[] = [];
   page.on("pageerror", (error) => errors.push(error.message));
@@ -79,7 +86,7 @@ try {
   await page.locator(".markdown-code .hl-number", { hasText: "42" }).waitFor();
   console.log("PASS Chat fenced code block is syntax highlighted");
   // a blank line must survive in the text a copy picks up
-  const codeText = await page.locator(".markdown-code .hl-code").innerText();
+  const codeText = await page.locator(".markdown-code .hl-code").first().innerText();
   if (codeText !== "const answer = 42;\n\nexport { answer };") throw new Error(`Chat code block text lost its blank line: ${JSON.stringify(codeText)}`);
   console.log("PASS Chat code block keeps its blank line in the text");
   const composer = page.getByRole("textbox", { name: "Message", exact: true });
@@ -185,6 +192,42 @@ try {
     assert.equal(await page.evaluate(() => (window as unknown as { testDocument: string }).testDocument), "same-document");
     console.log(`PASS Settings opens above the preview at ${width}px; Escape and Back preserve it, then X closes the file once`);
   }
+
+  // Add PC from Settings over a preview: Settings closes, the preview stays mounted beneath, and
+  // the native modal Add PC opens is on top. Tab walks Add PC's own controls; the preview's trap
+  // must not take it back to its own, now inert, controls.
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await videoLink.click();
+  await preview.waitFor();
+  await page.keyboard.press("ControlOrMeta+Shift+Comma");
+  const settingsOverPreview = page.getByRole("dialog", { name: "Settings", exact: true });
+  await settingsOverPreview.waitFor();
+  await openSettingsPage(page, "Remote PCs");
+  await settingsOverPreview.getByRole("button", { name: "Add PC", exact: true }).click();
+  const addPc = page.locator("dialog.machine-dialog");
+  await addPc.waitFor();
+  await settingsOverPreview.waitFor({ state: "hidden" });
+  assert.equal(await page.locator(".file-viewer").count(), 1, "the preview stays beneath Add PC");
+  await page.waitForFunction(() => Boolean(document.activeElement?.closest("dialog.machine-dialog")));
+  const addPcFocus: string[] = [];
+  for (let press = 0; press < 3; press++) {
+    await page.keyboard.press("Tab");
+    addPcFocus.push(await page.evaluate(() => {
+      const active = document.activeElement;
+      return active?.closest("dialog.machine-dialog") ? active.outerHTML.slice(0, 120) : `outside: ${active?.outerHTML.slice(0, 80)}`;
+    }));
+  }
+  assert.ok(addPcFocus.every((entry) => !entry.startsWith("outside")), `Tab stays inside Add PC over a preview: ${addPcFocus.join(" | ")}`);
+  assert.ok(new Set(addPcFocus).size >= 2, `Tab moves through Add PC over a preview: ${addPcFocus.join(" | ")}`);
+  // Escape is Add PC's too: it closes Add PC alone, and the preview and its entry stay
+  const previewUnderAddPc = await page.evaluate(() => history.state["herdr-web-ui:file-preview"]);
+  await page.keyboard.press("Escape");
+  await addPc.waitFor({ state: "hidden" });
+  assert.equal(await page.locator(".file-viewer").count(), 1, "Escape over Add PC leaves the preview beneath it");
+  assert.deepEqual(await page.evaluate(() => history.state["herdr-web-ui:file-preview"]), previewUnderAddPc, "Escape over Add PC preserves the preview entry");
+  await preview.getByRole("button", { name: "Close file", exact: true }).click();
+  await preview.waitFor({ state: "hidden" });
+  console.log("PASS Add PC opened from Settings over a preview keeps Tab inside Add PC, and its Escape closes Add PC alone");
 
   // With no preview beneath it, Settings stays on the layer every dialog shares, so the palette
   // its shortcut opens is drawn above Settings instead of taking focus and Escape unseen.
@@ -292,7 +335,7 @@ try {
   // the preview reads as the chat does: its font size and family, and at most its lane's width
   const textStyle = (selector: string) => page.locator(selector).first().evaluate((element) => {
     const style = getComputedStyle(element);
-    const heading = element.querySelector("h1");
+    const heading = element.querySelector(".markdown-h1");
     return { fontSize: style.fontSize, fontFamily: style.fontFamily, headingSize: heading === null ? null : getComputedStyle(heading).fontSize };
   });
   const chatText = await textStyle(".chat-transcript .chat-turn-agent .markdown");
@@ -365,25 +408,19 @@ try {
   await page.getByRole("button", { name: "Close file", exact: true }).click();
   await page.locator(".file-viewer").waitFor({ state: "hidden" });
 
-  // code too long to color: shown whole and plain, and the header says why. Only a load limit above
-  // the highlight limit lets such code arrive whole.
+  // code past the load limit: its first 256 KB, highlighted (in the worker), and the header says it is cut
   await page.evaluate(() => {
     const settings = JSON.parse(localStorage.getItem("herdr-web-ui:settings") ?? "{}") as Record<string, unknown>;
-    localStorage.setItem("herdr-web-ui:settings", JSON.stringify({ ...settings, textLoadLimit: 1024 * 1024, wrapCode: true }));
+    localStorage.setItem("herdr-web-ui:settings", JSON.stringify({ ...settings, wrapCode: true }));
   });
   await page.goto(`${origin}/?pane=${encodeURIComponent(pane)}`);
   await page.locator(".conn-live").waitFor();
   await page.getByRole("button", { name: "big code", exact: true }).click();
   const bigCode = page.getByRole("dialog", { name: "big.ts", exact: true });
-  const plainNote = bigCode.locator(".file-viewer-meta .file-viewer-notice");
-  await plainNote.waitFor();
-  assert.equal(await plainNote.getAttribute("title"), "Too long to highlight", "the note is the tooltip of the size");
-  assert.equal(await plainNote.locator("span:not(.visually-hidden)").innerText(), "257 KB", "and not spelled out in the meta line");
-  assert.equal(await plainNote.locator(".visually-hidden").innerText(), "Too long to highlight", "a screen reader still hears it");
-  assert.equal(await bigCode.locator(".hl-note").count(), 0, "the note is not repeated under the code");
-  assert.equal(await bigCode.locator(".file-viewer-text .hl-keyword").count(), 0, "the code is plain");
-  await bigCode.getByRole("button", { name: "Copy file", exact: true }).waitFor();
-  console.log("PASS Code too long to highlight says so in its header, once");
+  await bigCode.locator(".file-viewer-text .hl-keyword", { hasText: "export" }).first().waitFor();
+  assert.match(await bigCode.locator(".file-viewer-meta .file-viewer-notice").getAttribute("title") ?? "", /^Showing the first 256 KB$/);
+  assert.equal(await bigCode.getByRole("button", { name: "Copy file", exact: true }).count(), 0);
+  console.log("PASS Code past the load limit shows its first 256 KB, highlighted");
   await bigCode.locator(".file-viewer-text[data-wrap]").waitFor();
   console.log("PASS Settings → Wrap long lines wraps the code");
   await page.getByRole("button", { name: "Close file", exact: true }).click();
@@ -406,6 +443,68 @@ try {
   assert.equal(await empty.getByRole("alert").count(), 0);
   assert.equal(await empty.locator(".file-viewer-notice").count(), 0, "an empty file is not cut short");
   console.log("PASS An empty file opens as an empty file, not as an error");
+  await page.getByRole("button", { name: "Close file", exact: true }).click();
+  await page.locator(".file-viewer").waitFor({ state: "hidden" });
+
+  // nothing an agent writes can freeze the page: a long task of a second or more is a frozen tab
+  const longTasks = async () => page.evaluate(() => (window as unknown as { longTasks?: number[] }).longTasks ?? []);
+  await page.evaluate(() => {
+    const record = window as unknown as { longTasks: number[] };
+    record.longTasks = [];
+    new PerformanceObserver((list) => { for (const entry of list.getEntries()) record.longTasks.push(entry.duration); }).observe({ type: "longtask" });
+  });
+  // a chat code block the highlighter gives up on stays plain and says so
+  await page.locator(".markdown-code .hl-note", { hasText: "Too long to highlight" }).waitFor();
+  assert.equal(await page.locator(".markdown-code").nth(1).locator("code span:not(.hl-line)").count(), 0, "the slow block is plain");
+  await page.locator(".markdown-code").first().locator(".hl-keyword", { hasText: "const" }).waitFor();
+  console.log("PASS A chat code block too slow to highlight stays plain, the others are colored");
+
+  // a Markdown file the highlighter is slow on: its Preview shows, and its source stays plain with a
+  // notice, while the page runs on
+  await page.getByRole("button", { name: "slow preview", exact: true }).click();
+  const slow = page.getByRole("dialog", { name: "slow.md", exact: true });
+  await slow.locator(".file-viewer-markdown p").first().waitFor({ timeout: 15_000 });
+  await slow.getByRole("button", { name: "Show source", exact: true }).click();
+  const slowNote = slow.locator(".file-viewer-meta .file-viewer-notice");
+  await page.waitForFunction(() => document.querySelector(".file-viewer-notice")?.getAttribute("title") === "Too long to highlight", undefined, { timeout: 15_000 });
+  assert.equal(await slowNote.locator(".visually-hidden").innerText(), "Too long to highlight", "a screen reader still hears it");
+  assert.equal(await slow.locator(".hl-note").count(), 0, "the note is not repeated under the code");
+  await slow.locator(".file-viewer-text .hl-line").first().waitFor();
+  assert.equal(await slow.locator(".file-viewer-text code span:not(.hl-line)").count(), 0, "the source is plain");
+  const frozen = (await longTasks()).filter((duration) => duration >= 1_000);
+  assert.deepEqual(frozen, [], "no task held the page for a second");
+  console.log("PASS A Markdown file the highlighter is slow on previews, its source stays plain, and the page never freezes");
+  await page.getByRole("button", { name: "Close file", exact: true }).click();
+  await page.locator(".file-viewer").waitFor({ state: "hidden" });
+
+  // a Markdown file past the load limit: its first 256 KB, previewed, and the header says it is cut
+  await page.getByRole("button", { name: "long notes", exact: true }).click();
+  const long = page.getByRole("dialog", { name: "long.md", exact: true });
+  await long.locator(".file-viewer-markdown .markdown-h1").first().waitFor();
+  assert.match(await long.locator(".file-viewer-meta .file-viewer-notice").getAttribute("title") ?? "", /^Showing the first 256 KB$/);
+  await long.getByRole("button", { name: "Show source", exact: true }).waitFor();
+  console.log("PASS A Markdown file past the load limit previews its first 256 KB and says it is cut");
+  await page.getByRole("button", { name: "Close file", exact: true }).click();
+  await page.locator(".file-viewer").waitFor({ state: "hidden" });
+
+  // Settings → Highlight code, off: code is plain text, in the chat and the viewer
+  await page.evaluate(() => {
+    const settings = JSON.parse(localStorage.getItem("herdr-web-ui:settings") ?? "{}") as Record<string, unknown>;
+    localStorage.setItem("herdr-web-ui:settings", JSON.stringify({ ...settings, highlightCode: false }));
+  });
+  await page.goto(`${origin}/?pane=${encodeURIComponent(pane)}`);
+  await page.locator(".conn-live").waitFor();
+  await page.locator(".markdown-code .hl-code").first().waitFor();
+  assert.equal(await page.locator(".markdown-code .hl-keyword, .markdown-code .hl-number").count(), 0, "chat code is plain");
+  assert.equal(await page.locator(".markdown-code .hl-note").count(), 0, "plain by choice is not too long");
+  await page.getByRole("button", { name: "guide", exact: true }).click();
+  const plainGuide = page.getByRole("dialog", { name: "guide.md", exact: true });
+  await plainGuide.getByRole("heading", { name: "Guide", exact: true }).waitFor();
+  await plainGuide.getByRole("button", { name: "Show source", exact: true }).click();
+  await plainGuide.locator(".file-viewer-text .hl-line").first().waitFor();
+  assert.equal(await plainGuide.locator(".hl-keyword, .hl-function").count(), 0, "the viewer's code is plain");
+  assert.equal(await plainGuide.locator(".file-viewer-notice").count(), 0, "and no notice says it is too long");
+  console.log("PASS Settings → Highlight code off shows code plain, in the chat and the viewer");
   await page.getByRole("button", { name: "Close file", exact: true }).click();
   await page.locator(".file-viewer").waitFor({ state: "hidden" });
 

@@ -246,9 +246,11 @@ blue there instead of `--accent`, and Latte's colors are darkened to stay readab
   `>`, `\` and control characters stripped and names with spaces quoted.
 - Composer Enter behavior and folded thinking visibility are preferences, not typography tokens.
 - File viewer: `wrapCode` (wrap long lines instead of scrolling sideways; default off),
-  `textLoadLimit` (bytes of a text file loaded) and `highlightLimit` (characters highlighted), each
-  256 KB or 1 MB with defaults 1 MB and 256 KB, and `markdownWidth`: `readable` (the chat
-  lane, `--chat-w`, centered; default) or `full`.
+  `highlightCode` (color code in the chat and the file viewer; default on, off shows plain text),
+  and `markdownWidth`: `readable` (the chat lane, `--chat-w`, centered; default) or `full`. The
+  viewer loads the first 256 KB of a text file, a fixed limit. A Markdown file its Preview cannot
+  be parsed for within 2 s opens as its source with a notice; code a worker cannot highlight
+  within 2 s stays plain with one.
 - All settings share one sanitized `localStorage["herdr-web-ui:settings"]` record.
 
 ## 4. Spacing & Layout
@@ -1273,8 +1275,8 @@ One set for both themes: the card is island black wherever it shows.
 - Pages, in order: **Appearance** (theme, colors, density, language, sidebar rows), **Chat**
   (panes open in, show thinking, chat width, chat font size and family; then **Composer**: Enter
   sends, suggestion chip; then **Quick replies**), **Terminal** (font size and family, wheel
-  speed, input mode, Key bar), **File viewer** (wrap long lines, Markdown width; then **Large
-  files**: how much of a text file loads and up to what size it is highlighted), **Alerts**, **Voice input**, **Subscription usage**,
+  speed, input mode, Key bar), **File viewer** (wrap long lines, highlight code, Markdown width),
+  **Alerts**, **Voice input**, **Subscription usage**,
   **Shortcuts** (the complete platform-resolved list), **Phone & devices** (the phone address,
   Keep screen on, Install; then paired devices), **Remote PCs**, **About** (Updates, herdr,
   the repository links). A button that points at Updates opens the dialog on About.

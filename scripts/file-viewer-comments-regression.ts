@@ -18,6 +18,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { chromium, devices, type Browser, type BrowserContextOptions, type Locator, type Page } from "playwright-core";
 import { createServer } from "../server/index.ts";
+import { TEXT_LOAD_LIMIT } from "../src/lib/textPreview.ts";
 import { herdrRpc, workspaceClose, workspaceCreate } from "../server/herdr/client.ts";
 
 /** `src/sync.ts`: line 8 is the comparison a comment questions. */
@@ -93,8 +94,7 @@ mkdirSync(join(root, "src"));
 writeFileSync(join(root, "src", "sync.ts"), `${SYNC_LINES.join("\n")}\n`);
 mkdirSync(join(root, "docs"));
 writeFileSync(join(root, "docs", "spec.md"), `${SPEC_LINES.join("\n")}\n`);
-/** The smallest load limit (seeded in the settings): `src/big.txt`, a little past it, opens cut short. */
-const TEXT_LOAD_LIMIT = 256 * 1024;
+// `src/big.txt`, a little past the viewer's load limit, opens cut short
 writeFileSync(join(root, "src", "big.txt"), "a line of plain text, 0123456789\n".repeat(Math.ceil((TEXT_LOAD_LIMIT + 1024) / 33)));
 
 const DESKTOP: BrowserContextOptions = { viewport: { width: 1280, height: 800 } };
@@ -896,12 +896,12 @@ try {
     const context = await launched.newContext(options);
     const page = await context.newPage();
     await page.addInitScript((id) => {
-      localStorage.setItem("herdr-web-ui:settings", JSON.stringify({ language: "en", textLoadLimit: id.limit }));
+      localStorage.setItem("herdr-web-ui:settings", JSON.stringify({ language: "en" }));
       localStorage.setItem(`herdr-web-ui:view:${id.pane}`, "chat");
       // seeded once: a reload keeps what the page has done to them since
       const key = `herdr-web-ui:block-comments:${id.pane}`;
       if (id.seed.length > 0 && localStorage.getItem(key) === null) localStorage.setItem(key, JSON.stringify({ version: 1, comments: id.seed }));
-    }, { pane, limit: TEXT_LOAD_LIMIT, seed });
+    }, { pane, seed });
     page.setDefaultTimeout(10_000);
     const errors: string[] = [];
     page.on("pageerror", (error) => errors.push(error.message));
