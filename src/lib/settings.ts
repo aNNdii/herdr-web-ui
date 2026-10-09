@@ -113,6 +113,8 @@ export interface Settings {
   voicePolishChat: boolean;
   /** off by default: a terminal line is usually a command, kept as spoken */
   voicePolishTerminal: boolean;
+  /** code is colored by its language; off, it is plain text */
+  highlightCode: boolean;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -154,6 +156,7 @@ export const DEFAULT_SETTINGS: Settings = {
   voiceInput: "auto",
   voicePolishChat: true,
   voicePolishTerminal: false,
+  highlightCode: true,
 };
 
 export const QUICK_REPLIES_MAX = 12;
@@ -309,6 +312,7 @@ export function sanitizeSettings(raw: unknown): Settings {
     voiceInput: voiceButton(record["voiceInput"]),
     voicePolishChat: typeof record["voicePolishChat"] === "boolean" ? record["voicePolishChat"] : DEFAULT_SETTINGS.voicePolishChat,
     voicePolishTerminal: typeof record["voicePolishTerminal"] === "boolean" ? record["voicePolishTerminal"] : DEFAULT_SETTINGS.voicePolishTerminal,
+    highlightCode: typeof record["highlightCode"] === "boolean" ? record["highlightCode"] : DEFAULT_SETTINGS.highlightCode,
   };
 }
 
