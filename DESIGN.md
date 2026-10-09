@@ -245,12 +245,14 @@ blue there instead of `--accent`, and Latte's colors are darkened to stay readab
   `--font-mono`. A file viewer's Markdown preview takes the chat font size and family too. At most 200 characters, with `;`, `{`, `}`, `<`,
   `>`, `\` and control characters stripped and names with spaces quoted.
 - Composer Enter behavior and folded thinking visibility are preferences, not typography tokens.
-- File viewer: `wrapCode` (wrap long lines instead of scrolling sideways; default off),
-  `highlightCode` (color code in the chat and the file viewer; default on, off shows plain text),
-  and `markdownWidth`: `readable` (the chat lane, `--chat-w`, centered; default) or `full`. The
+- `highlightCode` colors code in the chat and the file viewer by its language (default on; off
+  shows plain text). Its toggle is on the Chat page.
+- File viewer: `wrapCode` (wrap long lines instead of scrolling sideways; default off) and
+  `markdownWidth`: `readable` (the chat lane, `--chat-w`, centered; default) or `full`. The
   viewer loads the first 256 KB of a text file, a fixed limit. A Markdown file its Preview cannot
   be parsed for within 2 s opens as its source with a notice; code a worker cannot highlight
-  within 2 s stays plain with one.
+  within 2 s stays plain with one. Past 20 000 lines the code is one text without line numbers,
+  with a notice.
 - All settings share one sanitized `localStorage["herdr-web-ui:settings"]` record.
 
 ## 4. Spacing & Layout
@@ -436,8 +438,8 @@ One set for both themes: the card is island black wherever it shows.
   `⋯`. Arrow keys move between items. A row that leaves the roster takes its open menu with it.
   A right-click anywhere on a workspace or pane row opens the same menu under the row's `⋯`
   (the menu key and Shift+F10 too, as the browser sends them); a name field being edited keeps
-  the browser's own menu, and a finger's long press is left alone (it picks the row up for a
-  drag, and the `⋯` is always shown on touch). PC headers and agent rows have no menu, so they
+  the browser's own menu, and a finger's long press is left alone (it picks a workspace row up
+  to be moved, and the `⋯` is always shown on touch). PC headers and agent rows have no menu, so they
   keep the browser's.
 - Close follows herdr's `ui.confirm_close`: a workspace close, or a pane close that takes its
   workspace with it, asks in a confirm first. A busy pane also asks before it stops. After a
@@ -447,14 +449,18 @@ One set for both themes: the card is island black wherever it shows.
   (`aria-current`).
 
 ### Badge (`.badge`)
-- Agent states read **READY**, **RUN**, **INPUT**, **DONE**; unknown reads **—**.
+- Agent states read **READY**, **RUN**, **INPUT**, **DONE**; unknown reads **—**. **BG** is a pane
+  whose turn ended while work it started still runs in the background (`background_wait`): it
+  stands in for DONE or READY until that work's turn ends.
 - Idle is elevated/dim; working, blocked and done use their own tint and text. RUN carries a small
-  breathing dot before the word; the word itself never fades.
+  breathing dot before the word; the word itself never fades. BG takes the working tint and text,
+  holding still; a tab's dot for it is a working-coloured ring.
 - The written label and unknown dashed edge keep color from being the only signal.
 - The sidebar's compact variant weights each state by how much it asks of the user. Waiting for
   an answer is the one filled glyph, a filled message circle in `--status-blocked`; finished and
   not yet looked at is an 8px dot in `--status-done`, as an unread mark is; working is a stepped
-  spinning arc in `--text-dim`, since its motion already says it; ready and unknown draw
+  spinning arc in `--text-dim`, since its motion already says it; BG is the same arc held still in
+  `--status-working`, since nothing about it moves until its work ends; ready and unknown draw
   nothing. A pane herdr could not restore
   draws a warning triangle in `--status-blocked`. The element, its label and its tooltip are there
   for every state, and each drawn state has its own glyph as well as its color. Background tasks
@@ -554,6 +560,10 @@ One set for both themes: the card is island black wherever it shows.
   workspace. A custom worktree workspace name follows the branch on the same line in dim text.
   Selection uses a neutral rounded fill; workspace rows have no amber rail or separate reorder
   gutter. Drag the row itself, or press `Alt+↑/↓` while its selector is focused, to reorder it.
+  On a touch screen (`pointer: coarse`) the browser's drag is off: a long press (400ms, still
+  within 8px) lifts the row (`.is-lifted`: `--bg-elevated` with `--shadow-card`), it follows
+  the finger, the list scrolls near its edges, and a 2px `--accent` line (`data-drop`) shows
+  where it lands. The row menu's Move up and Move down do the same one step at a time.
   Dragging is disabled while a name field is open. Each workspace's `⋯` opens its row menu
   (`.row-menu-toggle`: no width at rest; shown on hover, focus, selection and while its menu is
   open; always on touch). Inline server failures
@@ -707,13 +717,16 @@ One set for both themes: the card is island black wherever it shows.
   one-line row, as is a user turn's copy, and a skill list under a user turn clears that target.
 - Markdown supports headings, lists (a task item `- [x]` / `- [ ]` shows a checked or empty box in
   place of its bullet, not clickable), links, quotes, tables, inline/fenced code and code-copy
-  actions. Fenced code is syntax-highlighted by role (`--syntax-*`) up to 100 KB.
+  actions.
   A link keeps `--accent` and a file chip reads in `--text-strong` with a dotted underline; both
   underlines are `--text-dim` at rest and both take the accent on hover and focus-visible.
   Code blocks are `--radius-lg` and never scroll inside: one longer than 30 lines opens at its
   first 20 behind **Show all N lines**. On touch a block has a header strip (language, copy);
   with a mouse and no touch screen the strip becomes a corner control over the block's top right,
   shown on hover or focus-within (no transition under reduced motion).
+  Fenced code is colored by role (`--syntax-*`) up to 100 KB, in a worker past 2 KB; a longer block,
+  or one the worker cannot color within 2 s, stays plain with a note under it. Past 20 000 lines
+  code is drawn as one text rather than an element per line, so it never holds the page.
   A table fills the reply's width; its cells, file paths included, break between words only, so a
   column is never narrower than its longest word, and a table without room scrolls sideways in
   its own box.
@@ -1065,7 +1078,8 @@ One set for both themes: the card is island black wherever it shows.
   `--text`, the agent as a hairline mono pill, the prompt in the bounded mono input box.
 
 ### Background tasks ended (`.chat-task-results`)
-- Where OmO reports background tasks that ended, the transcript shows one `--bg-elevated` card
+- Where OmO reports background tasks that ended, or a Claude Code subagent ends (its
+  `<task-notification>`, drawn once however many records carry it), the transcript shows one `--bg-elevated` card
   (hairline edge, `--radius-lg`) on the prose column: a dim `--fs-xs` line with the layers icon,
   "2 background tasks ended" and the time, then one hairline-separated row per task.
 - A row is the status icon (`--status-done` check, `--status-blocked` x, dim slash for
@@ -1173,7 +1187,7 @@ One set for both themes: the card is island black wherever it shows.
   pushed to the button's side. It draws, at `--fs-xs`: the model pill and the uploading
   or reconnecting sentence in `--text-dim`. The background-task chip is a button in the left controls;
   its count is repeated here as `.visually-hidden` text, so a change is still announced. The agent's written name, its separator, the state words
-  `READY` / `RUN` / `INPUT` / `DONE` and the sentence `Reasoning high` stay in it for assistive tech only
+  `READY` / `RUN` / `INPUT` / `DONE` / `BG` and the sentence `Reasoning high` stay in it for assistive tech only
   (`.visually-hidden`): the header names the pane, and the state is told by Stop, the live row
   and the prompt card. No state word is drawn in the chat composer.
 - The model pill (`.composer-pill`) holds the agent mark, the model, the reasoning level and the
@@ -1385,9 +1399,9 @@ One set for both themes: the card is island black wherever it shows.
   control, the X, Escape and the scrim take the same entries off. Beside the list, turning pages
   replaces the one entry. A reload steps out of the entries it finds; Forward reopens the page.
 - Pages, in order: **Appearance** (theme, colors, density, language, sidebar rows), **Chat**
-  (panes open in, show thinking, chat width, chat font size and family; then **Composer**: Enter
-  sends, suggestion chip; then **Quick replies**), **Terminal** (font size and family, wheel
-  speed, input mode, Key bar), **File viewer** (wrap long lines, highlight code, Markdown width),
+  (panes open in, show thinking, chat width, chat font size and family, highlight code; then
+  **Composer**: Enter sends, suggestion chip; then **Quick replies**), **Terminal** (font size and family, wheel
+  speed, input mode, Key bar), **File viewer** (wrap long lines, Markdown width),
   **Alerts**, **Voice input**, **Subscription usage**,
   **Shortcuts** (the platform-resolved global bindings), **Phone & devices** (the phone address,
   Keep screen on, Install; then paired devices), **Remote PCs**, **About** (Updates, herdr,
@@ -1478,6 +1492,7 @@ One set for both themes: the card is island black wherever it shows.
 | Micro | `--dur-fast` | `120ms` | Hover, active, toggle and control state |
 | Standard | `--dur-base` | `180ms` | Drawer slide; reserved dialog timing token |
 | Pulse | `--dur-pulse` | `1600ms` | Working and reconnecting dots (trough opacity 0.35; text never pulses) |
+| Spin | `--dur-spin` | `1600ms` | The sidebar's working arc: forty-eight steps over the turn (about 30 frames a second), under a pixel of travel each, where a coarser count reads as a stutter; the step count sets the frame rate, so this endless animation stays stepped |
 | Easing | `--ease-out` | `cubic-bezier(0.2, 0, 0, 1)` | Finite transitions |
 | Pulse easing | `--ease-pulse` | `steps(2, jump-none)` | Endless working and reconnecting dots; avoids drawing every display refresh |
 | Spring easing | `--ease-spring` | `cubic-bezier(0.32, 0.72, 0, 1)` | Voice recording pill enter (180ms, scale 0.96->1 + opacity, from the mic button) and exit (120ms) |
