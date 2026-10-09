@@ -77,9 +77,10 @@ export interface FileViewerProps {
 }
 
 /**
- * Copies the whole file; owns its "copied" flip, so only the button re-renders for it. Without a
- * clipboard API (plain-HTTP LAN) it selects the source `<pre>` instead; in a Markdown Preview there
- * is none, so `onShowSource` switches to Code first and the viewer selects it once rendered.
+ * Copies the whole file; owns its "copied" flip, so only the button re-renders for it. When nothing
+ * copies it (no clipboard API on plain-HTTP LAN, and the browser's copy command refused: copyText)
+ * it selects the source `<pre>` instead; in a Markdown Preview there is none, so `onShowSource`
+ * switches to Code first and the viewer selects it once rendered.
  */
 function CopyFileButton({ text, sourceRef, onShowSource }: { text: string; sourceRef: RefObject<HTMLPreElement>; onShowSource: () => void }) {
   const t = useT();

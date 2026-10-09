@@ -384,8 +384,12 @@ try {
   assert.equal(await guide.getByRole("button", { name: "Wrap long lines", exact: true }).count(), 0, "wrapping is a setting, not a header action");
   assert.equal(await guide.locator(".file-viewer-text[data-wrap]").count(), 0, "lines do not wrap by default");
   await guide.getByRole("button", { name: "Show source", exact: true }).click();
-  // Without a clipboard API (plain-HTTP LAN) Copy selects the source: from a Preview it switches to Code first
-  await page.evaluate(() => Object.defineProperty(navigator, "clipboard", { value: { writeText: () => Promise.reject(new Error("no clipboard")) }, configurable: true }));
+  // When nothing can copy (no clipboard API on plain-HTTP LAN, and the browser's copy command
+  // refused) Copy selects the source: from a Preview it switches to Code first
+  await page.evaluate(() => {
+    Object.defineProperty(navigator, "clipboard", { value: { writeText: () => Promise.reject(new Error("no clipboard")) }, configurable: true });
+    document.execCommand = () => false;
+  });
   await guide.getByRole("button", { name: "Copy file", exact: true }).click();
   await guide.locator(".file-viewer-text .hl-line").first().waitFor();
   assert.equal(await guide.getByRole("button", { name: "Show source", exact: true }).getAttribute("aria-pressed"), "true");
@@ -395,7 +399,7 @@ try {
   await page.evaluate(() => window.getSelection()?.removeAllRanges());
   await guide.getByRole("button", { name: "Copy file", exact: true }).click();
   assert.equal(await page.evaluate(() => window.getSelection()?.toString()), sourceText, "from Code, Copy selects the source in place");
-  console.log("PASS Without a clipboard API, Copy selects the Markdown source (switching a Preview to Code)");
+  console.log("PASS When nothing can copy, Copy selects the Markdown source (switching a Preview to Code)");
   await guide.getByRole("button", { name: "Show source", exact: true }).click();
   await guide.getByRole("button", { name: "notes", exact: true }).click();
   const linked = page.getByRole("dialog", { name: "notes.txt", exact: true });
