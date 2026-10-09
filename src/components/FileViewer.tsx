@@ -13,6 +13,7 @@ import { ApiError } from "../lib/api.ts";
 import { blockComments, isReplyComment, useBlockComments } from "../lib/blockComments.ts";
 import { formatBytes } from "../lib/bridgeProgress.ts";
 import { LOCAL_MACHINE, paneStorageId } from "../../shared/machines.ts";
+import { useOpeningPaneLane } from "../lib/chatLane.ts";
 import { useMachineApi, useMachineId } from "../lib/machineContext.tsx";
 import { copyText, selectContents } from "../lib/clipboard.ts";
 import { fileLines, pathLabel, type FileComment, type FileView, type LineRange } from "../lib/fileComments.ts";
@@ -104,7 +105,8 @@ function CopyFileButton({ text, sourceRef, onShowSource }: { text: string; sourc
 /**
  * A file an agent wrote, opened in the browser: images, video and audio (streamed, so they
  * play and seek at once), PDFs, and the start of a text file. Each opens whole in a new tab (a
- * text file raw), where it can be saved too; a file no tab can show is offered as a download.
+ * text file raw), and anything can be downloaded: an installed app on a phone opens a new tab in
+ * an in-app view, which does not always offer to save it.
  */
 export function FileViewer({ path: asked, paneId, machineId, paneFolder, onClose, onOpen, commentId = null, keyboardActive = true }: FileViewerProps) {
   const t = useT();
@@ -119,6 +121,8 @@ export function FileViewer({ path: asked, paneId, machineId, paneFolder, onClose
   const [candidates, setCandidates] = useState<string[] | null>(null);
   // Escape closes it, Tab stays in it, and the focus goes back to the row that opened it
   const surface = useFocusTrap<HTMLElement>(true);
+  // Settings → Chat width, Default: the Preview is as wide as the chat of the pane that opened it
+  useOpeningPaneLane(surface, paneId === null ? null : paneStorageId(machineId, paneId));
   // a kind, not a message: it is said in the language of the moment it shows
   const [error, setError] = useState<"missing" | "unreadable" | null>(null);
   const [loaded, setLoaded] = useState<LoadedText | null>(null);
@@ -282,8 +286,9 @@ export function FileViewer({ path: asked, paneId, machineId, paneFolder, onClose
   const counted = t(fileComments === 1 ? "{count} comment" : "{count} comments", { count: fileComments });
   const countLabel = outdatedCount > 0 ? `${counted} · ${t("{count} outdated", { count: outdatedCount })}` : counted;
   // a phone stacks the actions under the name once there are two or more, and one fits beside it:
-  // a text file always has Raw, so a second is Show source, Copy or the comments
-  const stacked = textFile && (previewable || copyable || commentsShown);
+  // every file has Download, and all but a binary one a new tab (Raw for text) as well; a binary
+  // one has a second action only in its comments
+  const stacked = info?.kind !== "binary" || commentsShown;
   /** What the viewer shows below its header: a folder, an error, a choice of files, or the file. */
   const body = (() => {
     if (directory !== null) return <DirectoryBrowser key={directory} start={directory} onOpenFile={onOpen ?? setPath} />;
@@ -358,12 +363,11 @@ export function FileViewer({ path: asked, paneId, machineId, paneFolder, onClose
             {textFile && previewable && <div className="file-viewer-group">
               <button type="button" className="icon-button file-viewer-action" aria-pressed={mode === "code"} aria-label={t("Show source")} title={t("Show source")} onClick={() => setChosen({ path, mode: mode === "code" ? "preview" : "code" })}><Code aria-hidden="true" /></button>
             </div>}
-            {/* the file itself: a new tab shows it whole (Raw for text) and saves it from there, so a
-                download of its own is offered only for a file no tab can show */}
+            {/* the file itself: a new tab shows it whole (Raw for text), except a file no tab can
+                show, and a download saves it, also where a new tab is an app's in-app view */}
             <div className="file-viewer-group">
-              {info?.kind === "binary"
-                ? <a className="icon-button file-viewer-action" href={fileUrl(shownPath, paneId, true)} download={info.name} aria-label={t("Download")} title={t("Download")}><Download aria-hidden="true" /></a>
-                : <a className="icon-button file-viewer-action" href={url} target="_blank" rel="noopener" aria-label={textFile ? t("Raw") : t("Open in a new tab")} title={textFile ? t("Raw") : t("Open in a new tab")}><ExternalLink aria-hidden="true" /></a>}
+              {info?.kind !== "binary" && <a className="icon-button file-viewer-action" href={url} target="_blank" rel="noopener" aria-label={textFile ? t("Raw") : t("Open in a new tab")} title={textFile ? t("Raw") : t("Open in a new tab")}><ExternalLink aria-hidden="true" /></a>}
+              <a className="icon-button file-viewer-action" href={fileUrl(shownPath, paneId, true)} download={info?.name ?? true} aria-label={t("Download")} title={t("Download")}><Download aria-hidden="true" /></a>
               {copyable && <CopyFileButton text={loaded.text} sourceRef={sourceRef} onShowSource={showSourceToSelect} />}
             </div>
           </div>

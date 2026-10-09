@@ -92,9 +92,8 @@ between releases do not reach them. Remote-PC runtime bundles are versioned sepa
   you do not trust.
 - A GitHub release opens with its patch notes, short lines under New features, Improvements and
   Bug fixes as an install shows them, with the full changelog folded underneath.
-- The file viewer offers a download only for a file it cannot show; every other file opens whole in
-  a new tab, where it can be saved. A size under 10 MB shows one decimal (`1.3 MB`), in the viewer
-  and in a bridge update's progress.
+- A file the viewer cannot show has no Open in new tab, only Download. A size under 10 MB shows one
+  decimal (`1.3 MB`), in the viewer and in a bridge update's progress.
   ([#429](https://github.com/devswha/herdr-web-ui/pull/429) by @aNNdii)
 - The website moved to <https://herdrweb.dev/>, and the install commands with it:
   `curl -fsSL https://herdrweb.dev/install.sh | sh` and

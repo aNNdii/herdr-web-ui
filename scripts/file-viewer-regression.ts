@@ -41,8 +41,10 @@ writeFileSync(join(root, "big.txt"), "a line of plain text, 0123456789\n".repeat
 writeFileSync(join(root, "big.ts"), "export const value = 1;\n".repeat(Math.ceil((TEXT_LOAD_LIMIT + 1024) / 24)));
 // 20 KB of nested quotes: parsed one level per `>`, they overflowed the stack and blanked the app
 writeFileSync(join(root, "deep.md"), `${">".repeat(20_000)} deepest\n`);
-// one line of "[a" at the load limit (256 KB): seconds for the highlighter (the Markdown parser reads it in linear time)
-writeFileSync(join(root, "slow.md"), "[a".repeat(128 * 1024));
+// a YAML block of dashes in a Markdown file: seconds for the highlighter in Chromium as in Bun (8 s at
+// 64 KB), while the Markdown parser reads it in a millisecond. A line of "[a" is slow in Bun alone:
+// Chromium highlights 256 KB of it in under half a second, within the worker's budget.
+writeFileSync(join(root, "slow.md"), `Notes on a slow file.\n\n\`\`\`yaml\n${"-".repeat(90_000)}\n\`\`\`\n`);
 // ordinary Markdown past the load limit: its start is previewed
 writeFileSync(join(root, "long.md"), "# Notes\n\nA paragraph of ordinary notes, with *emphasis* and a [link](./notes.txt).\n\n".repeat(4_000));
 // an empty file has no first byte: its range answers 416, which is not an error
@@ -323,13 +325,16 @@ try {
   await page.getByRole("button", { name: "Close file", exact: true }).click();
   await page.locator(".file-viewer").waitFor({ state: "hidden" });
 
-  // Markdown: Show source (a toggle: off is the Preview), Raw, Copy; no Download, no Wrap (a setting)
+  // Markdown: Show source (a toggle: off is the Preview), Raw, Download, Copy; no Wrap (a setting)
   const guide = page.getByRole("dialog", { name: "guide.md", exact: true });
   await page.getByRole("button", { name: "guide", exact: true }).click();
   await guide.getByRole("heading", { name: "Guide", exact: true }).waitFor();
   await guide.locator(".hl-keyword", { hasText: "const" }).waitFor();
   assert.equal(await guide.getByRole("button", { name: "Show source", exact: true }).getAttribute("aria-pressed"), "false");
-  assert.equal(await guide.getByRole("link", { name: "Download", exact: true }).count(), 0, "a new tab (Raw) saves the file too");
+  // a new tab is an in-app view in an installed app on a phone, where saving is not always offered
+  const download = guide.getByRole("link", { name: "Download", exact: true });
+  assert.equal(await download.getAttribute("download"), "guide.md", "the file can be saved from the viewer");
+  assert.match(await download.getAttribute("href") ?? "", /\/api\/fs\/file\?.*download=1/);
   assert.equal(await guide.getByRole("button", { name: "Wrap long lines", exact: true }).count(), 0, "Wrap is for code, not the rendered Markdown");
   console.log("PASS Markdown opens as a Preview with a highlighted code block");
   // the preview reads as the chat does: its font size and family, and at most its lane's width
@@ -357,6 +362,12 @@ try {
     return preview !== null && chat !== null && getComputedStyle(preview).maxWidth === `${chat.getBoundingClientRect().width}px`;
   });
   assert.equal(await page.locator(".file-viewer-markdown").evaluate((element) => getComputedStyle(element).maxWidth), "960px", "Default is as wide as the chat's lane");
+  // the lane is the opening pane's, written on the viewer: one length on the document would be
+  // shared, and overwritten, by two panes side by side
+  assert.deepEqual(await page.evaluate(() => ({
+    root: document.documentElement.style.getPropertyValue("--chat-w"),
+    viewer: document.querySelector<HTMLElement>(".file-viewer")?.style.getPropertyValue("--chat-w") !== "",
+  })), { root: "", viewer: true }, "the viewer carries the lane, not the document");
   await page.setViewportSize({ width: 390, height: 844 });
   assert.match(await guide.locator(".file-viewer-markdown pre, .file-viewer-markdown .hl-code").first().evaluate((element) => getComputedStyle(element).fontFamily), /monospace/, "its code stays monospace");
   console.log("PASS A Markdown preview takes the chat's font size, font and width");
@@ -429,8 +440,18 @@ try {
   // a quote nested 20 000 deep renders as a quote nested to the parser's limit, the rest its text
   await page.getByRole("button", { name: "deep quotes", exact: true }).click();
   const deep = page.getByRole("dialog", { name: "deep.md", exact: true });
-  // one paragraph, in the innermost quote: the markers past the limit, then the text
-  await deep.locator(".file-viewer-markdown blockquote p", { hasText: "> deepest" }).waitFor();
+  // one paragraph, in the innermost quote: the markers past the limit, then the text. At 390px the
+  // quotes' padding and rails leave it no width, as the same quote does in the chat, so the step
+  // checks that it is there and how deep, not that it can be read.
+  const deepest = deep.locator(".file-viewer-markdown blockquote p", { hasText: "> deepest" });
+  await deepest.waitFor({ state: "attached" });
+  const quoteDepth = await deepest.evaluate((element) => {
+    let depth = 0;
+    for (let parent = element.parentElement; parent; parent = parent.parentElement) if (parent.tagName === "BLOCKQUOTE") depth += 1;
+    return depth;
+  });
+  // the parser nests 32 levels (MAX_QUOTE_DEPTH in src/lib/markdown.ts); the 33rd holds the rest as text
+  assert.equal(quoteDepth, 33, "the quote nests to the parser's limit");
   assert.equal(await deep.getByRole("alert").count(), 0, "the preview renders, not its fallback");
   console.log("PASS A Markdown file of 20 000 nested quotes renders, and the app stays");
   await page.getByRole("button", { name: "Close file", exact: true }).click();
