@@ -1,6 +1,6 @@
 import { forwardRef, Fragment, memo, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 
-import { canHighlight, extendLines, normalizeCode, plainLines, type Lines } from "../lib/highlight.ts";
+import { canHighlight, countLines, extendLines, LINE_ELEMENT_LIMIT, normalizeCode, plainLines, type Lines } from "../lib/highlight.ts";
 import { highlightedFrom, highlightKnown, highlightOffThread, type Highlighted } from "../lib/highlightOffThread.ts";
 import { useT } from "../lib/i18n.ts";
 import { useSettings } from "../lib/settings.ts";
@@ -10,15 +10,16 @@ import "./HighlightedCode.css";
  * The lines of `code` to show now, and whether they were left plain for being too long. Highlighting
  * never holds the page: short code is highlighted at once, longer code in a worker (shown plain
  * until it answers, or with the colors it had while a reply grows), and code the worker gives up on
- * stays plain. Above `limit` characters it is not tried at all; without one, the worker's budget
- * alone bounds it. Off in Settings, or in a language it has no grammar for, every code is plain and
- * never too long.
+ * stays plain. Above `limit` characters, or `LINE_ELEMENT_LIMIT` lines, it is not tried at all;
+ * otherwise the worker's budget bounds it. Off in Settings, or in a language it has no grammar for,
+ * every code is plain and never too long.
  */
 export function useHighlightedLines(code: string, language: string | null, limit?: number): Highlighted {
   const { settings } = useSettings();
   const source = useMemo(() => normalizeCode(code), [code]);
   const highlighted = settings.highlightCode && canHighlight(language) ? language : null;
-  const overLimit = highlighted !== null && limit !== undefined && code.length > limit;
+  const manyLines = useMemo(() => countLines(source) > LINE_ELEMENT_LIMIT, [source]);
+  const overLimit = highlighted !== null && ((limit !== undefined && code.length > limit) || manyLines);
   // what is known without waiting: no language, too long, short enough, or highlighted before
   const known = useMemo((): Highlighted | null => {
     if (highlighted === null || overLimit) return { lines: plainLines(source), tooLong: overLimit };
@@ -69,22 +70,28 @@ interface CodeLinesProps {
  * The lines are inline spans, each but the last followed by a literal "\n" text node, so the
  * text of the `<pre>` is the code itself: `innerText` and a copied selection keep every blank line.
  * Block lines would add a line break of their own between lines and drop or double the blank ones.
- * The "\n" stays outside the `.hl-line`: a line's element holds its text only. The ref is that
- * `<pre>`: the file viewer selects it when the clipboard is out of reach.
+ * The "\n" stays outside the `.hl-line`: a line's element holds its text only. Past
+ * `LINE_ELEMENT_LIMIT` lines it is one text, as drawing an element per line would hold the page.
+ * The ref is that `<pre>`: the file viewer selects it when the clipboard is out of reach.
  */
 export const CodeLines = memo(forwardRef<HTMLPreElement, CodeLinesProps>(function CodeLines({ lines, lineNumbers = false, wrap = false, className, firstLine }, ref) {
+  // one text past LINE_ELEMENT_LIMIT lines, with no numbers then: they are an element per line
+  const plain = lines.length > LINE_ELEMENT_LIMIT;
   // index keys: the lines are a static list that is rebuilt as a whole
-  const elements = useMemo(() => lines.map((tokens, index) => (
-    <Fragment key={index}>
-      <span className="hl-line" data-source-line={firstLine === undefined ? undefined : firstLine + index}>
-        {tokens.map((token, n) => token.role === null ? token.text : <span className={`hl-${token.role}`} key={n}>{token.text}</span>)}
-      </span>
-      {index < lines.length - 1 && "\n"}
-    </Fragment>
-  )), [lines, firstLine]);
+  const elements = useMemo(() => plain
+    ? lines.map((tokens) => tokens.map((token) => token.text).join("")).join("\n")
+    : lines.map((tokens, index) => (
+      <Fragment key={index}>
+        <span className="hl-line" data-source-line={firstLine === undefined ? undefined : firstLine + index}>
+          {tokens.map((token, n) => token.role === null ? token.text : <span className={`hl-${token.role}`} key={n}>{token.text}</span>)}
+        </span>
+        {index < lines.length - 1 && "\n"}
+      </Fragment>
+    )), [lines, plain, firstLine]);
+  const numbered = lineNumbers && !plain;
   // the gutter is as wide as the last line's number, at least two digits
-  const gutter = lineNumbers ? { "--hl-digits": String(Math.max(2, String(lines.length).length)) } as CSSProperties : undefined;
-  return <pre ref={ref} className={className ? `hl-code ${className}` : "hl-code"} style={gutter} data-line-numbers={lineNumbers ? "" : undefined} data-wrap={wrap ? "" : undefined}><code>{elements}</code></pre>;
+  const gutter = numbered ? { "--hl-digits": String(Math.max(2, String(lines.length).length)) } as CSSProperties : undefined;
+  return <pre ref={ref} className={className ? `hl-code ${className}` : "hl-code"} style={gutter} data-line-numbers={numbered ? "" : undefined} data-wrap={wrap ? "" : undefined}><code>{elements}</code></pre>;
 }));
 
 interface HighlightedCodeProps {

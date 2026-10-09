@@ -137,14 +137,17 @@ function List({ block, path, commentable }: { block: ListBlock; path: number[]; 
 function ItemView({ list, index, path, commentable }: { list: ListBlock; index: number; path: number[]; commentable: boolean }) {
   const item = list.items[index]!;
   const comment = useCommentable(path, commentable);
+  const t = useT();
   const id = useId();
   // `list-style` only works on the <li>, so the task class stays there; the comment's classes go on the wrapper
   return (
     <li className={item.checked === undefined ? undefined : "markdown-task"}>
       <div ref={comment.ref} className={comment.className === undefined ? "markdown-item" : `markdown-item ${comment.className}`} {...sourceAttributes(item.source)}>
         {/* a task's box shows its state; the agent's text owns it, so it cannot be ticked here. Drawn,
-            not an <input>: a disabled checkbox is greyed by the browser and ignores the accent */}
-        {item.checked !== undefined && <span className="markdown-task-box" role="checkbox" aria-checked={item.checked} aria-disabled="true" aria-labelledby={id}>{item.checked && <Check aria-hidden="true" />}</span>}
+            not an <input>: a disabled checkbox is greyed by the browser and ignores the accent. It is
+            named by the item's text, or, with none (`- [ ]`), as an empty task */}
+        {item.checked !== undefined && <span className="markdown-task-box" role="checkbox" aria-checked={item.checked} aria-disabled="true"
+          aria-labelledby={item.content.length === 0 ? undefined : id} aria-label={item.content.length === 0 ? t("Empty task") : undefined}>{item.checked && <Check aria-hidden="true" />}</span>}
         {item.checked === undefined ? <Inline nodes={item.content} /> : <span id={id}><Inline nodes={item.content} /></span>}
       </div>
       {item.blocks !== undefined && <Blocks blocks={item.blocks} path={path} commentable={commentable} />}

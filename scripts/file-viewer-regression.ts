@@ -18,9 +18,11 @@ const transcript = join(codexHome, "sessions", `rollout-2026-09-28T00-00-00-${th
 writeFileSync(transcript, [
   { type: "session_meta", payload: { id: thread, cwd: root } },
   { type: "response_item", payload: { type: "message", role: "user", content: [{ type: "input_text", text: "Show me the demo video." }] } },
-  { type: "response_item", payload: { type: "message", role: "assistant", phase: "final_answer", content: [{ type: "output_text", text: `Open [demo video](./preview.webm) or [notes](./notes.txt) or [guide](./docs/guide.md) or [big](./big.txt) or [big code](./big.ts) or [deep quotes](./deep.md) or [empty](./empty.txt) or [slow preview](./slow.md) or [long notes](./long.md) or [file URI notes](${new URL(`file://${join(root, "notes.txt")}`).href}) or [folder](${new URL(`file://${root}`).href}).\n\n${new URL(`file://${join(root, "notes.txt")}`).href}\n\n\`\`\`ts\nconst answer = 42;\n\nexport { answer };\n\`\`\`` }] } },
+  { type: "response_item", payload: { type: "message", role: "assistant", phase: "final_answer", content: [{ type: "output_text", text: `Open [demo video](./preview.webm) or [notes](./notes.txt) or [guide](./docs/guide.md) or [big](./big.txt) or [big code](./big.ts) or [deep quotes](./deep.md) or [empty](./empty.txt) or [slow preview](./slow.md) or [long notes](./long.md) or [many lines](./lines.txt) or [file URI notes](${new URL(`file://${join(root, "notes.txt")}`).href}) or [folder](${new URL(`file://${root}`).href}).\n\n${new URL(`file://${join(root, "notes.txt")}`).href}\n\n\`\`\`ts\nconst answer = 42;\n\nexport { answer };\n\`\`\`` }] } },
   // a block the highlighter is quadratic on (a line of dashes in YAML): seconds on the page
   { type: "response_item", payload: { type: "message", role: "assistant", phase: "final_answer", content: [{ type: "output_text", text: `Dashes:\n\n\`\`\`yaml\n${"-".repeat(90_000)}\n\`\`\`` }] } },
+  // more lines than are drawn one element each (LINE_ELEMENT_LIMIT): 30 000 elements held the page
+  { type: "response_item", payload: { type: "message", role: "assistant", phase: "final_answer", content: [{ type: "output_text", text: `Lines:\n\n\`\`\`\n${"x\n".repeat(30_000)}\`\`\`` }] } },
 ].map((row) => JSON.stringify(row)).join("\n"));
 const db = new Database(join(codexHome, "state_5.sqlite"));
 db.exec("CREATE TABLE threads (id TEXT, rollout_path TEXT, cwd TEXT, archived INTEGER, agent_role TEXT, created_at INTEGER, updated_at INTEGER, source TEXT, first_user_message TEXT)");
@@ -47,6 +49,8 @@ writeFileSync(join(root, "deep.md"), `${">".repeat(20_000)} deepest\n`);
 writeFileSync(join(root, "slow.md"), `Notes on a slow file.\n\n\`\`\`yaml\n${"-".repeat(90_000)}\n\`\`\`\n`);
 // ordinary Markdown past the load limit: its start is previewed
 writeFileSync(join(root, "long.md"), "# Notes\n\nA paragraph of ordinary notes, with *emphasis* and a [link](./notes.txt).\n\n".repeat(4_000));
+// more lines than are drawn one element each (LINE_ELEMENT_LIMIT): 256 KB of line breaks held the page 4 s
+writeFileSync(join(root, "lines.txt"), "\n".repeat(TEXT_LOAD_LIMIT));
 // an empty file has no first byte: its range answers 416, which is not an error
 writeFileSync(join(root, "empty.txt"), "");
 let workspace: string | undefined;
@@ -71,10 +75,15 @@ try {
   const context = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
   const page = await context.newPage();
   // seeded once: a later step changes a setting and reloads. The chat's own font size and
-  // family are set, so a Markdown preview can be shown to take them over
+  // family are set, so a Markdown preview can be shown to take them over. Long tasks are recorded
+  // from the first paint: nothing an agent writes may hold the page for a second
   await page.addInitScript(() => {
     if (localStorage.getItem("herdr-web-ui:settings") === null) localStorage.setItem("herdr-web-ui:settings", JSON.stringify({ language: "en", chatFontSize: 17, chatFontFamily: "Georgia" }));
+    const record = window as unknown as { longTasks: number[] };
+    record.longTasks = [];
+    new PerformanceObserver((list) => { for (const entry of list.getEntries()) record.longTasks.push(entry.duration); }).observe({ type: "longtask" });
   });
+  const frozen = async () => (await page.evaluate(() => (window as unknown as { longTasks?: number[] }).longTasks ?? [])).filter((duration) => duration >= 1_000);
   page.setDefaultTimeout(10_000);
   const errors: string[] = [];
   page.on("pageerror", (error) => errors.push(error.message));
@@ -471,18 +480,19 @@ try {
   await page.getByRole("button", { name: "Close file", exact: true }).click();
   await page.locator(".file-viewer").waitFor({ state: "hidden" });
 
-  // nothing an agent writes can freeze the page: a long task of a second or more is a frozen tab
-  const longTasks = async () => page.evaluate(() => (window as unknown as { longTasks?: number[] }).longTasks ?? []);
-  await page.evaluate(() => {
-    const record = window as unknown as { longTasks: number[] };
-    record.longTasks = [];
-    new PerformanceObserver((list) => { for (const entry of list.getEntries()) record.longTasks.push(entry.duration); }).observe({ type: "longtask" });
-  });
   // a chat code block the highlighter gives up on stays plain and says so
   await page.locator(".markdown-code .hl-note", { hasText: "Too long to highlight" }).waitFor();
   assert.equal(await page.locator(".markdown-code").nth(1).locator("code span:not(.hl-line)").count(), 0, "the slow block is plain");
   await page.locator(".markdown-code").first().locator(".hl-keyword", { hasText: "const" }).waitFor();
   console.log("PASS A chat code block too slow to highlight stays plain, the others are colored");
+  // a block of more lines than are drawn one element each opens whole as one text
+  const many = page.locator(".markdown-code").nth(2);
+  await many.getByRole("button", { name: "Show all 30000 lines", exact: true }).click();
+  await many.getByRole("button", { name: "Show less", exact: true }).waitFor();
+  assert.equal(await many.locator(".hl-line").count(), 0, "no element per line");
+  assert.equal((await many.locator(".hl-code").innerText()).split("\n").length, 30_000);
+  assert.deepEqual(await frozen(), [], "no task held the page for a second");
+  console.log("PASS A chat code block of 30 000 lines opens as one text, and the page never freezes");
 
   // a Markdown file the highlighter is slow on: its Preview shows, and its source stays plain with a
   // notice, while the page runs on
@@ -496,8 +506,7 @@ try {
   assert.equal(await slow.locator(".hl-note").count(), 0, "the note is not repeated under the code");
   await slow.locator(".file-viewer-text .hl-line").first().waitFor();
   assert.equal(await slow.locator(".file-viewer-text code span:not(.hl-line)").count(), 0, "the source is plain");
-  const frozen = (await longTasks()).filter((duration) => duration >= 1_000);
-  assert.deepEqual(frozen, [], "no task held the page for a second");
+  assert.deepEqual(await frozen(), [], "no task held the page for a second");
   console.log("PASS A Markdown file the highlighter is slow on previews, its source stays plain, and the page never freezes");
   await page.getByRole("button", { name: "Close file", exact: true }).click();
   await page.locator(".file-viewer").waitFor({ state: "hidden" });
@@ -509,6 +518,19 @@ try {
   assert.match(await long.locator(".file-viewer-meta .file-viewer-notice").getAttribute("title") ?? "", /^Showing the first 256 KB$/);
   await long.getByRole("button", { name: "Show source", exact: true }).waitFor();
   console.log("PASS A Markdown file past the load limit previews its first 256 KB and says it is cut");
+  await page.getByRole("button", { name: "Close file", exact: true }).click();
+  await page.locator(".file-viewer").waitFor({ state: "hidden" });
+
+  // a file of more lines than are numbered shows as one text, without holding the page, and the
+  // header says why
+  await page.getByRole("button", { name: "many lines", exact: true }).click();
+  const manyLines = page.getByRole("dialog", { name: "lines.txt", exact: true });
+  await page.waitForFunction(() => document.querySelector(".file-viewer-notice")?.getAttribute("title") === "Too many lines to number");
+  await manyLines.locator(".file-viewer-text").waitFor();
+  assert.equal(await manyLines.locator(".file-viewer-text .hl-line").count(), 0, "no element per line");
+  assert.equal(await manyLines.locator(".file-viewer-text[data-line-numbers]").count(), 0, "and no gutter");
+  assert.deepEqual(await frozen(), [], "no task held the page for a second");
+  console.log("PASS A file of too many lines shows as one text, without numbers, and the page never freezes");
   await page.getByRole("button", { name: "Close file", exact: true }).click();
   await page.locator(".file-viewer").waitFor({ state: "hidden" });
 

@@ -18,7 +18,7 @@ import { useMachineApi, useMachineId } from "../lib/machineContext.tsx";
 import { copyText, selectContents } from "../lib/clipboard.ts";
 import { fileLines, pathLabel, type FileComment, type FileView, type LineRange } from "../lib/fileComments.ts";
 import { pathParts } from "../lib/filePaths.ts";
-import { languageForPath } from "../lib/highlight.ts";
+import { languageForPath, LINE_ELEMENT_LIMIT } from "../lib/highlight.ts";
 import { useT } from "../lib/i18n.ts";
 import { nativeModalOver, useFocusTrap } from "../lib/useFocusTrap.ts";
 import { previewHosts, type MarkdownBlock } from "../lib/markdown.ts";
@@ -222,6 +222,8 @@ export function FileViewer({ path: asked, paneId, machineId, paneFolder, onClose
     cutShort && t("Showing the first {shown}", { shown: formatBytes(loaded.limit) }),
     textFile && loaded !== null && previewRefused && t("Too long to preview"),
     codeShown && code.tooLong && t("Too long to highlight"),
+    // past it the code is one text (CodeLines), and line numbers are an element per line
+    codeShown && code.lines.length > LINE_ELEMENT_LIMIT && t("Too many lines to number"),
   ].filter((note): note is string => typeof note === "string");
   const noticed = notes.length > 0;
   const copyable = textFile && loaded !== null && !loaded.truncated;
