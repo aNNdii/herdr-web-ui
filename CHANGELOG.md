@@ -12,6 +12,7 @@ between releases do not reach them. Remote-PC runtime bundles are versioned sepa
   than a few lines is highlighted in a worker, so no reply can freeze the page: a block that takes
   longer than 2 s, or is over 100 KB, stays plain and says so. **Settings → Chat → Highlight code**
   turns it off.
+  ([#671](https://github.com/devswha/herdr-web-ui/pull/671) by @aNNdii)
 
 ### Fixed
 - Codex Chat can read a new session with one short answer when its complete submitted
