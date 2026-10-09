@@ -953,13 +953,16 @@ const cases: Record<string, Case> = {
     });
     await copyButton.tap();
     await eventually("Copy file to copy the file", () => page.evaluate((whole) => (window as unknown as { copiedText: string | null }).copiedText === whole, `${SYNC_LINES.join("\n")}\n`));
-    // without a clipboard API it selects the code
-    await page.evaluate(() => Object.defineProperty(navigator, "clipboard", { value: { writeText: () => Promise.reject(new Error("no clipboard")) }, configurable: true }));
+    // when nothing can copy (no clipboard API, the browser's copy command refused) it selects the code
+    await page.evaluate(() => {
+      Object.defineProperty(navigator, "clipboard", { value: { writeText: () => Promise.reject(new Error("no clipboard")) }, configurable: true });
+      document.execCommand = () => false;
+    });
     await copyButton.tap();
     await eventually("Copy file to select the source", () => page.evaluate((whole) => window.getSelection()?.toString() === whole, SYNC_LINES.join("\n")));
     await page.evaluate(() => window.getSelection()?.removeAllRanges());
     assert.equal(await popoverOf(page).count(), 0, "Copy file opens no comment");
-    console.log("PASS code-phone: Copy file copies the whole file; without a clipboard it selects the source");
+    console.log("PASS code-phone: Copy file copies the whole file; when nothing can copy it selects the source");
 
     // a file cut short takes comments too, and a viewer without a pane none
     await viewer.getByRole("button", { name: "Close file", exact: true }).tap();

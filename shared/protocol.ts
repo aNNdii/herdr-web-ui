@@ -653,10 +653,9 @@ export type ClientMessage =
    * `agent_only` (servers listing "submit-agent-only"): only an agent gets it, never the pane's
    * input, so a message quoting a reply never reaches a shell; refused, nothing typed, with a code named
    * for the pane's condition: agent_not_found (no agent in front), agent_not_ready (an agent whose input
-   * state is not known) or agent_queue_busy (a Codex blocked by its own queue). Bridges before these
-   * names answered agent_only, agent_only_not_ready and agent_only_busy. With `delivery:queue` the flag
+   * state is not known) or agent_queue_busy (a Codex blocked by its own queue). With `delivery:queue` the flag
    * needs no record of its own: a message is queued only with an agent in front (else agent_not_found;
-   * agent_not_ready on older bridges), and it is bound to the agent, terminal
+   * agent_not_ready from upstream's bridge), and it is bound to the agent, terminal
    * and session that accepted it, so one whose agent left before its turn is refused with
    * pending_target_changed, nothing typed (server/pending-input.contract.test.ts).
    * `delivery:queue` requires "pending-input" and a live interact attachment: while the agent

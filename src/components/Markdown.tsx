@@ -9,6 +9,7 @@ import { fileUriPath } from "../lib/terminalFileLinks.ts";
 import { CHAT_HIGHLIGHT_LIMIT, languageForFence } from "../lib/highlight.ts";
 import { HighlightedCode } from "./HighlightedCode.tsx";
 import { useT } from "../lib/i18n.ts";
+import { copyText } from "../lib/clipboard.ts";
 import { BlockCommentContext, partAnchor, replyParts, usePartTouched, type PartLookup } from "../lib/blockComments.ts";
 import { forgetCommentPart, rememberCommentPart } from "../lib/commentSelection.ts";
 
@@ -161,15 +162,17 @@ function CodeBlock({ language, value, firstLine }: { language: string; value: st
   const t = useT();
   const quoted = useContext(QuotedContext);
   const [copied, setCopied] = useState(false);
+  const [copyFailed, setCopyFailed] = useState(false);
   const [expanded, setExpanded] = useState(false);
   const block = useRef<HTMLDivElement>(null);
   // no inner scroll: a long block folds, with a visible "Show all" row
   const fold = useMemo(() => foldCode(value), [value]);
   /** Copies the whole block, folded lines included, and flips the button to "copied" for a moment. */
   const copy = async (): Promise<void> => {
-    await navigator.clipboard.writeText(value);
-    setCopied(true);
-    window.setTimeout(() => setCopied(false), 1500);
+    const ok = await copyText(value);
+    setCopied(ok);
+    setCopyFailed(!ok);
+    if (ok) window.setTimeout(() => setCopied(false), 1500);
   };
   const folding = useRef(false);
   /** Shows all lines or folds them again; after folding, the block's top is brought back into view. */
@@ -196,6 +199,7 @@ function CodeBlock({ language, value, firstLine }: { language: string; value: st
           {copied ? <Check aria-hidden="true" /> : <Copy aria-hidden="true" />}
         </button>
       </div>
+      {copyFailed && <p className="markdown-code-error" role="alert">{t("Couldn't copy. Select the text and copy it manually.")}</p>}
       <HighlightedCode code={fold !== null && !expanded ? fold.head : value} language={languageForFence(language)} limit={CHAT_HIGHLIGHT_LIMIT} firstLine={firstLine} />
       {fold !== null && (
         <button type="button" className="markdown-code-more" aria-expanded={expanded} data-fold-end={firstLine === undefined ? undefined : firstLine + fold.lines - 1} onClick={toggle}>
