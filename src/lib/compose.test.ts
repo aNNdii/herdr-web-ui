@@ -48,6 +48,9 @@ describe("composerMessage and submitNote", () => {
     expect(["disconnected", "timeout", "submit_failed"].map(legacy)).toEqual([false, false, false]);
     expect(["pending_input_unsupported", "invalid_delivery", "invalid_submit_text", "pending_limit"].map(legacy)).toEqual([true, true, true, true]);
     expect(["pane_not_found", "retired_submit_id"].map(legacy)).toEqual([true, true]);
+    // refused before the paste because Claude's input box held a draft (#609)
+    expect(legacy("input_draft")).toBe(true);
+    expect(submitNote("pending_input_unsupported", "x")).toBe("Update this PC to send messages in the next turn. Your draft stayed here.");
     expect(legacy("submit_changed")).toBe(false);
     expect(legacy("pending_uncertain")).toBe(false);
   });

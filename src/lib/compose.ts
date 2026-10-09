@@ -41,7 +41,7 @@ export function composerPayload(text: string, bracketedPaste: boolean): string {
 const LEGACY_NOT_TYPED_CODES: readonly string[] = Object.freeze(["agent_blocked", "read_only", "submit_timeout", "agent_only", "agent_only_busy", "agent_only_not_ready",
   "agent_only_unsupported", "agent_not_found", "agent_not_ready", "agent_queue_busy", "pending_input_unsupported", "invalid_delivery", "invalid_submit_text",
   "invalid_submit_id", "pending_limit", "pending_not_found", "pending_busy", "invalid_pending_action", "pending_target_changed", "pending_lease_lost", "not_attached",
-  "input_not_ready", "attach_held", "pane_not_found", "retired_submit_id"]);
+  "input_not_ready", "attach_held", "pane_not_found", "retired_submit_id", "input_draft"]);
 
 /**
  * Nothing of a refused message reached the pane: the result says so (`typed: false`), or, from a
@@ -64,6 +64,7 @@ export function submitNote(code: string, message: string, agentOnly = false): st
   if (code === "agent_only_not_ready" || (agentOnly && code === "agent_not_ready")) return t("Not sent: the agent is not ready for a message yet. Nothing was typed. Send it again when it is ready.");
   if (code === "agent_queue_busy" || code === "agent_only_busy") return t("Not sent: the agent is busy with questions it queued. Nothing was typed. Send it again when it is ready.");
   if (code === "agent_only_unsupported") return t("Not sent: update this PC to send comments.");
+  if (code === "input_draft") return t("Not sent: Claude Code's input box in the terminal is not empty. Send or clear it there, then send this message.");
   if (code === "pending_input_unsupported") return t("Update this PC to send messages in the next turn. Your draft stayed here.");
   if (code === "submit_timeout") return t("Not sent: it waited too long behind an earlier message, and nothing was typed. Send it again.");
   if (code === "disconnected" || code === "timeout") return t("Not confirmed: the pane did not confirm this message. Check the terminal before sending it again.");
