@@ -7,6 +7,10 @@ between releases do not reach them. Remote-PC runtime bundles are versioned sepa
 
 ## [Unreleased]
 
+### Changed
+- A size under 10 MB shows one decimal (`1.3 MB`), in the file viewer and in a bridge update's
+  progress: a 1.3 MB file no longer reads as 1 MB.
+
 ### Fixed
 - Codex Chat can read a new session with one short answer when its complete submitted
   first prompt and answer identify it unambiguously. Older conversations, unreadable
