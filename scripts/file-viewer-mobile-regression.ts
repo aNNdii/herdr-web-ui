@@ -70,7 +70,10 @@ async function checkLayout(): Promise<void> {
         return new Response(`<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}"><rect width="100%" height="100%" fill="teal"/></svg>`,
           { headers: { "content-type": "image/svg+xml" } });
       }
-      return new Response(`<!doctype html><html lang="en"><head><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><link rel="stylesheet" href="/styles.css?safe=${url.searchParams.get("safe") ?? "none"}"></head><body><div id="root"></div><script src="/entry.js"></script></body></html>`,
+      // A module script: the bundle is ESM, and FileViewer reaches `new URL(…, import.meta.url)` for its
+      // workers, which a classic script cannot parse. The fixture's text is short enough to be
+      // highlighted on the page, so no worker is ever started here.
+      return new Response(`<!doctype html><html lang="en"><head><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><link rel="stylesheet" href="/styles.css?safe=${url.searchParams.get("safe") ?? "none"}"></head><body><div id="root"></div><script type="module" src="/entry.js"></script></body></html>`,
         { headers: { "content-type": "text/html" } });
     } });
     browser = await chromium.launch({ executablePath: process.env.CHROME_PATH ?? "/opt/google/chrome/chrome", headless: true, args: ["--no-sandbox"] });
@@ -120,8 +123,8 @@ async function checkLayout(): Promise<void> {
               title: { ...rect(title), scrollWidth: title.scrollWidth, clientWidth: title.clientWidth, overflow: getComputedStyle(title).textOverflow },
               documentWidth: document.documentElement.scrollWidth, documentHeight: document.documentElement.scrollHeight };
           });
-          // an image opens in a new tab (which saves it too) and closes: no separate Download
-          assert.equal(geometry.controls.length, 2, label);
+          // an image opens in a new tab, downloads (a new tab in an installed app need not save it) and closes
+          assert.equal(geometry.controls.length, 3, label);
           assert.ok(geometry.dialog.x >= -1 && geometry.dialog.right <= scenario.width + 1, `${label}: dialog fits width`);
           assert.ok(geometry.dialog.y >= -1 && geometry.dialog.bottom <= limit + 1, `${label}: dialog fits usable height`);
           for (const control of geometry.controls) {
@@ -159,7 +162,7 @@ async function checkLayout(): Promise<void> {
         }
       } finally { await context.close(); }
     }
-    // A text file adds Copy to the header: on a phone the name keeps the first row with Close in its
+    // A text file adds Copy to Raw and Download: on a phone the name keeps the first row with Close in its
     // corner, and the actions share the second row inside the dialog.
     const phone = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, locale: "en-US" });
     try {
@@ -173,12 +176,12 @@ async function checkLayout(): Promise<void> {
       const dialog = await page.locator(".file-viewer").boundingBox();
       assert.ok(dialog, "text: dialog is laid out");
       const buttons = page.locator(".file-viewer-actions .icon-button");
-      assert.equal(await buttons.count(), 2, "text: Raw and Copy");
+      assert.equal(await buttons.count(), 3, "text: Raw, Download and Copy");
       const title = (await page.locator(".file-viewer-title").boundingBox())!;
       const close = (await page.getByRole("button", { name: "Close file", exact: true }).boundingBox())!;
       assert.ok(close.y < title.y + title.height && close.y + close.height > title.y, "text: Close shares the name's row");
       assert.ok(close.x + close.width >= dialog.x + dialog.width - 32, "text: Close sits in the right corner");
-      for (let index = 0; index < 2; index++) {
+      for (let index = 0; index < 3; index++) {
         const box = await buttons.nth(index).boundingBox();
         assert.ok(box, `text: button ${index} is laid out`);
         assert.equal(box.y, (await buttons.nth(0).boundingBox())!.y, `text: button ${index} shares the row`);
