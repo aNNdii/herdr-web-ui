@@ -422,6 +422,8 @@ describe("numbered lists as agents write them", () => {
     expect(done).not.toBeNull();
     expect(open).not.toBeNull();
     expect(open?.[1]).not.toBe(done?.[1]);
+    // a task with no text has nothing to be labelled by: it is named as an empty task
+    expect(render("- [ ]")).toContain('<span class="markdown-task-box" role="checkbox" aria-checked="false" aria-disabled="true" aria-label="Empty task"></span>');
   });
 
   it("keeps one list across blank lines between its items", () => {
