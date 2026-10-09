@@ -11,8 +11,15 @@ between releases do not reach them. Remote-PC runtime bundles are versioned sepa
 - A size under 10 MB shows one decimal (`1.3 MB`), in the file viewer, the Files list and a bridge
   update's progress: a 1.3 MB file no longer reads as 1 MB.
   ([#670](https://github.com/devswha/herdr-web-ui/pull/670) by @aNNdii)
+- The anonymous install and update counts now keep the country a message came from: two
+  letters such as `KR`, worked out by the receiver's host, and nothing finer. No IP address is
+  stored and the message itself is unchanged. The notice, Settings → About and the guide say so.
+  ([#663](https://github.com/devswha/herdr-web-ui/pull/663))
 
 ### Fixed
+- A Claude Code approval asked while background agents run shows its card instead of the numbered
+  fallback: its hint goes on after `Esc to cancel` with the chord that stops them.
+  ([#659](https://github.com/devswha/herdr-web-ui/pull/659) by @Haeminway1)
 - Codex Chat can read a new session with one short answer when its complete submitted
   first prompt and answer identify it unambiguously. Older conversations, unreadable
   candidates and competing panes keep the terminal fallback; process age alone never
