@@ -12,6 +12,15 @@ between releases do not reach them. Remote-PC runtime bundles are versioned sepa
   go where the line shows. Before, a long press on iOS showed the system's drag preview but
   dropped nothing. The row's ⋯ menu also has Move up and Move down.
 
+### Fixed
+- Terminal cleanup waits for xterm's pending frame and task before disposing its renderer,
+  preventing a dimensions console error on development reloads or when switching PCs or
+  signing out immediately after a pane reset.
+  ([#649](https://github.com/devswha/herdr-web-ui/pull/649) by @od-studio-webagency)
+- Immediate chat sends to Claude Code are refused when its input box contains a draft or is in
+  bash mode, preserving the existing terminal input.
+  ([#677](https://github.com/devswha/herdr-web-ui/pull/677))
+
 ## [0.4.3] - 2026-10-09
 
 ### Fixed
