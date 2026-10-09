@@ -135,9 +135,13 @@ describe("SYNC_HIGHLIGHT_LIMIT", () => {
   ])("keeps %s of %j well under a frame's budget", (language, unit) => {
     const code = unit.repeat(Math.ceil(SYNC_HIGHLIGHT_LIMIT / unit.length)).slice(0, SYNC_HIGHLIGHT_LIMIT);
     highlightRuns(code, language);
-    const start = performance.now();
-    highlightRuns(code, language);
-    expect(performance.now() - start).toBeLessThan(50);
+    // the fastest of a few runs: a garbage collection or a busy runner delays one run, never all
+    const runs = Array.from({ length: 5 }, () => {
+      const start = performance.now();
+      highlightRuns(code, language);
+      return performance.now() - start;
+    });
+    expect(Math.min(...runs)).toBeLessThan(50);
   });
 });
 
