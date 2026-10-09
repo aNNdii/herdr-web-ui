@@ -7,6 +7,10 @@ between releases do not reach them. Remote-PC runtime bundles are versioned sepa
 
 ## [Unreleased]
 
+### Added
+- A task list (`- [x] done`, `- [ ] open`) in the chat shows a checked or empty box in place of
+  its bullet, instead of the brackets.
+
 ### Fixed
 - Codex Chat can read a new session with one short answer when its complete submitted
   first prompt and answer identify it unambiguously. Older conversations, unreadable
