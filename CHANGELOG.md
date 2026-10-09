@@ -39,42 +39,47 @@ between releases do not reach them. Remote-PC runtime bundles are versioned sepa
 - A task list (`- [x] done`, `- [ ] open`) in the chat and in a Markdown preview shows a checked or
   empty box instead of the brackets.
   ([#429](https://github.com/devswha/herdr-web-ui/pull/429) by @aNNdii)
-- Comment on any text in an agent's final reply in the chat by selecting it: a **Comment**
-  button floats where a mouse let go (below the selection on a touch screen, clear of its
-  handles). It opens a form in the chat, right under the paragraph, list item or block where the
-  selection ends, with **Cancel** and **Save**; the selected text stays highlighted while it is
-  written. Several selections in one paragraph are several comments, and one selection over
-  several paragraphs or list items is one comment. The commented text is highlighted in place (a
-  tint and an underline in the accent colour), and each comment is a card under that part, tinted
-  with the accent, with a **Pending** badge, the comment in full and buttons to edit or delete it.
-  Pointing at a card, or focusing it, brings its text up and fades the other comments' marks. In
-  the message box the comments show as a bar below any attached files, above the text ("3 comments
-  on the reply"): a tap on it walks to them, one comment per tap, and its X removes them all. The
+- Comment on an agent's final reply in the chat: select text with the mouse and the comment opens,
+  or click a paragraph, list item or block to comment on all of it (tap it on a phone; a pointer
+  that hovers outlines it first). There is no Comment button: a selection made by touch or the
+  keyboard, and a double or triple click, only select, to copy. The comment is written in a popover that opens beside its pin, to its
+  right, a plain input box (a bottom sheet on a phone, which quotes what it is on); Cmd/Ctrl+Enter or
+  its arrow button saves, and Escape or a click outside closes it only while nothing is typed; that
+  click does nothing else, but selecting other text opens its comment at once.
+  Several selections in one paragraph are several comments, and one selection over several
+  paragraphs or list items is one comment. The commented text is highlighted in place (a tint and
+  an underline in the accent colour) with a speech-bubble pin whose tip sits where you clicked or
+  let go of the mouse, and stays there
+  on the text as it rewraps; a pin opens the comment to edit, its text in the field, with
+  **Delete** beside the save arrow, and its text stays up while it is open. Pointing at a pin, or focusing it (pins are in the Tab
+  order), brings its text up and fades the other comments' marks. In the message box the comments
+  show as a bar below any attached files, above the text ("3 comments on the reply"): a tap on it walks to them, one comment per tap, and its X removes them all. The
   bar's icon is accent-coloured while the comments go with the next message and dim, with the bar
-  saying "waiting" and the reason in its name, while they wait. With the keyboard alone, text can be selected for a comment only through the
-  browser's caret browsing (F7). The next message sends the comments first, each quoting its
+  saying "waiting" and the reason in its name, while they wait. With the keyboard alone, a comment
+  can be opened through its pin or the bar, but not written. The next message sends the comments first, each quoting its
   selected text, in reading order. A command or an answer to the agent's open question goes without
   them; they wait for the next message. They only ever go to an agent: when none runs in the pane,
   what is typed goes alone (a shell would run the quoted lines), and its terminal output takes no
   comments. A message with comments sent during a turn waits with them for the agent's next turn,
   bound to that agent; sent at once while no agent runs, it is refused rather than typed into the
   pane, and so it is when a Codex is busy with its own queued questions. Comments are kept per
-  pane on this device.
+  pane on this device. **Settings → Chat → Comments** turns them off: it asks first, then deletes
+  every comment on this device, and no pin, drag or block click is left.
   ([#409](https://github.com/devswha/herdr-web-ui/pull/409) by @aNNdii)
 - Comment on a file in the file viewer, in its Markdown preview and in its code view, when it was
-  opened from a pane. Select text and press **Comment**, as in the chat, on a phone too. The form and
-  the card show the file and lines (`sync.ts · Line 8`). In the header a comment icon carries the
-  file's count, and each tap walks to the next one. The composer's bar counts them with the reply
-  comments, and its walk opens the file at each. The next message sends them after the reply comments, each as a
+  opened from a pane. Select text with the mouse and the comment opens, as in the chat; or click
+  or tap a line of the code view or a block of the preview to comment on all of it. A comment shows
+  as a pin as in the chat, where you clicked or let go of the mouse, its popover opening beside it, and the popover shows the file and lines
+  (`sync.ts · Line 8`). In the header a
+  comment icon carries the file's count, and each tap walks to the next one, unfolding a folded
+  code block it is in; an outdated comment opens in a dialog. The composer's bar counts them with
+  the reply comments, and its walk opens the file at each. The next message sends them after the reply comments, each as a
   `> path:lines` quote of the commented lines (a line cut at 200 characters, a quote at 20 lines)
   over the comment. A comment follows its lines when the file changes, and is marked outdated, but
   still sent, when they are gone.
-- A comment's card is laid out as the form that edits it: the comment on top, then the **Pending**
-  badge (and a file's name and lines) with Edit and Delete in a row below it, where the form has
-  Cancel and Save, and both share one corner radius, so nothing moves when you edit.
-- A comment form on a phone raises the keyboard as it opens and stays in view above it, in the chat
-  and in the file viewer. **Send** while a comment is half written in the chat sends nothing and
-  shows that comment's form instead.
+- A comment's sheet on a phone raises the keyboard as it opens (a saved comment's only once its
+  field is tapped) and stays in view above it, in the chat and in the file viewer. **Send** while a comment is half written sends nothing and gives
+  the focus back to that comment's field instead.
 
 ### Changed
 - The default mobile terminal key bar puts Esc, Tab and Ctrl+C first, before the held modifiers

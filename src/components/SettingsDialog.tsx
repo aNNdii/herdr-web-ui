@@ -4,12 +4,15 @@ import { ArrowLeft, Bell, ChevronDown, ChevronRight, ChevronUp, Eye, EyeOff, Fil
 import "./SettingsDialog.css";
 
 import type { AppActions } from "../lib/actions.ts";
+import { blockComments } from "../lib/blockComments.ts";
+import { hasChangedComment, hasCommentDialog } from "../lib/commentDom.ts";
 import { useInstallPrompt } from "../lib/install.ts";
 import { SHORTCUTS, formatKeys, isMacPlatform, shortcutDisplayKeys, shortcutKeys, shortcutConflict } from "../lib/shortcuts.ts";
 import { isReservedShortcutKey } from "../lib/shortcutBindings.ts";
 import { CHAT_FONT_MAX, CHAT_FONT_MIN, CHAT_WIDTHS, chatFontSize, DEFAULT_SETTINGS, MARKDOWN_WIDTHS, QUICK_REPLIES_MAX, QUICK_REPLY_MAX_CHARS, TERMINAL_FONT_MAX, TERMINAL_FONT_MIN, TERMINAL_WHEEL_SPEED_MAX, TERMINAL_WHEEL_SPEED_MIN, VOICE_BUTTONS, useSettings, forgetPaneViews, type VoiceButton } from "../lib/settings.ts";
 import { LANGUAGE_NAMES, LANGUAGE_SETTINGS, useT } from "../lib/i18n.ts";
 import { useFocusTrap } from "../lib/useFocusTrap.ts";
+import { ConfirmDialog } from "./ConfirmDialog.tsx";
 import { KeyBarSettings } from "./KeyBarSettings.tsx";
 import { onSettingsHistory, recordSettings, settingsEntry, settingsLevels, type SettingsLevel } from "../lib/settingsHistory.ts";
 import { Segmented, SettingsGroup, SettingsRow, Stepper, Toggle } from "./SettingsControls.tsx";
@@ -42,7 +45,7 @@ export interface SettingsDialogProps {
   /** the herdr this app's server talks to, from the last health check */
   herdrVersion: string | null;
   onEnableNotifications: () => Promise<boolean>;
-  /** a file preview is open beneath: the dialog is drawn above it */
+  /** a file preview is open beneath: the dialog is drawn above it (`.settings-raised`) */
   overPreview?: boolean;
 }
 
@@ -173,6 +176,26 @@ function AppearancePage() {
 function ChatPage() {
   const { settings, update } = useSettings();
   const t = useT();
+  // how many comments turning the setting off would delete; null while no question is open
+  const [deleting, setDeleting] = useState<number | null>(null);
+  const commentsToggle = useRef<HTMLButtonElement>(null);
+  // the question answered yes: ConfirmDialog leaves the focus to its owner then, and it goes back to the switch, once
+  // the dialog is gone (its trap would take it back while it is up)
+  const refocusToggle = useRef(false);
+  useEffect(() => {
+    if (deleting !== null || !refocusToggle.current) return;
+    refocusToggle.current = false;
+    commentsToggle.current?.focus({ preventScroll: true });
+  }, [deleting]);
+  const setComments = (on: boolean): void => {
+    if (on) { update({ comments: true }); return; }
+    // counted here, in the handler: counting refreshes the store, which notifies its subscribers. A comment being
+    // written, with text typed and not saved yet, goes too: with none stored it is the one comment asked about
+    const stored = blockComments.countAll();
+    const count = stored > 0 ? stored : hasChangedComment(document) ? 1 : 0;
+    if (count === 0) update({ comments: false });
+    else setDeleting(count);
+  };
   return (
     <>
       <SettingsGroup>
@@ -186,6 +209,9 @@ function ChatPage() {
         </SettingsRow>
         <SettingsRow label={t("Show thinking")} description={t("Include the agent's reasoning blocks")}>
           <Toggle label={t("Show thinking")} checked={settings.showThinking} onChange={(showThinking) => update({ showThinking })} />
+        </SettingsRow>
+        <SettingsRow label={t("Comments")} description={t("Comment on an agent's reply and on files by selecting text or clicking a block. Turning this off deletes every comment on this device.")}>
+          <Toggle label={t("Comments")} checked={settings.comments} onChange={setComments} buttonRef={commentsToggle} />
         </SettingsRow>
         <SettingsRow label={t("Chat width")} description={t("How wide the conversation and the message box run on a large screen")} wide>
           <Segmented label={t("Chat width")} value={settings.chatWidth} onChange={(chatWidth) => update({ chatWidth })} options={CHAT_WIDTHS.map((chatWidth) => ({ value: chatWidth, label: t(chatWidth === "narrow" ? "Narrow" : chatWidth === "wide" ? "Wide" : chatWidth === "full" ? "Full" : "Default") }))} />
@@ -237,6 +263,13 @@ function ChatPage() {
           </div>
         </div>
       </SettingsGroup>
+
+      {deleting !== null && <ConfirmDialog
+        title={deleting === 1 ? t("Delete 1 comment?") : t("Delete {count} comments?", { count: deleting })}
+        body={t("Every comment in the chat and the file viewer on this device is deleted. This cannot be undone.")}
+        confirmLabel={t("Turn off and delete")}
+        onConfirm={async () => { blockComments.clearAll(); update({ comments: false }); refocusToggle.current = true; setDeleting(null); }}
+        onClose={() => setDeleting(null)} />}
     </>
   );
 }
@@ -624,6 +657,9 @@ function OpenSettingsDialog({ section = null, onClose, actions, updates, auth, h
   const settingsScrollRef = useRef(0);
   // Tab stays inside the dialog, and the focus returns to whatever opened it
   const surface = useFocusTrap<HTMLElement>(true, { initialFocus: backRef });
+  // opened (by its shortcut) over a comment's dialog, which is portalled to the end of the body and lies above the
+  // dialogs' own layer: raised over it, as over a preview. Read once, as it opens: it is mounted per opening
+  const [overComment] = useState(() => hasCommentDialog(document));
   const shown = useRef<{ page: SettingsPage | null; keyBar: boolean } | null>(null);
   const label = (id: SettingsPage): string => t(id === "appearance" ? "Appearance" : id === "chat" ? "Chat" : id === "terminal" ? "Terminal" : id === "files" ? "File viewer" : id === "alerts" ? "Alerts" : id === "voice" ? "Voice input"
     : id === "usage" ? "Subscription usage" : id === "shortcuts" ? "Shortcuts" : id === "devices" ? "Phone & devices" : id === "remote" ? "Remote PCs" : "About");
@@ -713,7 +749,7 @@ function OpenSettingsDialog({ section = null, onClose, actions, updates, auth, h
   const focusable = page ?? PAGES[0]!.id;
 
   return (
-    <div className={overPreview ? "modal-scrim settings-over-preview" : "modal-scrim"} onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
+    <div className={overPreview || overComment ? "modal-scrim settings-raised" : "modal-scrim"} onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
       {/* named Settings on every page: the page's own name is the visible title */}
       <section ref={surface} className="modal settings-dialog" role="dialog" aria-modal="true" aria-label={keyBarOpen ? t("Key bar") : t("Settings")} tabIndex={-1}>
         <header className="modal-header settings-header">

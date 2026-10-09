@@ -530,7 +530,7 @@ export const parseMarkdown = memoizeLast((source: string): MarkdownBlock[] => pa
 export const parseMarkdownWithLines = memoizeLast((source: string): MarkdownBlock[] => parseBlocks(source, 0, 1));
 
 /**
- * The spans a file comment's card can hang under, in document order, as `Markdown.tsx` draws them: a
+ * The spans of the blocks a file comment can be written on, in document order, as `Markdown.tsx` draws them: a
  * heading, paragraph, code, table or math block, a whole blockquote (nothing inside it), each list
  * item's own text and then its nested blocks. A rule and a list itself are none. Needs the blocks
  * of `parseMarkdownWithLines`.

@@ -33,18 +33,36 @@ export function composerPayload(text: string, bracketedPaste: boolean): string {
   return bracketedPaste ? PASTE_START + body + PASTE_END : body;
 }
 
-/** Why a composer message did not go (SubmitResult's code): the composer keeps the text and says this. */
-/** The server refused the message before any of it reached the pane: nothing was typed. */
-export function submitNotTyped(code: string): boolean {
-  return ["agent_blocked", "read_only", "submit_timeout", "agent_only_busy", "agent_not_ready", "pending_input_unsupported", "invalid_delivery", "invalid_submit_text",
-    "invalid_submit_id", "pending_limit", "pending_not_found", "pending_busy", "invalid_pending_action", "pending_target_changed", "pending_lease_lost", "not_attached", "input_not_ready", "attach_held", "pane_not_found", "retired_submit_id"].includes(code);
+/**
+ * Refusal codes a bridge that does not send `typed` used only before anything reached the pane.
+ * Frozen: a new refusal says `typed: false` instead of joining this list. It keeps the agent-only
+ * codes of the bridges before the condition-named ones (agent_only, agent_only_busy, agent_only_not_ready).
+ */
+const LEGACY_NOT_TYPED_CODES: readonly string[] = Object.freeze(["agent_blocked", "read_only", "submit_timeout", "agent_only", "agent_only_busy", "agent_only_not_ready",
+  "agent_only_unsupported", "agent_not_found", "agent_not_ready", "agent_queue_busy", "pending_input_unsupported", "invalid_delivery", "invalid_submit_text",
+  "invalid_submit_id", "pending_limit", "pending_not_found", "pending_busy", "invalid_pending_action", "pending_target_changed", "pending_lease_lost", "not_attached",
+  "input_not_ready", "attach_held", "pane_not_found", "retired_submit_id"]);
+
+/**
+ * Nothing of a refused message reached the pane: the result says so (`typed: false`), or, from a
+ * bridge that does not say, its code is one such a bridge used only before typing.
+ */
+export function submitNotTyped(result: { code: string; typed?: false }): boolean {
+  return result.typed === false || LEGACY_NOT_TYPED_CODES.includes(result.code);
 }
 
-export function submitNote(code: string, message: string): string {
+/**
+ * Why a composer message did not go (SubmitResult's code): the composer keeps the text and says this.
+ * `agentOnly`: the message was sent to an agent only (it carries comments), so a missing or not-ready
+ * agent is why it did not go; without it, those codes read as the bridge's own message.
+ */
+export function submitNote(code: string, message: string, agentOnly = false): string {
   if (code === "agent_blocked") return t("Not sent: the agent is waiting for an answer in the terminal. Answer it first.");
   if (code === "read_only") return t("Not sent: this view only watches the pane.");
-  if (code === "agent_only") return t("Not sent: comments go to an agent only, and none runs in this pane now.");
-  if (code === "agent_only_busy") return t("Not sent: the agent is busy with questions it queued. Nothing was typed. Send it again when it is ready.");
+  // agent_only and agent_only_not_ready: what bridges before the condition-named codes answered
+  if (code === "agent_only" || (agentOnly && code === "agent_not_found")) return t("Not sent: comments go to an agent only, and none runs in this pane now.");
+  if (code === "agent_only_not_ready" || (agentOnly && code === "agent_not_ready")) return t("Not sent: the agent is not ready for a message yet. Nothing was typed. Send it again when it is ready.");
+  if (code === "agent_queue_busy" || code === "agent_only_busy") return t("Not sent: the agent is busy with questions it queued. Nothing was typed. Send it again when it is ready.");
   if (code === "agent_only_unsupported") return t("Not sent: update this PC to send comments.");
   if (code === "pending_input_unsupported") return t("Update this PC to send messages in the next turn. Your draft stayed here.");
   if (code === "submit_timeout") return t("Not sent: it waited too long behind an earlier message, and nothing was typed. Send it again.");

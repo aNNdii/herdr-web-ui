@@ -6,7 +6,7 @@ import { ChevronRight, Clock, MessageSquare, TriangleAlert, X } from "lucide-rea
 import "@xterm/xterm/css/xterm.css";
 import "./PaneTerminal.css";
 
-import { HerdrSocket, type SubmitResult } from "../lib/ws.ts";
+import { HerdrSocket, type SubmitOptions, type SubmitResult } from "../lib/ws.ts";
 import { clipboardKey, hasModifiers, physicalKey, terminalChord, navigationSequence, keyFromData, ctrlEnterSequence, modifyOtherKeysLevel, NO_STICKY_MODIFIERS, type StickyModifiers } from "../lib/keys.ts";
 import { keyBarInputSequence, type KeyBarKeyItem } from "../lib/keyBar.ts";
 import { EMPTY_DRAFT, applyToDraft, draftIsEmpty, restoreDraft, type InputDraft } from "../lib/draft.ts";
@@ -1374,14 +1374,14 @@ export function PaneTerminal({
   // keeps its text (never-queue); a message the server could not deliver keeps it too,
   // with the reason. Bracketed-paste wrapping follows the pane program's mode. `agentOnly`: a
   // message with comments, refused rather than typed into a pane whose agent is gone
-  const submitComposerMessage = useCallback((text: string, delivery: "queue" | "immediate" = "immediate", agentOnly = false): Promise<SubmitResult> | null => {
+  const submitComposerMessage = useCallback((text: string, { delivery = "immediate", agentOnly = false }: SubmitOptions = {}): Promise<SubmitResult> | null => {
     const term = termRef.current;
     const socket = socketRef.current;
     const pane = paneRef.current;
     if (!term || !socket || pane === null || secretRef.current !== null || heldRef.current) return null;
     // not the scope itself: a message sent right after a reconnect leaves before the snapshot that names it
     const epoch = pendingEpochRef.current;
-    const sent = socket.submit(pane, composerMessage(text), composerPayload(text, term.modes.bracketedPasteMode), false, delivery, agentOnly);
+    const sent = socket.submit(pane, composerMessage(text), composerPayload(text, term.modes.bracketedPasteMode), { delivery, agentOnly });
     if (sent === null) return null;
     term.scrollToBottom();
     if (delivery === "immediate") setChatSent((current) => current + 1);
@@ -1393,7 +1393,7 @@ export function PaneTerminal({
     return sent.then((result) => {
       // a message refused before anything was typed leaves the greeting as it was; each answer
       // settles its own message only, so one on its way beside it (a queued "Send now") is not undone
-      const typed = result.ok ? result.pending === undefined : !submitNotTyped(result.code);
+      const typed = result.ok ? result.pending === undefined : !submitNotTyped(result);
       if (delivery === "immediate") {
         rememberGreeting(owner, afterSettled(greetingMemory(owner), typed, history)); redrawGreeting();
       } else if (typed) {
@@ -1416,9 +1416,9 @@ export function PaneTerminal({
     });
   }, [onChatSuggestion, machineId]);
 
-  const sendComposerText = useCallback((text: string, delivery: "queue" | "immediate" = "immediate", agentOnly = false): false | Promise<true | string> => {
-    const result = submitComposerMessage(text, delivery, agentOnly);
-    return result === null ? false : result.then((answer) => answer.ok ? true : submitNote(answer.code, answer.message));
+  const sendComposerText = useCallback((text: string, options: SubmitOptions = {}): false | Promise<true | string> => {
+    const result = submitComposerMessage(text, options);
+    return result === null ? false : result.then((answer) => answer.ok ? true : submitNote(answer.code, answer.message, options.agentOnly === true));
   }, [submitComposerMessage]);
 
   // the terminal's input line: the text typed like the keyboard would, into an agent's open
@@ -1430,7 +1430,7 @@ export function PaneTerminal({
     if (!term || !socket || pane === null || secretRef.current !== null) return false;
     const message = composerMessage(text);
     const payload = message.includes("\n") ? composerPayload(text, term.modes.bracketedPasteMode) : message;
-    const sent = socket.submit(pane, message, payload, true);
+    const sent = socket.typeLine(pane, message, payload);
     if (sent === null) return false;
     term.scrollToBottom();
     return sent.then((result) => (result.ok ? true : submitNote(result.code, result.message)));
@@ -1587,7 +1587,7 @@ export function PaneTerminal({
       // an older bridge is told apart by the socket, once this connection's snapshot has said what it supports.
       // The comments go inside the text: a queued message is bound to the agent session that took it,
       // and an immediate one carrying them is refused rather than typed into a shell
-      return sendComposerText(composeWithComments(comments, text), composerDelivery(agent, agentStatus), comments.length > 0);
+      return sendComposerText(composeWithComments(comments, text), { delivery: composerDelivery(agent, agentStatus), agentOnly: comments.length > 0 });
     },
     [agent, agentStatus, answerPanePrompt, answering, heldByOpenQueue, sendComposerText, queueStore, machineId],
   );
@@ -1611,7 +1611,7 @@ export function PaneTerminal({
           return;
         }
         const answer = await result;
-        if (!answer.ok) pendingMessages.fail(owner, id, { code: answer.code, message: answer.message }, answer.code === "pending_not_found" || !submitNotTyped(answer.code));
+        if (!answer.ok) pendingMessages.fail(owner, id, { code: answer.code, message: answer.message }, answer.code === "pending_not_found" || !submitNotTyped(answer));
         // Only the matching server removal receipt removes an authoritative item.
       } else if (action === "discard") {
         pendingMessages.removeCopy(owner, id);
@@ -1621,14 +1621,14 @@ export function PaneTerminal({
           return;
         }
         // a copy kept only the text: one that quotes (comments) still goes to an agent only
-        const result = submitComposerMessage(message.text, "immediate", hasQuotedLine(message.text));
+        const result = submitComposerMessage(message.text, { agentOnly: hasQuotedLine(message.text) });
         if (!result) {
           pendingMessages.fail(owner, id, { code: "disconnected", message: t("Not sent. Reconnect and try again.") }, false);
           return;
         }
         const answer = await result;
         if (answer.ok) pendingMessages.removeCopy(owner, id);
-        else pendingMessages.fail(owner, id, { code: answer.code, message: answer.message }, !submitNotTyped(answer.code));
+        else pendingMessages.fail(owner, id, { code: answer.code, message: answer.message }, !submitNotTyped(answer));
       }
     } catch {
       pendingMessages.fail(owner, id, { code: "disconnected", message: t("Not confirmed. Check the terminal before sending again.") }, true);
@@ -1820,7 +1820,7 @@ export function PaneTerminal({
                   sendingRef.current = true;
                   setQueueSending(message.id); setQueueError(null);
                   const owner = queueOwner;
-                  void Promise.resolve(sendComposerText(outgoing, "immediate", heldAgentOnly(message)))
+                  void Promise.resolve(sendComposerText(outgoing, { agentOnly: heldAgentOnly(message) }))
                     .then((result) => {
                       if (result === true) { queueStore.remove(owner, message.id); }
                       else setQueueError({ owner, id: message.id, text: typeof result === "string" ? result : t("Not sent. Reconnect and try again.") });

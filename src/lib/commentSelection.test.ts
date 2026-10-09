@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { floatingPlace, focusAfter, lineAt, onLine, placeAtPointer, restoreFocusTarget, sliceText, spanText } from "./commentSelection.ts";
+import { restoreFocusTarget, sliceText, spanText } from "./commentSelection.ts";
 
 describe("sliceText", () => {
   it("takes the characters start–end across the text units", () => {
@@ -59,122 +59,6 @@ describe("spanText", () => {
   });
 });
 
-describe("floatingPlace", () => {
-  const view = { width: 400, height: 600 };
-  const size = { width: 100, height: 30 };
-  const anchor = { top: 200, bottom: 220, right: 250 };
-  it("centres the button on the selection's end, above it", () => {
-    expect(floatingPlace(anchor, view, size, { below: false, gap: 8, margin: 8 })).toEqual({ left: 200, top: 162 });
-  });
-  it("puts it below the selection when asked (a touch screen's menu is above)", () => {
-    expect(floatingPlace(anchor, view, size, { below: true, gap: 24, margin: 8 })).toEqual({ left: 200, top: 244 });
-  });
-  it("keeps it inside the view horizontally", () => {
-    expect(floatingPlace({ ...anchor, right: 10 }, view, size, { below: false, gap: 8, margin: 8 }).left).toBe(8);
-    expect(floatingPlace({ ...anchor, right: 395 }, view, size, { below: false, gap: 8, margin: 8 }).left).toBe(292);
-    // narrower than the button: its start stays in view
-    expect(floatingPlace(anchor, { width: 90, height: 600 }, size, { below: false, gap: 8, margin: 8 }).left).toBe(8);
-  });
-  it("goes to the other side when its own has no room", () => {
-    expect(floatingPlace({ top: 10, bottom: 30, right: 250 }, view, size, { below: false, gap: 8, margin: 8 }).top).toBe(38);
-    expect(floatingPlace({ top: 560, bottom: 580, right: 250 }, view, size, { below: true, gap: 24, margin: 8 }).top).toBe(506);
-  });
-  it("stays on its own side when neither has room", () => {
-    expect(floatingPlace({ top: 10, bottom: 590, right: 250 }, view, size, { below: false, gap: 8, margin: 8 }).top).toBe(-28);
-    expect(floatingPlace({ top: 10, bottom: 590, right: 250 }, view, size, { below: true, gap: 8, margin: 8 }).top).toBe(598);
-  });
-});
-
-describe("lineAt", () => {
-  const lines = [{ top: 100, bottom: 120 }, { top: 120, bottom: 140 }, { top: 200, bottom: 220 }];
-  it("takes the line whose span holds the pointer", () => {
-    expect(lineAt(lines, 110)).toBe(lines[0]!);
-    expect(lineAt(lines, 130)).toBe(lines[1]!);
-    expect(lineAt(lines, 210)).toBe(lines[2]!);
-  });
-  it("takes the nearest line between two", () => {
-    expect(lineAt(lines, 150)).toBe(lines[1]!);
-    expect(lineAt(lines, 190)).toBe(lines[2]!);
-  });
-  it("takes the first or last line for a pointer above or below all of them", () => {
-    expect(lineAt(lines, 10)).toBe(lines[0]!);
-    expect(lineAt(lines, 900)).toBe(lines[2]!);
-  });
-  it("prefers the thinnest rect that holds the pointer (a wholly selected block is one tall box)", () => {
-    const block = { top: 100, bottom: 300 };
-    const line = { top: 150, bottom: 170 };
-    expect(lineAt([block, line], 160)).toBe(line);
-    expect(lineAt([line, block], 160)).toBe(line);
-    expect(lineAt([block, line], 250)).toBe(block);
-  });
-  it("has no line for none", () => {
-    expect(lineAt([], 5)).toBeNull();
-  });
-});
-
-describe("placeAtPointer", () => {
-  const view = { width: 400, height: 600 };
-  const size = { width: 100, height: 30 };
-  const lines = [{ top: 100, bottom: 120 }, { top: 120, bottom: 140 }];
-  const opts = { below: false, gap: 8, margin: 8 };
-  it("centres on the pointer's x, above the line that holds its y", () => {
-    expect(placeAtPointer(lines, { x: 120, y: 130 }, view, size, opts)).toEqual({ left: 70, top: 82 });
-    expect(placeAtPointer(lines, { x: 120, y: 110 }, view, size, opts)).toEqual({ left: 70, top: 62 });
-  });
-  it("uses the nearest line for a pointer between lines", () => {
-    const apart = [{ top: 100, bottom: 120 }, { top: 200, bottom: 220 }];
-    expect(placeAtPointer(apart, { x: 120, y: 190 }, view, size, opts).top).toBe(162);
-    expect(placeAtPointer(apart, { x: 120, y: 130 }, view, size, opts).top).toBe(62);
-  });
-  it("clamps a pointer outside the view", () => {
-    expect(placeAtPointer(lines, { x: -50, y: 110 }, view, size, opts).left).toBe(8);
-    expect(placeAtPointer(lines, { x: 900, y: 110 }, view, size, opts).left).toBe(292);
-  });
-  it("flips below the line when there is no room above", () => {
-    expect(placeAtPointer([{ top: 10, bottom: 30 }], { x: 120, y: 20 }, view, size, opts).top).toBe(38);
-  });
-  it("puts a touch's button below the line", () => {
-    expect(placeAtPointer(lines, { x: 120, y: 110 }, view, size, { below: true, gap: 28, margin: 8 }).top).toBe(148);
-  });
-  it("falls back to the pointer itself without lines", () => {
-    expect(placeAtPointer([], { x: 120, y: 300 }, view, size, opts)).toEqual({ left: 70, top: 262 });
-  });
-});
-
-describe("onLine", () => {
-  const lines = [{ top: 100, bottom: 120 }, { top: 120, bottom: 140 }, { top: 200, bottom: 220 }];
-  it("holds a y on one of the lines, its edges included", () => {
-    expect(onLine(lines, 110)).toBe(true);
-    expect(onLine(lines, 120)).toBe(true);
-    expect(onLine(lines, 220)).toBe(true);
-  });
-  it("does not hold a y between, above or below the lines, nor any y without lines", () => {
-    expect(onLine(lines, 160)).toBe(false);
-    expect(onLine(lines, 90)).toBe(false);
-    expect(onLine(lines, 230)).toBe(false);
-    expect(onLine([], 110)).toBe(false);
-  });
-});
-
-describe("focusAfter", () => {
-  const cards = ["a", "b", "c"];
-
-  it("is the next card, then the previous one: where the reader was, once the card is gone", () => {
-    expect(focusAfter(cards, "a")).toEqual(["b", "c"]);
-    expect(focusAfter(cards, "b")).toEqual(["c", "a"]);
-    expect(focusAfter(cards, "c")).toEqual(["b", "a"]);
-  });
-  it("goes on past the nearest two, so an open form (no Edit button) next to the card does not end the search", () => {
-    expect(focusAfter(["a", "b", "c", "d", "e"], "c")).toEqual(["d", "e", "b", "a"]);
-    expect(focusAfter(["a", "b", "c", "d"], "d")).toEqual(["c", "b", "a"]);
-    expect(focusAfter(["a", "b", "c", "d"], "a")).toEqual(["b", "c", "d"]);
-  });
-  it("is nothing for a host with no other card, or a card that is not in it", () => {
-    expect(focusAfter(["a"], "a")).toEqual([]);
-    expect(focusAfter([], "a")).toEqual([]);
-    expect(focusAfter(cards, "z")).toEqual([]);
-  });
-});
 
 describe("restoreFocusTarget", () => {
   const live = { isConnected: true };

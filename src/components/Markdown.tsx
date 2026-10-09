@@ -9,17 +9,8 @@ import { fileUriPath } from "../lib/terminalFileLinks.ts";
 import { CHAT_HIGHLIGHT_LIMIT, languageForFence } from "../lib/highlight.ts";
 import { HighlightedCode } from "./HighlightedCode.tsx";
 import { useT } from "../lib/i18n.ts";
-import { BlockCommentContext, blockComments, commentTarget, formPlace, partAnchor, replyParts, usePartComments, type CommentTarget, type PartLookup } from "../lib/blockComments.ts";
+import { BlockCommentContext, partAnchor, replyParts, usePartTouched, type PartLookup } from "../lib/blockComments.ts";
 import { forgetCommentPart, rememberCommentPart } from "../lib/commentSelection.ts";
-import { CommentCard, CommentEditContext, CommentForm } from "./CommentCard.tsx";
-import { FileCommentsContext } from "./FileCommentsContext.ts";
-
-/**
- * Opens the chat's one comment form (ChatView) on `target`, with the comment it holds if any: a
- * comment's Edit button opens it in place of its card, and the Comment button on a selection
- * opens it after the cards of the part where the selection ends.
- */
-export const OpenCommentContext = createContext<((owner: string, target: CommentTarget) => void) | null>(null);
 
 /**
  * True inside a quoted block (the comment editor's, `MarkdownBlocks quoted`): the block is shown
@@ -125,17 +116,6 @@ function sourceAttributes(source: SourceLines | undefined): { "data-source-line"
   return source[1] > source[0] ? { "data-source-line": source[0], "data-source-end": source[1] } : { "data-source-line": source[0] };
 }
 
-/**
- * In the file viewer's preview (`FileCommentsContext`), the comment cards and the open form that hang
- * under the host starting at `line` (`previewHosts`). It alone reads the comments, so a card coming or
- * going re-renders it and not the blocks.
- */
-function FileNotes({ line }: { line: number }) {
-  const comments = useContext(FileCommentsContext);
-  const notes = comments !== null && comments.noted.includes(line) ? comments.notesFor(line) : null;
-  return notes === null ? null : <div className="file-comment-notes block-comment-notes">{notes}</div>;
-}
-
 /** A list; each item is commentable on its own (`ItemView`), the list as a whole is not. A task
  * item's box stands in for its bullet. */
 function List({ block, path, commentable }: { block: ListBlock; path: number[]; commentable: boolean }) {
@@ -149,7 +129,7 @@ function List({ block, path, commentable }: { block: ListBlock; path: number[]; 
 
 /**
  * One list item: each one is a block of its own for comments, nested items included. The item's
- * own text sits in `.markdown-item` with its notes, so a highlight and a selection's offsets cover the
+ * own text sits in `.markdown-item`, so a highlight and a selection's offsets cover the
  * item's words, not its nested blocks (they have their own). The wrapper is there whether or not
  * the item is commentable or commented: adding a comment remounts none of the nested blocks.
  */
@@ -165,15 +145,18 @@ function ItemView({ list, index, path, commentable }: { list: ListBlock; index: 
             not an <input>: a disabled checkbox is greyed by the browser and ignores the accent */}
         {item.checked !== undefined && <span className="markdown-task-box" role="checkbox" aria-checked={item.checked} aria-disabled="true" aria-labelledby={id}>{item.checked && <Check aria-hidden="true" />}</span>}
         {item.checked === undefined ? <Inline nodes={item.content} /> : <span id={id}><Inline nodes={item.content} /></span>}
-        {comment.after}
       </div>
-      {commentable && item.source !== undefined && <FileNotes line={item.source[0]} />}
       {item.blocks !== undefined && <Blocks blocks={item.blocks} path={path} commentable={commentable} />}
     </li>
   );
 }
 
-/** `firstLine`: the file line of the block's first line, in the file viewer's preview (its `.hl-line`s carry their lines). */
+/**
+ * `firstLine`: the file line of the block's first line, in the file viewer's preview (its `.hl-line`s carry their
+ * lines). There a folded block's "Show all" names the block's last line (`data-fold-end`), so the viewer's walk can
+ * unfold the block that hides a comment's lines (`unfoldAt`); not as `data-source-line`, which would make the button a
+ * line element of its own.
+ */
 function CodeBlock({ language, value, firstLine }: { language: string; value: string; firstLine?: number }) {
   const t = useT();
   const quoted = useContext(QuotedContext);
@@ -215,7 +198,7 @@ function CodeBlock({ language, value, firstLine }: { language: string; value: st
       </div>
       <HighlightedCode code={fold !== null && !expanded ? fold.head : value} language={languageForFence(language)} limit={CHAT_HIGHLIGHT_LIMIT} firstLine={firstLine} />
       {fold !== null && (
-        <button type="button" className="markdown-code-more" aria-expanded={expanded} onClick={toggle}>
+        <button type="button" className="markdown-code-more" aria-expanded={expanded} data-fold-end={firstLine === undefined ? undefined : firstLine + fold.lines - 1} onClick={toggle}>
           {expanded ? t("Show less") : t("Show all {n} lines", { n: fold.lines })}
         </button>
       )}
@@ -235,33 +218,32 @@ function Blocks({ blocks, path = NO_PATH, commentable = true }: { blocks: Markdo
 }
 
 /**
- * One block at `path`, with its comment cards where it is commentable. A rule carries no comment,
- * and a list carries them on its items. A block of the file viewer's preview (one with `source`)
+ * One block at `path`, commentable unless it is a rule; a list carries its comments on its items.
+ * A block of the file viewer's preview (one with `source`)
  * writes its source lines on the elements a selection maps to lines: a heading, each line of a
- * paragraph, each table row, each code line, a formula; and its file comment cards follow it where
- * it is commentable (`FileNotes`).
+ * paragraph, each table row, each code line, a formula. The viewer draws nothing in it of the comments: their text is
+ * highlighted and their pins lie in its pin layer (FileComments.tsx).
  */
 function BlockView({ block, path, commentable }: { block: MarkdownBlock; path: number[]; commentable: boolean }): ReactNode {
   const comment = useCommentable(path, commentable && block.type !== "hr" && block.type !== "list");
   const { className, ref } = comment;
-  const fileNotes = commentable && block.type !== "hr" && block.type !== "list" && block.source !== undefined && <FileNotes line={block.source[0]} />;
   switch (block.type) {
     case "heading": {
       // agent headings are h3 whatever the agent wrote: the app's own h1/h2 (Brand, the dialog
       // titles) stay the outline above them. The level rides on a class, so the stylesheet
       // keeps drawing each level as it did (ChatView.css `.markdown-h1`...`.markdown-h6`).
       const level = `markdown-h${block.level}`;
-      return <><h3 ref={ref} className={className ? `${level} ${className}` : level} {...sourceAttributes(block.source)}><Inline nodes={block.content} /></h3>{comment.after}{fileNotes}</>;
+      return <h3 ref={ref} className={className ? `${level} ${className}` : level} {...sourceAttributes(block.source)}><Inline nodes={block.content} /></h3>;
     }
     case "paragraph": {
       const lineNumbers = block.lineNumbers;
-      return <><p ref={ref} className={className}>{block.lines.map((line, lineIndex) => {
+      return <p ref={ref} className={className}>{block.lines.map((line, lineIndex) => {
         const fileLine = lineNumbers?.[lineIndex];
         return <span key={lineIndex} {...sourceAttributes(fileLine === undefined ? undefined : [fileLine, fileLine])}><Inline nodes={line} />{lineIndex < block.lines.length - 1 && <br />}</span>;
-      })}</p>{comment.after}{fileNotes}</>;
+      })}</p>;
     }
     case "list": return <List block={block} path={path} commentable={commentable} />;
-    case "blockquote": return <><blockquote ref={ref} className={className}><Blocks blocks={block.blocks} path={path} commentable={false} /></blockquote>{comment.after}{fileNotes}</>;
+    case "blockquote": return <blockquote ref={ref} className={className}><Blocks blocks={block.blocks} path={path} commentable={false} /></blockquote>;
     case "hr": return <hr />;
     default: {
       const rowLine = (row: number): { "data-source-line"?: number } => {
@@ -275,11 +257,11 @@ function BlockView({ block, path, commentable }: { block: MarkdownBlock; path: n
             <tbody>{block.rows.map((row, rowIndex) => <tr key={rowIndex} {...rowLine(rowIndex + 1)}>{row.map((cell, cellIndex) => <td key={cellIndex}><Inline nodes={cell} /></td>)}</tr>)}</tbody>
           </table>
         </div>;
-      // a code block, a table or a formula is commentable on a host around it, its notes after. The
+      // a code block, a table or a formula is commentable on a host around it. The
       // host is there whether or not the block is commentable, so a reply turning final (or live
       // again) keeps the same element, and a code block the reader unfolded stays unfolded. A
       // formula's host is its line element too; a code block's and a table's lines are their own
-      return <><div ref={ref} className={className === undefined ? "markdown-block" : `markdown-block ${className}`} {...(block.type === "math" ? sourceAttributes(block.source) : {})}>{body}</div>{comment.after}{fileNotes}</>;
+      return <div ref={ref} className={className === undefined ? "markdown-block" : `markdown-block ${className}`} {...(block.type === "math" ? sourceAttributes(block.source) : {})}>{body}</div>;
     }
   }
 }
@@ -287,26 +269,24 @@ function BlockView({ block, path, commentable }: { block: MarkdownBlock; path: n
 interface Commentable {
   /** undefined where the block is not commentable */
   className: string | undefined;
-  /** on the block's element: where it is commentable, the selection handler finds its target from it */
+  /** on the block's element: where it is commentable, the selection and click handlers find its target from it */
   ref: (node: HTMLElement | null) => void;
-  /** the block's notes, one card per comment (and the open form), right after the block's content */
-  after: ReactNode;
 }
 
 /**
  * What makes the block at `path` commentable; nothing where it is not (outside a final answer,
  * inside a blockquote, a rule). Its target is the reply's part at `path` (`ReplyPartsContext`; a
- * list item's path ends in its index). A comment is made by selecting text in the block (ChatView),
- * which finds the block's target through the element `ref` registers. The block shows the notes of
- * the comments that hang under it (`notesOnPart`): its own, and those of selections that end in it.
+ * list item's path ends in its index). A comment is made by selecting text in the block or by
+ * clicking it (ChatView), which finds the block's target through the element `ref` registers. The
+ * block draws nothing of its comments: their text is highlighted (lib/commentHighlight.ts), which
+ * looks for the parts some comment covers (`is-commented`), and their pins lie in the chat's pin
+ * layer (CommentPins.tsx). With comments turned off no part is commented, whatever is stored (`BlockCommentStore.setEnabled`).
  */
 function useCommentable(path: number[], enabled: boolean): Commentable {
   const reply = useContext(BlockCommentContext);
   const parts = useContext(ReplyPartsContext);
-  const openEditor = useContext(OpenCommentContext);
-  const edit = useContext(CommentEditContext);
   const target = enabled && reply !== null ? parts?.get(partAnchor(reply, path))?.target ?? null : null;
-  const { notes, touched } = usePartComments(reply?.owner ?? "", target, parts);
+  const touched = usePartTouched(reply?.owner ?? "", target, parts);
   // registered while mounted and commentable, and taken out when either ends
   const registered = useRef<HTMLElement | null>(null);
   const ref = useCallback((node: HTMLElement | null) => {
@@ -314,28 +294,9 @@ function useCommentable(path: number[], enabled: boolean): Commentable {
     registered.current = node;
     if (node !== null && target !== null && reply !== null && parts !== null) rememberCommentPart(node, { owner: reply.owner, target, parts });
   }, [reply, target, parts]);
-  if (target === null || reply === null) return { className: undefined, ref, after: null };
-  // the open form is drawn in the host its card has, or will have once saved (`formPlace`)
-  const place = edit !== null && edit.owner === reply.owner && parts !== null ? formPlace(blockComments.list(edit.owner), edit.target, parts) : null;
-  const here = edit !== null && place !== null && place.host.anchor === target.anchor ? { edit, replaces: place.replaces } : null;
-  const anchors = notes.map((comment) => comment.anchor);
-  return {
-    // commented: some comment covers its text, its notes may hang under a later part
-    className: `is-commentable${touched ? " is-commented" : ""}`,
-    ref,
-    // one card per comment, in reading order, under the part where its selection ends. Keyed by
-    // anchor: an edit gives the comment a new id but keeps its card's element. The text it is on
-    // shows as the highlight, not in the card. The form of an edit takes its card's place; a new
-    // comment's goes after the cards
-    after: (notes.length > 0 || here !== null) && <div className="block-comment-notes">
-      {notes.map((comment) => here !== null && here.replaces === comment.id
-        ? <CommentForm key={comment.anchor} edit={here.edit} replaces={comment} anchors={anchors} />
-        : <CommentCard key={comment.anchor} comment={comment} anchors={anchors}
-          onEdit={() => openEditor?.(reply.owner, comment.quote === undefined ? target : commentTarget(comment))}
-          onDelete={() => blockComments.remove(reply.owner, [comment.id])} />)}
-      {here !== null && here.replaces === null && <CommentForm key={`new-${here.edit.id}`} edit={here.edit} replaces={null} anchors={anchors} />}
-    </div>,
-  };
+  if (target === null || reply === null) return { className: undefined, ref };
+  // commented: some comment covers some of its text
+  return { className: `is-commentable${touched ? " is-commented" : ""}`, ref };
 }
 
 /**
@@ -366,8 +327,7 @@ export const Markdown = memo(function Markdown({ children, className }: { childr
  * Markdown parsed elsewhere, rendered as `Markdown` renders its text: the file viewer parses a file
  * in a worker, so a file the parser is slow on cannot hold the page. Blocks with their `source`
  * (`parseMarkdownWithLines`, as the file viewer's are) write the lines they come from on their
- * elements, and inside a `FileCommentsContext` the file's comment cards follow them; the chat's
- * blocks carry none, so its DOM stays as it was. The ref is the `.markdown` root: the file viewer's
+ * elements, where a file comment finds the lines it is on; the chat's blocks carry none, so its DOM stays as it was. The ref is the `.markdown` root: the file viewer's
  * comments measure selections in it.
  */
 export const ParsedMarkdown = memo(forwardRef<HTMLDivElement, { blocks: MarkdownBlock[]; className?: string }>(function ParsedMarkdown({ blocks, className }, ref) {

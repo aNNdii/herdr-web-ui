@@ -519,3 +519,13 @@ it("keeps the Markdown preview's width to readable or full, readable by default"
   for (const width of MARKDOWN_WIDTHS) expect(sanitizeSettings({ markdownWidth: width }).markdownWidth).toBe(width);
   for (const bad of ["narrow", "medium", "wide", "", null, 80]) expect(sanitizeSettings({ markdownWidth: bad }).markdownWidth).toBe("readable");
 });
+
+describe("comments", () => {
+  it("is on by default and keeps a stored choice", () => {
+    expect(sanitizeSettings({}).comments).toBe(true);
+    expect(sanitizeSettings({ comments: false }).comments).toBe(false);
+  });
+  it("falls back to on for a value that is not a boolean", () => {
+    expect(sanitizeSettings({ comments: "no" }).comments).toBe(true);
+  });
+});

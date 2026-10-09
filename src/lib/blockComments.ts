@@ -1,6 +1,7 @@
-import { createContext, useRef, useSyncExternalStore } from "react";
+import { createContext, useSyncExternalStore } from "react";
 import { isSlashCommand, MAX_COMPOSER_CHARS, SELECTION_QUOTE_MAX } from "./compose.ts";
 import { fileAnchor, fileCommentAt, fileQuote, isFileComment, sortFileComments, type FileComment, type FileTarget, type LineRange } from "./fileComments.ts";
+import { isCommentPoint, type CommentPoint } from "./commentPins.ts";
 import type { InlineNode, ListBlock, MarkdownBlock } from "./markdown.ts";
 
 /**
@@ -50,6 +51,12 @@ export interface CommentTarget {
    * part's text when the selection runs on into later parts; `until` is then where it ends.
    */
   quote?: { text: string; start: number; end: number; until?: SelectionEnd };
+  /**
+   * Where the comment was made: a block clicked, or a selection a mouse dragged, where the pointer was, as fractions of
+   * its text's box. Its pin's tip goes there; without one, after the end of its text. Not part of what names the
+   * comment: the same block clicked elsewhere opens the same comment, its point unchanged.
+   */
+  point?: CommentPoint;
 }
 
 /**
@@ -81,6 +88,8 @@ export interface BlockComment {
   range?: [number, number];
   /** a selection comment over several parts: the part it ends in (`CommentTarget.quote.until`) */
   until?: SelectionEnd;
+  /** where its pin points (`CommentTarget.point`); absent: after the end of its text */
+  point?: CommentPoint;
 }
 
 /** What a pane keeps and sends: a comment on a block of an agent's reply, or on lines of a file. */
@@ -178,6 +187,7 @@ export function commentTarget(comment: BlockComment): CommentTarget {
   if (comment.quote !== undefined && comment.range !== undefined) {
     target.quote = { text: comment.quote, start: comment.range[0], end: comment.range[1], ...(comment.until === undefined ? {} : { until: comment.until }) };
   }
+  if (comment.point !== undefined) target.point = comment.point;
   return target;
 }
 
@@ -259,52 +269,6 @@ function coverage(comment: BlockComment, parts: PartLookup): { first: RenderedPa
   const last = until === undefined ? undefined : parts.get(until.anchor);
   const reached = last !== undefined && last.index > first.index && blockContent(last.target.block) === blockContent(until!.block);
   return { first, last: reached ? last : first };
-}
-
-/**
- * The rendered part a comment's note hangs under: the part its selection ends in (see `coverage`),
- * so a selection over several parts has its note after all of it; else its own part. Null when it
- * is not shown in `parts`, the parts of one rendered reply (`replyParts`).
- */
-export function noteHost(comment: BlockComment, parts: PartLookup): CommentTarget | null {
-  return coverage(comment, parts)?.last.target ?? null;
-}
-
-/** The notes that hang under the rendered `part` of the reply `parts` (see `noteHost`), in reading order. */
-export function notesOnPart(comments: readonly PaneComment[], part: CommentTarget, parts: PartLookup): BlockComment[] {
-  if (parts.get(part.anchor) === undefined) return [];
-  return sortComments(comments.filter(isReplyComment).filter((c) => noteHost(c, parts)?.anchor === part.anchor));
-}
-
-/**
- * Whether a comment form holds something the user typed: its field differs from how it opened (empty for a
- * new comment, the comment for an edit). Such a form is not thrown away by Escape, nor replaced by another
- * comment; an untouched one is.
- */
-export function commentTyped(value: string, initialComment: string): boolean {
-  return value !== initialComment;
-}
-
-/**
- * Whether a comment form's Save (its button and Cmd/Ctrl+Enter) does anything: a new comment with nothing
- * but blanks has nothing to save; an edit may be saved blank, which deletes the comment.
- */
-export function commentCanSave(value: string, initialComment: string): boolean {
-  return initialComment !== "" || value.trim() !== "";
-}
-
-/**
- * Where the inline form for writing or editing a comment on `target` goes, among the rendered
- * `parts`: in the host its card has, or will have once saved (`noteHost`), in place of the card of
- * the comment it edits (`replaces`, its id) or after that host's cards for a new one. A comment
- * written on another block at the same anchor is not the one it edits (the store moves it off the
- * anchor on save). Null when the target's first part is not rendered as written: the chat has no
- * place for the form, and the modal editor takes over.
- */
-export function formPlace(comments: readonly PaneComment[], target: CommentTarget, parts: PartLookup): { host: CommentTarget; replaces: string | null } | null {
-  const existing = comments.find((c): c is BlockComment => isReplyComment(c) && c.anchor === target.anchor && isWrittenOn(c, target));
-  const host = noteHost(existing ?? draftComment(target), parts);
-  return host === null ? null : { host, replaces: existing?.id ?? null };
 }
 
 /**
@@ -407,6 +371,7 @@ export type CommentsHeldBy = "no-agent" | "answer" | "command";
  *   file, and expand `$(…)` in the quoted reply;
  * - it answers a question the agent has open (`answering`), read as an option or a reply;
  * - it is a slash command, which the agent would not read as one with comments in front.
+ * With comments turned off the store lists none (`BlockCommentStore.setEnabled`), so there are none to send or hold.
  */
 export function outgoingMessage(comments: readonly PaneComment[], text: string, { answering = false, agent = true }: { answering?: boolean; agent?: boolean } = {}): {
   message: string;
@@ -438,14 +403,18 @@ export function isMarkdownBlock(value: unknown): value is MarkdownBlock {
 }
 
 export const BLOCK_COMMENTS_PREFIX = "herdr-web-ui:block-comments:";
-type CommentStorage = Pick<Storage, "getItem" | "setItem" | "removeItem">;
+type CommentStorage = Pick<Storage, "getItem" | "setItem" | "removeItem" | "key" | "length">;
 /** A fresh comment id; a time-and-random fallback where `crypto.randomUUID` is missing (an insecure origin). */
 const newId = () => globalThis.crypto?.randomUUID?.() ?? `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
 
-/** An entry from storage that renders and quotes without throwing: hand-edited or older data is dropped. */
+/**
+ * An entry from storage that renders and quotes without throwing: hand-edited or older data is dropped. A `point` that
+ * is not one (`isCommentPoint`) is removed from the entry, which is kept: its pin goes after the end of its text.
+ */
 export function isBlockComment(value: unknown): value is BlockComment {
   if (typeof value !== "object" || value === null) return false;
   const entry = value as Partial<BlockComment>;
+  if ("point" in entry && !isCommentPoint(entry.point)) delete entry.point;
   if (typeof entry.id !== "string" || typeof entry.anchor !== "string" || typeof entry.comment !== "string") return false;
   if (!Array.isArray(entry.order) || !entry.order.every(Number.isFinite) || !isMarkdownBlock(entry.block)) return false;
   // a selection comment has both a quote and a range, a block comment neither
@@ -474,13 +443,22 @@ export function isPaneComment(value: unknown): value is PaneComment {
   return (kind === undefined || kind === "reply") && isBlockComment(value);
 }
 
+/** The empty list of a pane's comments. */
+const NONE: readonly never[] = [];
+
 /**
  * Comments per pane (`owner`), kept in localStorage like the held-message queue. Snapshots keep
  * their identity until their own data changes, so `useSyncExternalStore` readers re-render only
  * for the comments they show.
+ *
+ * The store owns the Comments setting's effect on what is read (`setEnabled`): while it is off, every pane has no
+ * comments to show, walk or send (`list`, `get`, `useBlockComments`, `usePartTouched`), whatever is stored. Settings do
+ * not follow another tab, which may still have comments on and store new ones after this one turned them off: those
+ * stay stored, untouched, and `countAll` and `clearAll` still see them.
  */
 export class BlockCommentStore {
   private lists = new Map<string, readonly PaneComment[]>();
+  private enabled = true;
   /** the raw value last read or written, so `refresh` notices only real changes */
   private saved = new Map<string, string | null>();
   private unsaved = new Set<string>();
@@ -498,10 +476,25 @@ export class BlockCommentStore {
   isUnsaved(owner: string): boolean { return this.unsaved.has(owner); }
 
   /**
-   * The pane's comments in sending order (`sortPaneComments`), read from storage on first use and
-   * cached after. Entries that do not read as comments, and a second comment on an anchor, are dropped.
+   * Applies the Comments setting (on by default): off, `list` and `get` find none; storage and the write paths are
+   * unaffected. A change tells subscribers once.
+   */
+  setEnabled(on: boolean): void {
+    if (on === this.enabled) return;
+    this.enabled = on;
+    this.notify();
+  }
+
+  /**
+   * The pane's comments in sending order (`sortPaneComments`); none while comments are turned off (`setEnabled`).
+   * Entries that do not read as comments, and a second comment on an anchor, are dropped.
    */
   list(owner: string): readonly PaneComment[] {
+    return this.enabled ? this.stored(owner) : NONE;
+  }
+
+  /** The pane's stored comments in sending order, whatever the setting: read from storage on first use and cached after. */
+  private stored(owner: string): readonly PaneComment[] {
     const cached = this.lists.get(owner);
     if (cached) return cached;
     let raw: string | null = null;
@@ -541,7 +534,7 @@ export class BlockCommentStore {
     if (target.quote && target.quote.text.trim() === "") return;
     this.refresh(owner);
     const text = comment.trim();
-    let comments = this.list(owner);
+    let comments = this.stored(owner);
     let existing = comments.find((c): c is BlockComment => isReplyComment(c) && c.anchor === target.anchor);
     if (existing && !isWrittenOn(existing, target)) {
       const stale = existing;
@@ -550,12 +543,14 @@ export class BlockCommentStore {
     }
     if (text === "") {
       if (existing) this.write(owner, comments.filter((c) => c !== existing));
-      else if (comments !== this.list(owner)) this.write(owner, comments);
+      else if (comments !== this.stored(owner)) this.write(owner, comments);
       return;
     }
     if (existing?.comment === text) return;
-    // an edit keeps its place: a turn without a time placed it by when it was first written
-    const next = commentOn(target, newId(), existing?.order ?? [target.turnTime ?? this.now(), ...target.position], text);
+    // an edit keeps its place: a turn without a time placed it by when it was first written. And its pin's point, or
+    // having none: the block clicked again elsewhere is the same comment
+    const point = existing === undefined ? target.point : existing.point;
+    const next = commentOn({ ...target, point }, newId(), existing?.order ?? [target.turnTime ?? this.now(), ...target.position], text);
     this.write(owner, existing ? comments.map((c) => c === existing ? next : c) : [...comments, next]);
   }
 
@@ -571,7 +566,7 @@ export class BlockCommentStore {
   saveFile(owner: string, target: FileTarget, comment: string): string | null {
     this.refresh(owner);
     const text = comment.trim();
-    const comments = this.list(owner);
+    const comments = this.stored(owner);
     const existing = fileCommentAt(comments.filter((c): c is FileComment => !isReplyComment(c)), target);
     if (text === "") {
       if (existing) this.write(owner, comments.filter((c) => c !== existing));
@@ -581,7 +576,10 @@ export class BlockCommentStore {
     const id = newId();
     const wanted = existing?.anchor ?? target.anchor ?? fileAnchor(target);
     const anchor = existing === undefined && comments.some((c) => c.anchor === wanted) ? `${wanted}~${id}` : wanted;
-    const next: FileComment = { ...target, kind: "file", id, anchor, created: existing?.created ?? this.now(), comment: text };
+    // an edit keeps its pin's point, or having none, as `save` does
+    const { point: _point, ...rest } = target;
+    const point = existing === undefined ? target.point : existing.point;
+    const next: FileComment = { ...rest, kind: "file", id, anchor, created: existing?.created ?? this.now(), comment: text, ...(point === undefined ? {} : { point }) };
     this.write(owner, existing ? comments.map((c) => c === existing ? next : c) : [...comments, next]);
     return next.id;
   }
@@ -592,7 +590,7 @@ export class BlockCommentStore {
    */
   moveFile(owner: string, id: string, lines: LineRange): void {
     this.refresh(owner);
-    const comments = this.list(owner);
+    const comments = this.stored(owner);
     const moved = comments.find((c): c is FileComment => !isReplyComment(c) && c.id === id);
     if (moved === undefined || (moved.lines[0] === lines[0] && moved.lines[1] === lines[1])) return;
     const anchor = fileAnchor({ ...moved, lines });
@@ -604,9 +602,50 @@ export class BlockCommentStore {
   /** Removes the comments with these ids, as a send acknowledges them; an id already gone is no change. */
   remove(owner: string, ids: readonly string[]): void {
     this.refresh(owner);
-    const comments = this.list(owner);
+    const comments = this.stored(owner);
     const kept = comments.filter((c) => !ids.includes(c.id));
     if (kept.length !== comments.length) this.write(owner, kept);
+  }
+
+  /** How many comments are stored over every pane, also on panes only another tab wrote and ones that failed to save. */
+  countAll(): number {
+    let count = 0;
+    for (const owner of this.owners()) {
+      this.refresh(owner);
+      count += this.stored(owner).length;
+    }
+    return count;
+  }
+
+  /** Deletes every pane's comments, stored and cached, and tells subscribers once. A storage that throws still loses the cached ones. */
+  clearAll(): void {
+    try {
+      const storage = this.storage();
+      for (const key of this.storedKeys(storage)) storage.removeItem(key);
+    } catch { /* private mode */ }
+    this.lists.clear();
+    this.saved.clear();
+    this.unsaved.clear();
+    this.notify();
+  }
+
+  /** Every pane with comments in storage, plus the ones whose last write failed. */
+  private owners(): Set<string> {
+    const owners = new Set(this.unsaved);
+    try {
+      for (const key of this.storedKeys(this.storage())) owners.add(key.slice(BLOCK_COMMENTS_PREFIX.length));
+    } catch { /* private mode */ }
+    return owners;
+  }
+
+  /** The comments keys in `storage`, collected first so removing them does not shift the index. */
+  private storedKeys(storage: CommentStorage): string[] {
+    const keys: string[] = [];
+    for (let i = 0; i < storage.length; i++) {
+      const key = storage.key(i);
+      if (key?.startsWith(BLOCK_COMMENTS_PREFIX)) keys.push(key);
+    }
+    return keys;
   }
 
   /** Re-read storage another tab may have written; notify only when it changed. */
@@ -617,7 +656,7 @@ export class BlockCommentStore {
       if (raw === this.saved.get(owner)) return;
     } catch { return; }
     this.lists.delete(owner);
-    this.list(owner);
+    this.stored(owner);
     this.notify();
   }
 
@@ -645,12 +684,12 @@ export class BlockCommentStore {
 function commentOn(target: CommentTarget, id: string, order: number[], text: string): BlockComment {
   const { quote } = target;
   const selection = quote ? { quote: quote.text, range: [quote.start, quote.end] as [number, number], ...(quote.until ? { until: quote.until } : {}) } : {};
-  return { id, anchor: target.anchor, order, block: target.block, comment: text, ...selection };
+  return { id, anchor: target.anchor, order, block: target.block, comment: text, ...selection, ...(target.point === undefined ? {} : { point: target.point }) };
 }
 
 /**
  * The comment `target` will hold once one is written, without an id or a text: what covers the
- * selection while its comment is being written (`partSegments` gives its text part by part).
+ * selection or the block clicked while its comment is being written (`partSegments` gives its text part by part).
  */
 export function draftComment(target: CommentTarget): BlockComment {
   return commentOn(target, "", [target.turnTime ?? 0, ...target.position], "");
@@ -681,47 +720,25 @@ if (typeof window !== "undefined") {
   });
 }
 
-/** The empty list for both a pane's comments and a part's notes. */
-const NONE: readonly never[] = [];
+const noSubscription = () => () => {};
 
 /**
- * The pane's comments in sending order, re-rendering when they change. The server snapshot is
- * empty: a reply rendered to a string (tests) shows no comments.
+ * The pane's comments in sending order, re-rendering when they change; none while comments are turned off
+ * (`BlockCommentStore.setEnabled`). The server snapshot is empty: a reply rendered to a string (tests) shows no comments.
  */
 export function useBlockComments(owner: string): readonly PaneComment[] {
   return useSyncExternalStore(blockComments.subscribe, () => blockComments.list(owner), () => NONE);
 }
 
-const noSubscription = () => () => {};
-
-/** What a rendered part shows of the comments: the notes under it, and whether any comment covers some of its text. */
-export interface PartComments {
-  /** the notes that hang under the part (`notesOnPart`), in reading order */
-  notes: readonly BlockComment[];
-  /** a comment covers some of the part (`partSegments`): its own, or one over several parts that reaches it */
-  touched: boolean;
-}
-
-const UNTOUCHED: PartComments = { notes: NONE, touched: false };
-
 /**
- * The comments of `owner` the rendered part `target` of the reply `parts` shows. The value keeps
- * its identity until they change, so a part re-renders only for its own. No target: nothing to
- * read and no subscription.
+ * Whether a comment of `owner` covers some of the rendered part `target` of the reply `parts` (`partSegments`):
+ * its own, or one over several parts that reaches it. A boolean, so a part re-renders only when that answer
+ * changes. No target: false, nothing to read and no subscription; comments turned off: false (`setEnabled`).
  */
-export function usePartComments(owner: string, target: CommentTarget | null, parts: PartLookup | null): PartComments {
-  const last = useRef(UNTOUCHED);
-  const read = (): PartComments => {
-    if (target === null || parts === null) return UNTOUCHED;
-    const comments = blockComments.list(owner);
-    const notes = notesOnPart(comments, target, parts);
-    // a note's host is one of the parts its comment covers: a part with notes is touched
-    const touched = partSegments(comments, target, parts).length > 0;
-    const held = last.current;
-    if (touched === held.touched && notes.length === held.notes.length && notes.every((c, i) => c === held.notes[i])) return held;
-    return (last.current = touched ? { notes: notes.length === 0 ? NONE : notes, touched } : UNTOUCHED);
-  };
-  return useSyncExternalStore(target === null || parts === null ? noSubscription : blockComments.subscribe, read, () => UNTOUCHED);
+export function usePartTouched(owner: string, target: CommentTarget | null, parts: PartLookup | null): boolean {
+  const watched = target !== null && parts !== null;
+  const read = (): boolean => watched && target !== null && parts !== null && partSegments(blockComments.list(owner), target, parts).length > 0;
+  return useSyncExternalStore(watched ? blockComments.subscribe : noSubscription, read, () => false);
 }
 
 /** The reply part a `Markdown` renders; only a final answer that is not live provides one. */

@@ -3,7 +3,7 @@ import { Check, Code, Copy, Download, ExternalLink, MessageSquare, TriangleAlert
 
 import "./FileViewer.css";
 import { DirectoryBrowser } from "./DirectoryBrowser.tsx";
-import { FileCommentsContext, useFileCommentLayer, useFileCommentWalk, type FileCommentScope } from "./FileComments.tsx";
+import { useFileCommentLayer, useFileCommentWalk, type FileCommentScope } from "./FileComments.tsx";
 import { useHighlightedLines } from "./HighlightedCode.tsx";
 import { RenderBoundary } from "./RenderBoundary.tsx";
 import { TextFileView } from "./TextFileView.tsx";
@@ -177,15 +177,20 @@ export function FileViewer({ path: asked, paneId, machineId, paneFolder, onClose
     return () => { cancelled = true; download.abort(); };
   }, [path, paneId, fetchFileInfo, fileUrl, fetchDirectories, remote]);
 
-  // a comment form is open: Escape is the form's (it gives up while nothing is typed), not the viewer's
-  const formOpen = useRef(false);
+  // A comment popover is open: Escape is its own first, wherever the focus is. It closes one with nothing typed in it
+  // and keeps one with text typed (`popoverEscape`), and the viewer stays either way, so no typed text is lost; the
+  // walk's dialog takes its own Escape. With none open, Escape closes the viewer
+  const commentEscape = useRef<() => boolean>(() => false);
+  const walkDialogOpen = useRef(false);
   useEffect(() => {
     if (!keyboardActive) return;
     // the FilesDialog beneath listens on window too (and stands down while this is open); this
     // one is the topmost overlay, so it takes the key, unless a native modal (Add PC) is over it
-    /** Escape closes the viewer from anywhere in it, unless a comment form or something in it took the key. */
+    /** Escape closes the open comment popover, else the viewer, from anywhere in it, unless something in it took the key. */
     const onKey = (event: KeyboardEvent): void => {
-      if (event.key === "Escape" && !event.defaultPrevented && !formOpen.current && !nativeModalOver(surface.current)) onClose();
+      if (event.key !== "Escape" || event.defaultPrevented || walkDialogOpen.current || nativeModalOver(surface.current)) return;
+      if (commentEscape.current()) return;
+      onClose();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -229,22 +234,24 @@ export function FileViewer({ path: asked, paneId, machineId, paneFolder, onClose
   const hosts = useMemo<LineRange[] | null>(() => previewBlocks === null ? null : previewHosts(previewBlocks), [previewBlocks]);
   const commentView = codeShown ? "code" : hosts !== null ? "preview" : null;
   const scope = useMemo<FileCommentScope | null>(() => owner === null || commentView === null || filePath === null || sourceLines === null ? null
-    : { owner, path: filePath, label: pathLabel(filePath, paneFolder), view: commentView, lines: sourceLines, loaded: wholeLines, truncated: cutShort, hosts: commentView === "code" ? null : hosts },
-  [owner, commentView, filePath, paneFolder, sourceLines, wholeLines, cutShort, hosts]);
+    : { owner, path: filePath, label: pathLabel(filePath, paneFolder), view: commentView, lines: sourceLines, loaded: wholeLines, truncated: cutShort },
+  [owner, commentView, filePath, paneFolder, sourceLines, wholeLines, cutShort]);
   const bodyRef = useRef<HTMLDivElement>(null);
-  const comments = useFileCommentLayer(scope, bodyRef, commentView === "preview" ? previewRef : sourceRef);
+  const contentRef = commentView === "preview" ? previewRef : sourceRef;
+  const comments = useFileCommentLayer(scope, bodyRef, contentRef);
   // the header's counter walks this file's comments, switching to the view one was written in
   const walk = useFileCommentWalk({
-    owner, view: commentView, comments: comments.comments, surface: bodyRef,
+    owner, view: commentView, comments: comments.comments, surface: bodyRef, content: contentRef,
     showView: (next: FileView) => setChosen({ path, mode: next === "code" ? "code" : "preview" }),
   });
-  // Escape is the open form's, or the outdated comment's editor's, not the viewer's
-  formOpen.current = comments.formOpen || walk.editorOpen;
-  // the pane's comments of any kind: the one the viewer was opened at is looked up among them
+  // Escape is the open popover's first, or the walk's dialog's, before it is the viewer's
+  commentEscape.current = comments.escape;
+  walkDialogOpen.current = walk.editorOpen;
+  // the pane's comments of any kind: the one the viewer was opened at is looked up among them (none while comments are off)
   const paneComments = useBlockComments(owner ?? "");
   // Opened at a comment (the composer's walk): the walk stops at it once the file's comments are
   // placed, which waits for the file's text (and a preview's parse). Where the file cannot show it
-  // (gone, unreadable, no longer text), it opens in the modal editor over what the viewer says
+  // (gone, unreadable, no longer text), it opens in a dialog over what the viewer says
   const [pendingStop, setPendingStop] = useState(commentId);
   useEffect(() => setPendingStop(commentId), [commentId]);
   const { goTo, openInEditor } = walk;
@@ -362,9 +369,10 @@ export function FileViewer({ path: asked, paneId, machineId, paneFolder, onClose
           </div>
           <button type="button" className="icon-button file-viewer-action file-viewer-close" aria-label={t("Close file")} title={t("Close file")} onClick={onClose}><X aria-hidden="true" /></button>
         </header>
-        {/* with comments the body is their surface (lib/commentHighlight.ts), and the place the Comment button is positioned in */}
-        <div ref={bodyRef} className="file-viewer-body" data-comment-surface={scope === null ? undefined : ""}>
-          <FileCommentsContext.Provider value={comments.api}>{body}</FileCommentsContext.Provider>
+        {/* with comments the body is their surface (lib/commentHighlight.ts), the place the pins and the popover
+            are positioned in, and a click on a line in it comments on that line, a mouse's drag on what it selected */}
+        <div ref={bodyRef} className="file-viewer-body" {...comments.surfaceProps}>
+          {body}
           {comments.overlay}
           {walk.editor}
         </div>

@@ -796,12 +796,12 @@ class DemoSocket extends EventTarget {
           else if (queued && (text.trim().length === 0 || text.length > 20_000 || /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/u.test(text))) code = "invalid_submit_text";
           else if (queued) code = this.pendingTargetError(message.pane_id);
           if (code) {
-            this.completeRequest({ type: "submit-result", id: message.id, pane_id: message.pane_id, ok: false, code, message: "The demo agent cannot take this submission." });
+            this.completeRequest({ type: "submit-result", id: message.id, pane_id: message.pane_id, ok: false, code, message: "The demo agent cannot take this submission.", typed: false });
             break;
           }
           // like the bridge: a message only an agent may get is refused where none runs
           if (message.agent_only && !chatOf(message.pane_id)) {
-            this.completeRequest({ type: "submit-result", id: message.id, pane_id: message.pane_id, ok: false, code: "agent_only", message: "no agent runs in this pane, and this message is only sent to one; nothing was typed" });
+            this.completeRequest({ type: "submit-result", id: message.id, pane_id: message.pane_id, ok: false, code: "agent_not_found", message: "no agent runs in this pane, and this message is only sent to one; nothing was typed", typed: false });
             break;
           }
           if (queued && paneOf(message.pane_id)?.agent_status === "working") {
@@ -880,7 +880,7 @@ class DemoSocket extends EventTarget {
     if (!this.attached.has(paneId)) return "not_attached";
     const pane = paneOf(paneId);
     if (!pane) return "pane_not_found";
-    if (!(pane.agent ?? pane.agent_session?.agent)) return "agent_not_ready";
+    if (!(pane.agent ?? pane.agent_session?.agent)) return "agent_not_found";
     if (keyOfPane.get(paneId) === "web" && promptOpen) return "agent_blocked";
     if (pane.agent_status === "blocked") return "agent_blocked";
     if (!["working", "idle", "done"].includes(pane.agent_status)) return "agent_not_ready";

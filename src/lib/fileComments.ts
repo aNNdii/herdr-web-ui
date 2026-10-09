@@ -1,3 +1,4 @@
+import { isCommentPoint, type CommentPoint } from "./commentPins.ts";
 import { SELECTION_QUOTE_MAX } from "./compose.ts";
 import type { SourceLines } from "./markdown.ts";
 
@@ -32,6 +33,12 @@ export interface FileTarget {
   quoteLines: string[];
   /** absent: a whole-line comment */
   selection?: FileSelection;
+  /**
+   * Where the comment was made: a line clicked, or a selection a mouse dragged, where the pointer was, as fractions of
+   * its text's box (`CommentPoint`). Its pin's tip goes there; without one, after the end of its text. Not part of its
+   * anchor (`fileAnchor`, `fileCommentAt`): the same line clicked elsewhere opens the same comment, its point unchanged.
+   */
+  point?: CommentPoint;
   /**
    * Set when the target is a stored comment's, for an edit: the store keeps it under this anchor,
    * which a move may have left on other lines (`moveFile`), so it is never recomputed from `lines`.
@@ -196,24 +203,6 @@ export function sortFileComments(comments: readonly FileComment[]): FileComment[
   });
 }
 
-/**
- * Which host (a rendered block or line group, by its range) each comment hangs under, keyed by
- * the host's first line: the host holding the comment's last line, else the first one after it,
- * else the last host. Ids keep the order given.
- */
-export function assignHosts(hosts: readonly LineRange[], comments: readonly { id: string; lines: LineRange }[]): Map<number, string[]> {
-  const assigned = new Map<number, string[]>();
-  for (const { id, lines } of comments) {
-    const last = lines[1];
-    const host = hosts.find((h) => h[0] <= last && last <= h[1]) ?? hosts.find((h) => h[0] > last) ?? hosts.at(-1);
-    if (host === undefined) continue;
-    const ids = assigned.get(host[0]);
-    if (ids === undefined) assigned.set(host[0], [id]);
-    else ids.push(id);
-  }
-  return assigned;
-}
-
 const isStrings = (value: unknown): value is string[] => Array.isArray(value) && value.every((v) => typeof v === "string");
 const isCount = (value: unknown): value is number => typeof value === "number" && Number.isInteger(value);
 
@@ -232,11 +221,15 @@ function isSelection(value: unknown, lines: number): value is FileSelection {
   return start[0] < end[0] || (start[0] === end[0] && start[1] <= end[1]);
 }
 
-/** Whether a stored value is a file comment this module can place and quote (storage may hold anything). */
+/**
+ * Whether a stored value is a file comment this module can place and quote (storage may hold anything). A `point` that
+ * is not one (`isCommentPoint`) is removed from the entry, which is kept: its pin goes after the end of its text.
+ */
 export function isFileComment(value: unknown): value is FileComment {
   if (typeof value !== "object" || value === null) return false;
   const c = value as Record<string, unknown>;
   if (c.kind !== "file" || c.view !== "code" && c.view !== "preview") return false;
+  if ("point" in c && !isCommentPoint(c.point)) delete c.point;
   if (typeof c.id !== "string" || typeof c.anchor !== "string" || typeof c.path !== "string" || typeof c.label !== "string" || typeof c.comment !== "string") return false;
   if (typeof c.created !== "number" || !Number.isFinite(c.created)) return false;
   if (!isLineRange(c.lines) || !isStrings(c.source) || !isStrings(c.quoteLines)) return false;

@@ -2,7 +2,6 @@ import { describe, expect, it } from "bun:test";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { loadKatex, Markdown, ParsedMarkdown } from "../components/Markdown.tsx";
-import { FileCommentsContext, type FileCommentsApi } from "../components/FileCommentsContext.ts";
 import { SettingsProvider } from "./settings.ts";
 import { FOLD_CODE_AFTER_LINES, FOLDED_CODE_LINES, foldCode, inlineMarks, isTableSeparator, mathNestsTooDeep, parseInline, parseMarkdown, parseMarkdownWithLines, previewHosts, safeMarkdownHref, trimUrl, type InlineNode, type ListBlock, type MarkdownBlock } from "./markdown.ts";
 
@@ -562,16 +561,16 @@ describe("parseMarkdownWithLines", () => {
    * test). A code block's fold uses a layout effect, which a static render warns about: that warning
    * alone is left out.
    */
-  const render = (sourceLines: boolean, comments: FileCommentsApi | null = null): string => {
+  const render = (sourceLines: boolean, markdown = sample): string => {
     const languages = Object.getOwnPropertyDescriptor(navigator, "languages");
     Object.defineProperty(navigator, "languages", { configurable: true, value: ["en"] });
     const error = console.error;
     console.error = (...args: unknown[]) => { if (!String(args[0]).includes("useLayoutEffect does nothing on the server")) error(...args); };
     try {
       return renderToStaticMarkup(createElement(SettingsProvider, {
-        children: createElement(FileCommentsContext.Provider, { value: comments }, sourceLines
-          ? createElement(ParsedMarkdown, { blocks: parseMarkdownWithLines(sample) })
-          : createElement(Markdown, { children: sample })),
+        children: sourceLines
+          ? createElement(ParsedMarkdown, { blocks: parseMarkdownWithLines(markdown) })
+          : createElement(Markdown, { children: markdown }),
       }));
     } finally {
       console.error = error;
@@ -584,13 +583,8 @@ describe("parseMarkdownWithLines", () => {
     expect(previewHosts(parseMarkdownWithLines(sample))).toEqual([[1, 1], [3, 4], [6, 8], [10, 11], [12, 12], [14, 15], [17, 19], [21, 23]]);
   });
 
-  it("draws the chat's Markdown without source lines or file notes", () => {
-    const hosts = previewHosts(parseMarkdownWithLines(sample)).map(([first]) => first);
-    const comments: FileCommentsApi = { notesFor: () => "note", openSelection: () => {}, editing: false, noted: hosts };
-    const html = render(false, comments);
-    expect(html).not.toContain("data-source");
-    expect(html).not.toContain("file-comment-notes");
-    expect(html).toBe(render(false));
+  it("draws the chat's Markdown without source lines", () => {
+    expect(render(false)).not.toContain("data-source");
   });
 
   it("writes a preview's source lines on its line elements", () => {
@@ -606,20 +600,18 @@ describe("parseMarkdownWithLines", () => {
     expect(html).toContain('<span data-source-line="14">');
     expect(html).toContain('<span class="hl-line" data-source-line="18">');
     expect(html).toContain('<div class="markdown-block" data-source-line="21" data-source-end="23">');
-    expect(html).not.toContain("file-comment-notes");
   });
 
-  it("hangs a preview's notes after exactly the hosts previewHosts lists, in its order", () => {
-    const hosts = previewHosts(parseMarkdownWithLines(sample)).map(([first]) => first);
-    const comments: FileCommentsApi = {
-      notesFor: (line) => createElement("i", { "data-host": line }),
-      openSelection: () => {}, editing: false,
-      noted: [...hosts, 2, 7, 18],
-    };
-    const html = render(true, comments);
-    expect([...html.matchAll(/data-host="(\d+)"/g)].map((match) => Number(match[1]))).toEqual(hosts);
-    // nothing is drawn inside a line element: a list item's notes follow its own text, before its nested list
-    expect(html).toContain('</span></div><div class="file-comment-notes block-comment-notes"><i data-host="10"></i></div><ul');
+  it("names a folded block's last source line on its Show all button, and only in a preview", () => {
+    // the fence on line 3, its FOLD_CODE_AFTER_LINES + 5 lines from line 4 on: the last is line FOLD_CODE_AFTER_LINES + 8
+    const code = Array.from({ length: FOLD_CODE_AFTER_LINES + 5 }, (_, n) => `line ${n + 1}`).join("\n");
+    const long = `# A\n\n\`\`\`text\n${code}\n\`\`\``;
+    const html = render(true, long);
+    expect(html).toContain(`class="markdown-code-more" aria-expanded="false" data-fold-end="${FOLD_CODE_AFTER_LINES + 8}"`);
+    // the folded head only: the last line drawn is the fold's last
+    expect(html).toContain(`data-source-line="${3 + FOLDED_CODE_LINES}"`);
+    expect(html).not.toContain(`data-source-line="${4 + FOLDED_CODE_LINES}"`);
+    expect(render(false, long)).not.toContain("data-fold-end");
   });
 });
 

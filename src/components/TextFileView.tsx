@@ -1,10 +1,9 @@
-import { useCallback, useContext, useLayoutEffect, useMemo, useRef, type ReactNode, type RefObject } from "react";
+import { useCallback, useLayoutEffect, useRef, type RefObject } from "react";
 
 import { OpenFileContext, resolveFromFile } from "../lib/filePaths.ts";
 import type { Lines } from "../lib/highlight.ts";
 import type { MarkdownBlock } from "../lib/markdown.ts";
 import { useSettings, type MarkdownWidth } from "../lib/settings.ts";
-import { FileCommentsContext } from "./FileComments.tsx";
 import { CodeLines } from "./HighlightedCode.tsx";
 import { ParsedMarkdown } from "./Markdown.tsx";
 
@@ -28,10 +27,10 @@ export interface TextFileViewProps {
 }
 
 /**
- * The text of a file: Markdown rendered, or its code with line numbers. In a viewer that takes
- * comments (`FileCommentsContext`) each code line carries its number, and a line's comment cards
- * hang under it; the preview's elements carry the source lines they come from, and a block's cards
- * follow it (`ParsedMarkdown`).
+ * The text of a file: Markdown rendered, or its code with line numbers. Each code line carries its
+ * number, and the preview's elements carry the source lines they come from (its blocks are parsed
+ * with their lines, `ParsedMarkdown`): a file comment is on those lines. Nothing of the comments is
+ * drawn here: their text is highlighted and their pins lie in the viewer's pin layer.
  */
 export function TextFileView({ path, blocks, lines, onOpen, sourceRef, previewRef }: TextFileViewProps) {
   const { settings } = useSettings();
@@ -40,15 +39,9 @@ export function TextFileView({ path, blocks, lines, onOpen, sourceRef, previewRe
   const onOpenRef = useRef(onOpen);
   useLayoutEffect(() => { onOpenRef.current = onOpen; });
   const openLink = useCallback((href: string) => onOpenRef.current(resolveFromFile(path, href)), [path]);
-  const comments = useContext(FileCommentsContext);
-  const codeShown = blocks === null;
-  // only the lines that have notes are asked: a file may have tens of thousands. The preview's
-  // blocks ask for their own (Markdown.tsx)
-  const notes = useMemo(() => comments === null || !codeShown ? undefined
-    : new Map<number, ReactNode>(comments.noted.map((line) => [line, comments.notesFor(line)])), [comments, codeShown]);
   return <div className="file-viewer-content">
     {blocks !== null
       ? <OpenFileContext.Provider value={openLink}><ParsedMarkdown ref={previewRef} className={MARKDOWN_CLASS[settings.markdownWidth]} blocks={blocks} /></OpenFileContext.Provider>
-      : <CodeLines ref={sourceRef} className="file-viewer-text" lines={lines} lineNumbers wrap={settings.wrapCode} firstLine={1} notes={notes} />}
+      : <CodeLines ref={sourceRef} className="file-viewer-text" lines={lines} lineNumbers wrap={settings.wrapCode} firstLine={1} />}
   </div>;
 }
