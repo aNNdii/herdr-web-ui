@@ -27,10 +27,6 @@ describe("composerMessage and submitNote", () => {
     // a plain queued message whose agent left, or whose input state is not known
     expect(submitNote("agent_not_found", "No agent is in front of this pane now; nothing was typed")).toBe("Not sent: No agent is in front of this pane now; nothing was typed");
     expect(submitNote("agent_not_ready", "The agent's current input state is not known")).toBe("Not sent: The agent's current input state is not known");
-    // the codes of bridges before the condition-named ones
-    expect(submitNote("agent_only", "x")).toBe(none);
-    expect(submitNote("agent_only_not_ready", "x")).toBe(notReady);
-    expect(submitNote("agent_only_busy", "x")).toBe(busy);
   });
 
   it("knows a refusal that typed nothing from the bridge's typed:false", () => {
@@ -40,11 +36,12 @@ describe("composerMessage and submitNote", () => {
     expect(submitNotTyped({ code: "some_new_refusal" })).toBe(false);
   });
 
-  it("judges a refusal from a bridge that does not send typed by its code", () => {
+  it("judges a refusal from a bridge that does not send typed (upstream's remote bundle) by its code", () => {
     const legacy = (code: string) => submitNotTyped({ code });
     expect(["submit_timeout", "agent_blocked", "read_only"].map(legacy)).toEqual([true, true, true]);
-    expect(["agent_only", "agent_only_busy", "agent_only_not_ready", "agent_only_unsupported"].map(legacy)).toEqual([true, true, true, true]);
-    expect(["agent_not_found", "agent_not_ready", "agent_queue_busy"].map(legacy)).toEqual([true, true, true]);
+    expect(legacy("agent_not_ready")).toBe(true);
+    // this bridge's own refusals always say typed:false, so they are not on the list
+    expect(["agent_not_found", "agent_queue_busy", "agent_only_unsupported"].map(legacy)).toEqual([false, false, false]);
     expect(["disconnected", "timeout", "submit_failed"].map(legacy)).toEqual([false, false, false]);
     expect(["pending_input_unsupported", "invalid_delivery", "invalid_submit_text", "pending_limit"].map(legacy)).toEqual([true, true, true, true]);
     expect(["pane_not_found", "retired_submit_id"].map(legacy)).toEqual([true, true]);

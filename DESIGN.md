@@ -1312,7 +1312,7 @@ One set for both themes: the card is island black wherever it shows.
   composer does, and a message over the length limit is not sent: the row says "Too long to send.
   Shorten the message or remove comments." `Discard` drops the message with its comments.
   A message with comments, sent from here or from the box, goes agent-only; the server refuses it
-  with `agent_only_busy` while a Codex is busy with its own queued questions, so it is never typed
+  with `agent_queue_busy` while a Codex is busy with its own queued questions, so it is never typed
   into them, and the message and its comments stay. Hairlines between rows run the column's width; every line of text starts `--space-3`
   in. The list, not the group, has the height limit (two and a half rows, then it scrolls), and it
   gives way before the caption does. "Queued messages (n)" and each row's "Message n" stay for
