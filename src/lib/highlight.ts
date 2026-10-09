@@ -80,6 +80,20 @@ export const CHAT_HIGHLIGHT_LIMIT = 100 * 1024;
  */
 export const SYNC_HIGHLIGHT_LIMIT = 2 * 1024;
 
+/**
+ * Past this many lines, code is drawn as one text, without colors: every line is an element of its
+ * own, and in Chromium 20 000 of them take about 0.3 s to draw, while 256 KB of line breaks (262 144
+ * lines) held the page for 4 s. Bytes do not bound that, so the lines are counted.
+ */
+export const LINE_ELEMENT_LIMIT = 20_000;
+
+/** How many lines a normalized source (`normalizeCode`) has: one more than its line breaks. */
+export function countLines(source: string): number {
+  let lines = 1;
+  for (let at = source.indexOf("\n"); at !== -1; at = source.indexOf("\n", at + 1)) lines += 1;
+  return lines;
+}
+
 // the languages an agent's files and replies are likely to hold; TSRX (Octane) and plain text are left out
 const highlighter = createHighlighter({
   languages: [apache, cmake, cpp, css, diff, dockerfile, ejs, env, go, html, http, js, json, jsx, markdown, mermaid, nginx, php, python, scheme, shell, sql, svelte, toml, ts, tsx, vue, yaml],

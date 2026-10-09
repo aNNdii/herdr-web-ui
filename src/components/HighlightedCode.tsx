@@ -1,6 +1,6 @@
 import { Fragment, memo, useEffect, useMemo, useRef, useState } from "react";
 
-import { canHighlight, extendLines, normalizeCode, plainLines, type Lines } from "../lib/highlight.ts";
+import { canHighlight, countLines, extendLines, LINE_ELEMENT_LIMIT, normalizeCode, plainLines, type Lines } from "../lib/highlight.ts";
 import { highlightedFrom, highlightKnown, highlightOffThread, type Highlighted } from "../lib/highlightOffThread.ts";
 import { useT } from "../lib/i18n.ts";
 import { useSettings } from "../lib/settings.ts";
@@ -10,15 +10,16 @@ import "./HighlightedCode.css";
  * The lines of `code` to show now, and whether they were left plain for being too long. Highlighting
  * never holds the page: short code is highlighted at once, longer code in a worker (shown plain
  * until it answers, or with the colors it had while a reply grows), and code the worker gives up on
- * stays plain. Above `limit` characters it is not tried at all; without one, the worker's budget
- * alone bounds it. Off in Settings, or in a language it has no grammar for, every code is plain and
- * never too long.
+ * stays plain. Above `limit` characters, or `LINE_ELEMENT_LIMIT` lines, it is not tried at all;
+ * otherwise the worker's budget bounds it. Off in Settings, or in a language it has no grammar for,
+ * every code is plain and never too long.
  */
 function useHighlightedLines(code: string, language: string | null, limit?: number): Highlighted {
   const { settings } = useSettings();
   const source = useMemo(() => normalizeCode(code), [code]);
   const highlighted = settings.highlightCode && canHighlight(language) ? language : null;
-  const overLimit = highlighted !== null && limit !== undefined && code.length > limit;
+  const manyLines = useMemo(() => countLines(source) > LINE_ELEMENT_LIMIT, [source]);
+  const overLimit = highlighted !== null && ((limit !== undefined && code.length > limit) || manyLines);
   // what is known without waiting: no language, too long, short enough, or highlighted before
   const known = useMemo((): Highlighted | null => {
     if (highlighted === null || overLimit) return { lines: plainLines(source), tooLong: overLimit };
@@ -62,17 +63,20 @@ interface CodeLinesProps {
  * The lines are inline spans joined by literal "\n" text nodes (none after the last line), so the
  * text of the `<pre>` is the code itself: `innerText` and a copied selection keep every blank line.
  * Block lines would add a line break of their own between lines and drop or double the blank ones.
+ * Past `LINE_ELEMENT_LIMIT` lines it is one text, as drawing an element per line would hold the page.
  */
 const CodeLines = memo(function CodeLines({ lines }: CodeLinesProps) {
   // index keys: the lines are a static list that is rebuilt as a whole
-  const elements = useMemo(() => lines.map((tokens, index) => (
-    <Fragment key={index}>
-      {index > 0 && "\n"}
-      <span className="hl-line">
-        {tokens.map((token, n) => token.role === null ? token.text : <span className={`hl-${token.role}`} key={n}>{token.text}</span>)}
-      </span>
-    </Fragment>
-  )), [lines]);
+  const elements = useMemo(() => lines.length > LINE_ELEMENT_LIMIT
+    ? lines.map((tokens) => tokens.map((token) => token.text).join("")).join("\n")
+    : lines.map((tokens, index) => (
+      <Fragment key={index}>
+        {index > 0 && "\n"}
+        <span className="hl-line">
+          {tokens.map((token, n) => token.role === null ? token.text : <span className={`hl-${token.role}`} key={n}>{token.text}</span>)}
+        </span>
+      </Fragment>
+    )), [lines]);
   return <pre className="hl-code"><code>{elements}</code></pre>;
 });
 

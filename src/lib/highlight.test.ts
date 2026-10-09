@@ -4,7 +4,9 @@ import {
   highlightNow,
   highlightRuns,
   canHighlight,
+  countLines,
   languageForFence,
+  LINE_ELEMENT_LIMIT,
   linesFromRuns,
   normalizeCode,
   plainLines,
@@ -136,6 +138,15 @@ describe("SYNC_HIGHLIGHT_LIMIT", () => {
     const start = performance.now();
     highlightRuns(code, language);
     expect(performance.now() - start).toBeLessThan(50);
+  });
+});
+
+describe("countLines", () => {
+  it("counts the lines of a normalized source, a blank one included", () => {
+    expect(countLines("")).toBe(1);
+    expect(countLines("a")).toBe(1);
+    expect(countLines("a\n\nb")).toBe(3);
+    expect(countLines("\n".repeat(LINE_ELEMENT_LIMIT))).toBe(LINE_ELEMENT_LIMIT + 1);
   });
 });
 
