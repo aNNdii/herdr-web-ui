@@ -8,8 +8,9 @@ between releases do not reach them. Remote-PC runtime bundles are versioned sepa
 ## [Unreleased]
 
 ### Changed
-- A size under 10 MB shows one decimal (`1.3 MB`), in the file viewer and in a bridge update's
-  progress: a 1.3 MB file no longer reads as 1 MB.
+- A size under 10 MB shows one decimal (`1.3 MB`), in the file viewer, the Files list and a bridge
+  update's progress: a 1.3 MB file no longer reads as 1 MB.
+  ([#670](https://github.com/devswha/herdr-web-ui/pull/670) by @aNNdii)
 
 ### Fixed
 - Codex Chat can read a new session with one short answer when its complete submitted
