@@ -25,6 +25,7 @@ import { useMachineApi, useMachineId } from "../lib/machineContext.tsx";
 import { paneStorageId } from "../../shared/machines.ts";
 import { KeyBar } from "./KeyBar.tsx";
 import { TerminalInput } from "./TerminalInput.tsx";
+import { FindBar } from "./FindBar.tsx";
 import { SecretInput } from "./SecretInput.tsx";
 import { secretPrompt } from "../../shared/secret-prompt.ts";
 import { ChatView } from "./ChatView.tsx";
@@ -41,6 +42,7 @@ import { isAppShortcut } from "../lib/shortcuts.ts";
 import { OpenFileContext } from "../lib/filePaths.ts";
 import { fileUriPath, isWebLink, terminalFileLinkProvider } from "../lib/terminalFileLinks.ts";
 import { adjustTerminalGlyphs } from "../lib/terminalGlyphs.ts";
+import { terminalLabel } from "../lib/terminalLabel.ts";
 import { useMediaQuery } from "../lib/useMediaQuery.ts";
 
 /** How long a resize must rest before the grid refits and the pty follows it. */
@@ -77,6 +79,7 @@ export interface PaneTerminalProps {
   machineName?: string;
   /** the lens over the pane: the chat transcript, or the live xterm grid (App remembers it per pane) */
   view: PaneView;
+  findRequest?: number;
   /** App selected this pane itself (the selected one closed): switching to it must not take the keyboard */
   autoSelected?: boolean;
   /** xterm font size (settings) */
@@ -118,6 +121,7 @@ export function PaneTerminal({
   cwd = null,
   machineName = "",
   view,
+  findRequest = 0,
   autoSelected = false,
   terminalFontSize,
   terminalWheelSpeed,
@@ -138,10 +142,22 @@ export function PaneTerminal({
   const uploadFileRef = useRef(uploadPaneImage);
   uploadFileRef.current = uploadPaneImage;
   const chatView = view === "chat";
+  const [findOpen, setFindOpen] = useState(false);
+  const findOpenRef = useRef(findOpen);
+  findOpenRef.current = findOpen;
+  const lastFindRequest = useRef(findRequest);
+  useLayoutEffect(() => { findOpenRef.current = false; setFindOpen(false); }, [paneId]);
+  useLayoutEffect(() => {
+    if (findRequest !== lastFindRequest.current) {
+      lastFindRequest.current = findRequest;
+      findOpenRef.current = true;
+      setFindOpen(true);
+    }
+  }, [findRequest]);
   const chatViewRef = useRef(chatView);
   chatViewRef.current = chatView;
   // what the grid's region announces: the pane's own name, or the grid's kind while none is open
-  const terminalName = paneId === null ? t("Terminal") : t("Terminal for {title}", { title: title ?? paneId });
+  const terminalName = terminalLabel(paneId, title, t);
   /** read by the wheel handler, which is attached once for the terminal's life */
   const wheelSpeedRef = useRef(terminalWheelSpeed);
   wheelSpeedRef.current = terminalWheelSpeed;
@@ -195,6 +211,13 @@ export function PaneTerminal({
   const releasedRef = useRef(false);
   const [released, setReleasedState] = useState(false);
   const setReleased = useCallback((next: boolean) => { releasedRef.current = next; setReleasedState(next); }, []);
+  // released, the tab still shows the pane read-only (the server's "watch", herdr's observer), which
+  // leaves the pane at the size herdr's own window gives it; false on a server without it: paused
+  const watchingRef = useRef(false);
+  const [watching, setWatchingState] = useState(false);
+  const setWatching = useCallback((next: boolean) => { watchingRef.current = next; setWatchingState(next); }, []);
+  // the mount effect's watch, for the pane switch: a released tab moving on to the next pane watches that one
+  const watchRef = useRef<(pane: string) => void>(() => {});
   // the mount effect's release, for the queue below: a tab that kept its pane for a message lets go once it went
   const releaseRef = useRef<() => void>(() => {});
   // the mount effect's leave, for the pane switch: a tab out of use from the start (a reload behind
@@ -233,6 +256,9 @@ export function PaneTerminal({
   /** read by the OSC 52 handler, which is attached once for the terminal's life */
   const osc52AllowedRef = useRef(settings.paneClipboard);
   osc52AllowedRef.current = settings.paneClipboard;
+  // Settings → Use alongside herdr's own window: off (the default), a tab out of use keeps its pane and its size
+  const releaseAwayRef = useRef(settings.releasePaneAway);
+  releaseAwayRef.current = settings.releasePaneAway;
   // Settings → Chat width, Default: the lane follows this pane, on the stack its columns share
   usePaneLane(stackRef);
   const directTyping = settings.terminalInputMode === "direct" || (settings.terminalInputMode === "auto" && (!coarse || storedDirectTyping()));
@@ -295,7 +321,7 @@ export function PaneTerminal({
   // tells a key, a mouse and a tap by the press itself (lib/promptAnswer.ts), so a key on a
   // tablet hands the focus on and a tap on a touch-screen laptop does not.
   const onPromptAnswered = useCallback((toMessageBox: boolean) => {
-    if (toMessageBox) stackRef.current?.querySelector<HTMLTextAreaElement>(".composer-text")?.focus({ preventScroll: true });
+    if (toMessageBox && (chatViewRef.current || !findOpenRef.current)) stackRef.current?.querySelector<HTMLTextAreaElement>(".composer-text")?.focus({ preventScroll: true });
   }, []);
   // only the pick of that pane and prompt: an answer that comes back late must not take another's
   const clearPendingAnswer = useCallback((pane: string, promptId?: string) => {
@@ -874,6 +900,13 @@ export function PaneTerminal({
           term.options.disableStdin = observeRef.current || prompt !== null || heldRef.current;
           setSecret((previous) => previous?.pane === owner && previous.prompt === prompt ? previous : prompt ? { pane: owner, prompt } : null);
         });
+      } else if (message.type === "watch-data") {
+        // a read-only view drawn for this grid: written as it comes, never acknowledged
+        if (message.pane_id !== paneRef.current || !releasedRef.current || !watchingRef.current) return;
+        term.write(message.data);
+      } else if (message.type === "watch-end") {
+        // the view ended: the last screen stays, and the banner says the tab is paused
+        if (message.pane_id === paneRef.current) setWatching(false);
       } else if (message.type === "attach-resumed") {
         if (message.pane_id === paneRef.current) {
           setHeld(false);
@@ -1074,7 +1107,7 @@ export function PaneTerminal({
         // An upload can finish after the user has switched panes or lost input access.
         if (paneRef.current !== pane || chatViewRef.current || !socket.connected || term.options.disableStdin) return;
         pasteText(paths.map((path) => `'${path.replaceAll("'", "'\\''")}'`).join(" ") + " ");
-        term.focus();
+        if (!findOpenRef.current) term.focus();
       } catch (error) {
         if (paneRef.current === pane) noteClipboard(error instanceof Error ? error.message : String(error));
       }
@@ -1235,7 +1268,7 @@ export function PaneTerminal({
     const release = (): void => {
       cancelLeave();
       const current = paneRef.current;
-      if (!current || releasedRef.current || inUse() || embedded || fixedGridRef.current || endedRef.current) return;
+      if (!current || !releaseAwayRef.current || releasedRef.current || inUse() || embedded || fixedGridRef.current || endedRef.current) return;
       if (queueWaits(current)) {
         queueHeld = true;
         return;
@@ -1243,12 +1276,34 @@ export function PaneTerminal({
       socket.detach(current);
       if (pendingScopeRef.current !== null) pendingMessages.suspend(paneStorageId(machineId, current), pendingScopeRef.current);
       setReleased(true);
+      watch(current);
+    };
+    // the pane's screen starts again from the view, as on a pane switch; the view's first frame is whole
+    const watch = (pane: string): void => {
+      const generation = ++outputGeneration;
+      // Reset in stream order: the attach's queued writes must not draw over the view.
+      term.write("\x1bc", () => {
+        if (disposed || paneRef.current !== pane || generation !== outputGeneration) return;
+        modifyOtherKeysRef.current = 0;
+      });
+      modifyOtherKeysRef.current = 0;
+      setWatching(socket.watch(pane, term.cols, term.rows));
     };
     releaseRef.current = () => { if (queueHeld) release(); };
+    watchRef.current = watch;
+    // a window resized while watched: the view is drawn for a grid, so it starts again at the new one
+    const onWatchedResize = term.onResize(({ cols, rows }) => {
+      const current = paneRef.current;
+      if (current && releasedRef.current && watchingRef.current) socket.watch(current, cols, rows);
+    });
     const resume = (): void => {
       setReleased(false);
       const current = paneRef.current;
       if (!current) return;
+      if (watchingRef.current) {
+        socket.unwatch(current);
+        setWatching(false);
+      }
       // A fresh attach says attach_held again if needed; success does not send attach-resumed.
       setHeld(false);
       // the pane's screen starts again from the new attach, as on a pane switch
@@ -1276,7 +1331,7 @@ export function PaneTerminal({
     const leave = (): void => {
       const current = paneRef.current;
       if (current && !observeRef.current && !fixedGridRef.current) socket.keepSize(current);
-      if (releaseTimer === null && !releasedRef.current) releaseTimer = window.setTimeout(() => {
+      if (releaseAwayRef.current && releaseTimer === null && !releasedRef.current) releaseTimer = window.setTimeout(() => {
         if (paneRef.current === current) release();
       }, RELEASE_AFTER_MS);
     };
@@ -1321,6 +1376,8 @@ export function PaneTerminal({
       releaseRef.current = () => {};
       leaveRef.current = () => {};
       cancelLeaveRef.current = () => {};
+      watchRef.current = () => {};
+      onWatchedResize.dispose();
       window.removeEventListener("focus", back);
       window.removeEventListener("blur", leave);
       window.removeEventListener("pointerdown", onPointer, { capture: true });
@@ -1414,7 +1471,7 @@ export function PaneTerminal({
     // app), only this grid fits, and the refit takes the pane once the user is here
     const pane = paneRef.current;
     if (pane && term && inUse()) socketRef.current?.resize(pane, term.cols, term.rows, true);
-    if (!autoSelected && !coarseRef.current) term?.focus();
+    if (!autoSelected && !coarseRef.current && !findOpenRef.current) term?.focus();
   }, [chatView]);
 
   // Reset synchronously on pane changes: old composition timers must never see the new pane.
@@ -1452,10 +1509,17 @@ export function PaneTerminal({
       cancelLeaveRef.current();
       // a released pane was detached already
       if (!releasedRef.current) socket.detach(paneId);
+      if (watchingRef.current) {
+        socket.unwatch(paneId);
+        setWatching(false);
+      }
       if (pendingScopeRef.current !== null) pendingMessages.suspend(paneStorageId(machineId, paneId), pendingScopeRef.current);
     };
-    // a tab that let go of its pane while out of use attaches the next one when the user is back
-    if (releasedRef.current) return leavePane;
+    // a tab that let go of its pane while out of use watches the next one, and attaches it when the user is back
+    if (releasedRef.current) {
+      watchRef.current(paneId);
+      return leavePane;
+    }
     try {
       fit?.fit();
     } catch {
@@ -1469,7 +1533,7 @@ export function PaneTerminal({
     if (away) leaveRef.current();
     // the chat lens covers the grid and its composer takes the keyboard: focusing the hidden
     // grid sent the keys straight to the pane, and showed a phone's IME text mid-screen
-    if (!chatViewRef.current && !autoSelected && !coarseRef.current) term.focus();
+    if (!chatViewRef.current && !autoSelected && !coarseRef.current && !findOpenRef.current) term.focus();
     return leavePane;
   }, [paneId]);
 
@@ -1483,7 +1547,7 @@ export function PaneTerminal({
   useEffect(() => {
     const wasAuto = autoSelectedRef.current;
     autoSelectedRef.current = autoSelected;
-    if (wasAuto && !autoSelected && !chatViewRef.current && !coarseRef.current) termRef.current?.focus();
+    if (wasAuto && !autoSelected && !chatViewRef.current && !coarseRef.current && !findOpenRef.current) termRef.current?.focus();
   }, [autoSelected]);
 
   // key-bar taps go through xterm so the onData -> socket path above is reused
@@ -1859,7 +1923,7 @@ export function PaneTerminal({
         )}
         {!chatView && inputError && <div className="terminal-banner" role="status">{inputError}<button type="button" className="btn terminal-banner-action" onClick={() => setInputError(null)}>{t("Dismiss")}</button></div>}
         {!chatView && !observing && connected && !inputReady && !held && !ended && !released && <div className="terminal-banner" role="status">{t("Waiting for terminal input…")}</div>}
-        {paneId !== null && !chatView && released && <div className="terminal-banner" role="status">{t("Paused while you use another window")}</div>}
+        {paneId !== null && !chatView && released && <div className="terminal-banner" role="status">{t(watching ? "View only while you use another window · click to type" : "Paused while you use another window")}</div>}
         {/* the chat lens says these itself (ChatView), inline; the pills are the grid's */}
         {paneId !== null && !chatView && ended && !outputError && (
           <div className="terminal-banner" role="status">
@@ -1899,6 +1963,10 @@ export function PaneTerminal({
           </div>
         )}
       </div>
+      {findOpen && !chatView && paneId !== null && (
+        <FindBar key={paneId} paneId={paneId} focusRequest={findRequest} disabled={!connected || held || ended || released || !outputReady}
+          onClose={() => { setFindOpen(false); if (!coarse) termRef.current?.focus(); }} />
+      )}
       <div className="terminal-surface">
         {/* xterm hides its rendered rows from assistive technology, so the region around the
             visible grid carries the pane's name: a screen reader announces which pane
