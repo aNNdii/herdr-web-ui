@@ -66,6 +66,24 @@ export type { Machine, MachineEvent, PaneTarget, SetupJob, SetupRequest, SetupAc
  *  GET    /api/agents                    -> { agents: AgentKind[] } (herdr's agent manifests: the
  *         kinds `agent.start` accepts, plus omo and gjc when they are on this server's PATH,
  *         for the new-session dialog)
+ *  GET    /api/integrations              -> IntegrationsResponse (herdr's `integration.list`, in
+ *         herdr's order; read only: nothing here installs or removes one, Settings shows the
+ *         `herdr integration install` command instead)
+ *  GET    /api/plugins/actions           -> PluginActionsResponse (plugin.list + plugin.action.list:
+ *         every installed plugin with its enabled state and the manifest actions this PC's
+ *         platform can run; herdr lists a disabled plugin's actions too, and refuses to run them)
+ *  POST   /api/plugin/action { plugin_id, action_id, pane_id? } -> PluginActionResult
+ *         (plugin.action.invoke. With pane_id the action gets that pane's whole context: herdr
+ *         fills a field the caller left out from its OWN focus, not from the pane named, so what
+ *         the pane does not have (an agent, a git checkout, a cwd) goes as empty strings, never
+ *         left out. Without pane_id herdr uses its focus throughout. herdr answers as soon as the
+ *         command started, so the server waits a few seconds for its log entry: `running` means it
+ *         had not ended by then, and the GET below says how it ended. A failed command is a 200
+ *         with status `failed`; a refused invoke is herdr's own error: plugin_not_found,
+ *         plugin_action_not_found, plugin_disabled, platform_unsupported)
+ *  GET    /api/plugin/action?plugin_id=&log_id= -> PluginActionResult (plugin.log.list: where the
+ *         run a POST answered `running` for stands now; `log_id` is that answer's. 404
+ *         plugin_log_not_found once herdr's log no longer holds it)
  *  GET    /api/pane/read?pane_id=&source=&format=&lines=  -> { read: PaneReadResult }
  *  GET    /api/pane/scroll?pane_id=      -> { scroll: PaneScrollInfo | null } (where the
  *         viewport sits: its top row in the history is max_offset_from_bottom - offset_from_bottom)
@@ -401,6 +419,59 @@ export interface ConversationResponse {
   abandoned?: { count: number; branches: number; summary: string | null };
 }
 
+/** Where a plugin manifest says an action applies. herdr may add more, so it stays open. */
+export type PluginActionContext = "global" | "workspace" | "tab" | "pane" | "selection" | (string & {});
+
+/** One manifest action of a herdr plugin. Its command line stays on the server. */
+export interface PluginAction {
+  /** local to its plugin: herdr's global name is `<plugin_id>.<action_id>` */
+  action_id: string;
+  title: string;
+  description: string | null;
+  /** empty when the manifest names none */
+  contexts: PluginActionContext[];
+}
+
+/** GET /api/plugins/actions: one installed plugin and the actions this PC can run. */
+export interface PluginActions {
+  plugin_id: string;
+  name: string;
+  version: string;
+  description: string | null;
+  /** herdr refuses a disabled plugin's actions (`plugin_disabled`) */
+  enabled: boolean;
+  actions: PluginAction[];
+}
+
+export interface PluginActionsResponse {
+  plugins: PluginActions[];
+}
+
+/** POST /api/plugin/action. Without `pane_id` herdr runs the action in its own focus. */
+export interface PluginActionRequest {
+  plugin_id: string;
+  action_id: string;
+  pane_id?: string;
+}
+
+/** POST /api/plugin/action: what herdr's plugin command log said by the time the server answered. */
+export interface PluginActionResult {
+  /** herdr's log entry of this run: what GET /api/plugin/action is asked about while it is `running` */
+  log_id: string;
+  /** `running`: the command had not ended when the wait ran out */
+  status: "running" | "succeeded" | "failed";
+  exit_code: number | null;
+  /** a failed command's own words (spawn error, else the end of stderr, else of stdout); null otherwise */
+  output: string | null;
+  /**
+   * The pane this run's own output says it opened with focus (the answer of `herdr plugin pane
+   * open --focus`), while that pane still exists. Null for everything else: a command that
+   * printed no such answer, a popup (it has no pane ID), and a pane that merely appeared while
+   * the command ran, which nothing ties to it.
+   */
+  opened_pane_id: string | null;
+}
+
 /** GET /api/agents: one agent kind herdr can start (`agent.start` kind), with a display label. */
 /** GET /api/workspace/directories: the folders inside one directory, for the folder browser. */
 export interface DirectoryListing {
@@ -435,6 +506,27 @@ export interface FileInfo {
 export interface AgentKind {
   kind: string;
   label: string;
+}
+
+/**
+ * GET /api/integrations: one of herdr's built-in agent integrations (`integration.list`, herdr
+ * 0.9.3; the saved schema predates it, so the shape is written out here). `state` widens like the
+ * generated enums: a newer herdr may report one this build does not know.
+ */
+export interface AgentIntegration {
+  /** herdr's integration target, e.g. `claude`, `antigravity_cli` */
+  target: string;
+  /** the name herdr shows, also the argument `herdr integration install` takes */
+  label: string;
+  /** the agent's executable */
+  command: string;
+  /** whether that executable is on the PATH of the PC herdr runs on */
+  available: boolean;
+  state: "not_installed" | "current" | "outdated" | (string & {});
+}
+
+export interface IntegrationsResponse {
+  integrations: AgentIntegration[];
 }
 
 export interface CreateWorkspaceRequest {
@@ -610,8 +702,9 @@ export interface PushPayload {
  *  Client -> server frames: attach {pane_id, cols, rows} | detach {pane_id} | input {pane_id, text}
  *    | keys {pane_id, keys} | resize {pane_id, cols, rows} | role {mode}
  *    | pty-ack {pane_id, stream_id, offset} | secret {id, pane_id, prompt, secret}
+ *    | watch {pane_id, cols, rows} | unwatch {pane_id}
  *  Server -> client frames: snapshot | pty-data | pty-exit | pane-geometry | role-ack
- *    | pane-status | pane-exited | session-changed | secret-result | error
+ *    | pane-status | pane-exited | session-changed | secret-result | watch-data | watch-end | error
  *
  *  attach {flow_control:"ack"} opts into per-subscription output credit.
  *  pty-data.flow carries a stream_id and cumulative UTF-8 payload offset;
@@ -625,6 +718,12 @@ export interface PushPayload {
  *  re-sends its role before the attach replay on reconnect.
  *  secret requires the "secret-input" feature, an interact attachment, a matching fresh
  *  prompt and an idle input queue. Its result contains only ok/code, never the value.
+ *  watch requires the "watch" feature: a read-only view of the pane drawn for the client's grid
+ *  (`herdr terminal session observe`), which, unlike an attach, leaves the pane at the size herdr's
+ *  own window gives it. It is not an attach: no input, resize, ACK or input-ready. A tab out of use
+ *  detaches and watches; it attaches again when the user is back. One watch per pane and connection;
+ *  a second watch for the same pane starts it again at the new grid. watch-end: the view ended
+ *  (unwatch does not answer one), and a pane the view could not start for gets one at once.
  */
 
 /** A connection's authority over the shared ptys: `interact` types and resizes, `observe` only watches. */
@@ -666,10 +765,13 @@ export type ClientMessage =
   | { type: "resize"; pane_id: string; cols: number; rows: number }
   /** Cumulative UTF-8 payload bytes processed by xterm, only for this subscription. */
   | { type: "pty-ack"; pane_id: string; stream_id: string; offset: number }
-  | { type: "role"; mode: ClientRole };
+  | { type: "role"; mode: ClientRole }
+  /** a read-only view of the pane at this grid, for a tab out of use (feature "watch"); never resizes the pane */
+  | { type: "watch"; pane_id: string; cols: number; rows: number }
+  | { type: "unwatch"; pane_id: string };
 
 /** What a server supports beyond the base protocol, listed in its first snapshot; older bridges list nothing. */
-export type ServerFeature = "submit" | "pending-input" | "secret-input" | "input-ready" | "take-over";
+export type ServerFeature = "submit" | "pending-input" | "secret-input" | "input-ready" | "take-over" | "watch";
 
 export type ServerMessage =
   | { type: "snapshot"; snapshot: SessionSnapshot; features?: ServerFeature[] }
@@ -695,6 +797,10 @@ export type ServerMessage =
   | { type: "pane-exited"; pane_id: string }
   /** session structure changed (pane created/closed): refetch /api/session */
   | { type: "session-changed" }
+  /** a watched pane's screen as herdr draws it for the watch's grid: whole screens and changes, written as they come; never acknowledged */
+  | { type: "watch-data"; pane_id: string; data: string }
+  /** the watch ended (pane gone, herdr closed it, or this herdr has no read-only view); the client keeps its last screen */
+  | { type: "watch-end"; pane_id: string }
   /** `pane_id` names the pane an error is about, when it is about one (`attach_held`) */
   | { type: "error"; code: string; message: string; pane_id?: string };
 

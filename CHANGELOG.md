@@ -8,6 +8,87 @@ between releases do not reach them. Remote-PC runtime bundles are versioned sepa
 ## [Unreleased]
 
 ### Added
+- The command palette lists the actions of the herdr plugins installed on the PC under **Plugin
+  actions** and runs one against the selected pane, with that pane's workspace and tab as its
+  context. The row shows that it is running, a command that fails says why above the list, and a
+  pane the action opens and focuses is selected. Settings → About lists the installed plugins and
+  their actions, to read only: installing, enabling and removing a plugin stay with herdr.
+  ([#720](https://github.com/devswha/herdr-web-ui/pull/720))
+- **Settings → Agent integrations** lists herdr's integration for each agent it supports and
+  says whether it is installed, older than the running herdr, or missing. Agents found on the PC
+  come first. A missing or outdated one shows its `herdr integration install …` command with a
+  Copy button; the page only reads herdr's state and never installs or removes anything.
+  ([#722](https://github.com/devswha/herdr-web-ui/pull/722))
+
+### Changed
+- Single-pane input, file discovery and image upload lookups ask herdr for that pane instead of
+  rebuilding a whole-session snapshot. Layout and transcript peer checks keep their snapshots.
+  ([#724](https://github.com/devswha/herdr-web-ui/pull/724))
+
+### Fixed
+- A numeric custom tab name remains visible when tabs before it close ([#723](https://github.com/devswha/herdr-web-ui/pull/723)).
+- A request that carries a session cookie but states no `Origin` is now read as cross-site rather
+  than same-origin, so a header that went missing is no longer trusted as though a browser had
+  sent it. What genuinely cannot state one keeps working — a same-origin read such as the PC
+  event stream, the WebSocket upgrade a browser cannot add the custom header to, signing out, and
+  push subscribe — as does any client that proves itself with `x-herdr-machine`. A browser is
+  unaffected: it always states an `Origin` on a cross-origin request, and `SameSite=Strict`
+  already covered what this closes.
+- A remote PC that is switched off or asleep while its bridge update runs, or whose update was
+  cancelled, now shows **Reconnecting…** instead of asking for a bridge update it cannot run.
+  Once the PC answers, the version check runs again and, if the bridge is still out of date, the
+  update follows; a cancelled update comes back as the **Update bridge** button only.
+  ([#716](https://github.com/devswha/herdr-web-ui/pull/716))
+- An OmO pane whose turn ended on a model error (the provider gave up after its retries, or
+  timed out) now reads READY instead of DONE, and no "work finished" alert fires for it. A retry
+  that answers afterwards still finishes the turn as DONE, with its alert.
+  ([#715](https://github.com/devswha/herdr-web-ui/pull/715))
+- On Windows, a Codex chat is found when `CODEX_HOME` carries the `\\?\` prefix, or when Codex
+  stored the working directory with a drive letter in another case than herdr reports
+  (`\\?\d:\work\app` for `D:\work\app`). A Claude pane whose process two stores both claim
+  (`~/.claude` and a `~/.claude-*` copy) now says its chat is unavailable instead of showing
+  `~/.claude`'s session.
+  ([#714](https://github.com/devswha/herdr-web-ui/pull/714))
+
+## [0.4.5] - 2026-10-09
+
+### Changed
+- A desktop tab no longer pauses its terminal a second after you switch to another window, as
+  0.4.4 started doing: it keeps updating, as before 0.4.4. If this PC also shows herdr in a
+  terminal window, turn on **Settings → Terminal → Use alongside herdr's own window**: a second
+  after you leave the tab, it lets go of the pane so herdr's window keeps the pane at its own size,
+  and it keeps showing the pane read-only (drawn at herdr's size) until you click it to type again.
+  A server older than this one pauses the tab instead.
+  ([#699](https://github.com/devswha/herdr-web-ui/pull/699), [#700](https://github.com/devswha/herdr-web-ui/pull/700))
+- Remote PCs use runtime bundle v24 for these fixes. Choose **Update bridge…** once on each
+  connected PC after updating the app. ([#711](https://github.com/devswha/herdr-web-ui/pull/711))
+
+### Fixed
+- Claude background counts reread concurrent transcript appends and replaced transcript files
+  instead of keeping a stale count until another write. ([#701](https://github.com/devswha/herdr-web-ui/pull/701))
+- Claude process identity lookups recover after transient failures, so tasks left by an earlier
+  process stop counting as running when the process boundary becomes available. ([#702](https://github.com/devswha/herdr-web-ui/pull/702))
+- Delayed Claude transcript discovery preserves an observed turn's background wait and original
+  deadline; a replacement session does not inherit the old session's wait. ([#703](https://github.com/devswha/herdr-web-ui/pull/703))
+- Claude background badges expire day-old subagent files even when no transcript changes. ([#706](https://github.com/devswha/herdr-web-ui/pull/706))
+- Claude completion cards deduplicate consistently within each chat page, whether its turns
+  were read incrementally or loaded from scratch. ([#708](https://github.com/devswha/herdr-web-ui/pull/708))
+- Chat code blocks preserve trailing source newlines in manual text selections, with highlighting
+  on or off. The Copy code button continues to copy the original source. ([#710](https://github.com/devswha/herdr-web-ui/pull/710))
+
+### Maintenance
+- Include TanStack Highlight's MIT license in the notices shipped with the app.
+  ([#704](https://github.com/devswha/herdr-web-ui/pull/704))
+- Update source-map-js to 1.2.2 for its security fix.
+  ([#705](https://github.com/devswha/herdr-web-ui/pull/705))
+- Run native Windows and macOS session identity regressions in release validation and order
+  the browser readline fixture's input consistently. Use Debian's official ECR mirror for the
+  Docker SSH fixture to avoid Docker Hub's anonymous pull limit.
+  ([#709](https://github.com/devswha/herdr-web-ui/pull/709), [#701](https://github.com/devswha/herdr-web-ui/pull/701))
+
+## [0.4.4] - 2026-10-09
+
+### Added
 - A Claude Code pane's subagents (the `Agent` tool) now show where OmO's background tasks do:
   the status line lists what runs and what ended in the last day, the pane's badge counts the
   running ones, and a subagent that ends leaves a card in the chat with its answer instead of
@@ -47,6 +128,10 @@ between releases do not reach them. Remote-PC runtime bundles are versioned sepa
   ([#429](https://github.com/devswha/herdr-web-ui/pull/429) by @aNNdii)
 
 ### Changed
+- Website and installer publishing waits for CI and the site build to pass on the same commit.
+  Local checks retain source-bound results and failure evidence, and critical build scripts
+  and the demo transport are typechecked alongside the app.
+  ([#692](https://github.com/devswha/herdr-web-ui/pull/692))
 - The chat's `/` command list also matches a word of a command's name, any part of it, its letters
   in order and its description, so a plugin command is found without typing its prefix. Prefix
   matches still come first.
