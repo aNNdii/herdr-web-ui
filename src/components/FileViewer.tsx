@@ -28,6 +28,10 @@ import { hasPreview, readTextStart, TEXT_START_HEADERS, type LoadedText, type Te
 /** Bigger images are offered as a download: a phone decodes an image whole. */
 const MAX_INLINE_IMAGE_BYTES = 20 * 1024 * 1024;
 
+/** A file's text as the viewer numbers it, as an editor does: a last line ending is no line of its own. */
+const withoutLastLineEnd = (text: string): string =>
+  text.endsWith("\r\n") ? text.slice(0, -2) : text.endsWith("\n") || text.endsWith("\r") ? text.slice(0, -1) : text;
+
 type Preview = { status: "none" | "pending" | "failed" } | { status: "ready"; blocks: MarkdownBlock[] };
 
 const NO_PREVIEW: Preview = { status: "none" };
@@ -212,7 +216,7 @@ export function FileViewer({ path: asked, paneId, machineId, paneFolder, onClose
   const view = previewable && mode === "preview" ? "markdown" : "code";
   const codeShown = textFile && loaded !== null && view === "code";
   // a file's code has no length limit (the load limit bounds it): only a worker that gave up leaves it plain
-  const code = useHighlightedLines(codeShown ? loaded.text : "", codeShown ? language : null);
+  const code = useHighlightedLines(codeShown ? withoutLastLineEnd(loaded.text) : "", codeShown ? language : null);
   const shownPath = info?.path ?? path;
   const { stem, extension } = pathParts(info?.name ?? shownPath);
   const { folder } = pathParts(shownPath);
@@ -232,7 +236,7 @@ export function FileViewer({ path: asked, paneId, machineId, paneFolder, onClose
   // ending is no line of its own, and a cut file's text ends where its last whole line does
   const owner = paneId === null ? null : paneStorageId(machineId, paneId);
   const sourceText = textFile && loaded !== null ? loaded.text : null;
-  const sourceLines = useMemo(() => sourceText === null ? null : fileLines(sourceText.replace(/(?:\r\n|\r|\n)$/, "")), [sourceText]);
+  const sourceLines = useMemo(() => sourceText === null ? null : fileLines(withoutLastLineEnd(sourceText)), [sourceText]);
   const filePath = info?.path ?? null;
   const wholeLines = sourceLines === null || loaded === null ? 0 : loaded.truncated && !/[\r\n]$/.test(loaded.text) ? sourceLines.length - 1 : sourceLines.length;
   // the preview's blocks a card can follow, from the blocks the preview draws (parsed in the worker

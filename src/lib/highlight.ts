@@ -176,12 +176,12 @@ const ROLES: readonly (SyntaxRole | null)[] = [null, "keyword", "string", "numbe
 const ROLE_INDEX = new Map(ROLES.map((role, index) => [role, index]));
 
 /**
- * The text a view shows: "\r\n" and a lone "\r" end a line like "\n" (as `parseMarkdown` reads them,
- * so the file viewer numbers lines as `fileLines` and an editor do), and a final line ending ends
- * the last line instead of starting one.
+ * The text a view shows: "\r\n" and a lone "\r" end a line like "\n" (as `parseMarkdown` and
+ * `fileLines` read them). No other whitespace is dropped, a final line ending included, so a manual
+ * selection holds the source; the file viewer leaves out a file's last line ending itself.
  */
 export function normalizeCode(code: string): string {
-  return code.replace(/\r\n?/g, "\n").replace(/\n$/, "");
+  return code.replace(/\r\n?/g, "\n");
 }
 
 /** Uncolored lines, in the same shape as tokenized ones, so a view never tells the two apart. */
