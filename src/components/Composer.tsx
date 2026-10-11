@@ -30,11 +30,13 @@ import {
   composerStatusHint,
   composerStatusWord,
   contextLeftPercent,
+  type DraftRefusal,
   formatTokens,
   imageMention,
   insertMention,
   MAX_COMPOSER_CHARS,
   rankSlashCommands,
+  submitNote,
   terminalOnlyCommand,
 } from "../lib/compose.ts";
 import { paneStatus } from "../lib/status.ts";
@@ -55,12 +57,14 @@ import { lastFileStop } from "../lib/commentWalk.ts";
 import { FileCommentNavContext } from "../lib/fileCommentNav.ts";
 import { sortFileComments, type FileComment } from "../lib/fileComments.ts";
 import { CommentPopover } from "./CommentPopover.tsx";
+import { modalOpen } from "../lib/focus.ts";
 
 export interface ComposerProps {
   connected: boolean;
   paneId: string;
   /** false: appearing must not take the keyboard (App switched to this pane on its own) */
   autoFocus?: boolean;
+  active?: boolean;
   agent: string | null;
   agentStatus?: AgentStatus;
   /** an OmO pane's running background tasks: the status line opens their list */
@@ -72,14 +76,18 @@ export interface ComposerProps {
   answerHint?: string | null;
   /** what the agent suggests typing next (Claude's grey input text): the placeholder, taken with Tab */
   suggestion?: string | null;
+  /** a cancelled send the agent put back in its input box: the empty box takes it again, for editing and resending */
+  restored?: string | null;
   /** an empty chat's greeting: it stands over the composer's column and takes no row of its own */
   greeting?: ReactNode;
-  /** true: sent, clear the box; a string: keep the text and say why; a promise settles to either.
+  /** true: sent, clear the box; a string: keep the text and say why; a DraftRefusal: the same, and the
+   * note offers to send again with `clearDraft`, which clears that draft from the terminal first; a
+   * promise settles to any of them.
    * `text` is only what was typed. `comments` are the pane's comments this send takes: reply
    * comments quoting the agent's reply and file comments quoting lines of a file the viewer showed,
    * so with them it goes to an agent only, queued or not, never typed into a shell. The receiver
    * composes them with the text (composeWithComments) */
-  onSend: (text: string, options?: { comments?: readonly PaneComment[] }) => boolean | string | Promise<boolean | string>;
+  onSend: (text: string, options?: { comments?: readonly PaneComment[]; clearDraft?: string }) => boolean | string | DraftRefusal | Promise<boolean | string | DraftRefusal>;
   onAbort: () => void;
   onUploadImage: (file: File) => Promise<string>;
 }
@@ -225,6 +233,7 @@ export function Composer({
   connected,
   paneId,
   autoFocus = true,
+  active = true,
   agent,
   agentStatus,
   backgroundTasks = 0,
@@ -232,12 +241,15 @@ export function Composer({
   metadata,
   answerHint = null,
   suggestion = null,
+  restored = null,
   greeting = null,
   onSend,
   onAbort,
   onUploadImage,
 }: ComposerProps) {
   const t = useT();
+  const activeRef = useRef(active);
+  activeRef.current = active;
   const machineId = useMachineId();
   const { fetchPaneCommands, fetchPaneFiles } = useMachineApi();
   const { settings } = useSettings();
@@ -259,7 +271,7 @@ export function Composer({
   // it), as the grid does in the terminal lens: a pane picked from the drawer is typed into
   // and once the user picks the pane App had switched to on its own
   useEffect(() => {
-    if (autoFocus) textareaRef.current?.focus({ preventScroll: true });
+    if (autoFocus && !modalOpen()) textareaRef.current?.focus({ preventScroll: true });
   }, [autoFocus]);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const attachmentsRef = useRef<Attachment[]>([]);
@@ -401,6 +413,8 @@ export function Composer({
   const [caret, setCaret] = useState(text.length);
   const textRef = useRef(text);
   const caretRef = useRef(caret);
+  /** the restored text the box was filled with: only that fill is ever cleared, never the user's own typing */
+  const filledFrom = useRef<string | null>(null);
   const [commands, setCommands] = useState<SlashCommand[]>([]);
   const [files, setFiles] = useState<string[]>([]);
   const [slashUsage, setSlashUsage] = useState<Record<string, number>>(readSlashUsage);
@@ -408,7 +422,7 @@ export function Composer({
   const [menuDismissed, setMenuDismissed] = useState(false);
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [dragging, setDragging] = useState(false);
-  const [note, setNote] = useState<string | null>(null);
+  const [note, setNote] = useState<string | DraftRefusal | null>(null);
   // shown only when chosen in Settings → Quick replies: a button beside the box was one more thing to read
   const quickOpen = settings.showQuickReplies;
   const quickReplies = quickReplyButtons(settings);
@@ -459,6 +473,29 @@ export function Composer({
   const placeholder = !connected
     ? t("Reconnecting… message held here, never queued")
     : answerHint ?? offered ?? t("Message {agent}…", { agent: agentLabel });
+
+  // A cancelled send the agent put back in its input box fills an empty box again — without
+  // focus, which would raise a phone's keyboard. When it is gone, only the untouched fill is
+  // cleared: text the user typed or edited over it is their own and stays.
+  useEffect(() => {
+    if (restored !== null) {
+      if (restored === filledFrom.current || textRef.current.trim() !== "" || sending) return;
+      setText(restored);
+      textRef.current = restored;
+      caretRef.current = restored.length;
+      setCaret(restored.length);
+      filledFrom.current = restored;
+      return;
+    }
+    if (filledFrom.current === null) return;
+    if (textRef.current === filledFrom.current) {
+      setText("");
+      textRef.current = "";
+      caretRef.current = 0;
+      setCaret(0);
+    }
+    filledFrom.current = null;
+  }, [restored]);
 
   useEffect(() => {
     let live = true;
@@ -696,6 +733,7 @@ export function Composer({
   // dictation lands at the caret without taking focus (a phone's keyboard stays as it was)
   const dictation = useDictation({
     mode: "chat",
+    active,
     connected,
     phone: mobile,
     polish: settings.voicePolishChat,
@@ -732,7 +770,7 @@ export function Composer({
     const element = textareaRef.current;
     if (!element) return;
     element.selectionStart = element.selectionEnd = clampedCaret;
-    element.focus();
+    if (activeRef.current) element.focus();
   }, []);
 
   const insertMentionAtCursor = useCallback(
@@ -823,7 +861,8 @@ export function Composer({
     }
   }, []);
 
-  const send = useCallback(() => {
+  /** `clearDraft`: the terminal draft a DraftRefusal named, which the user asked to clear and send over */
+  const send = useCallback((clearDraft?: string) => {
     if (composingRef.current) return;
     if (!connected || uploading || sending || !outgoing.sendable) return;
     // a comment still being written in this pane's chat would not go with the message: its form is
@@ -837,11 +876,11 @@ export function Composer({
     const sent = text;
     const sentAttachments = attachments;
     const { sent: sentComments, sentIds, commentsHeld } = outgoing;
-    const settle = (result: boolean | string): void => {
+    const settle = (result: boolean | string | DraftRefusal): void => {
       const acknowledged = result === true ? composerDrafts.settle(draftKey, sent) : null;
       if (result === true) blockComments.remove(commentOwner, sentIds);
       if (!mounted.current) return;
-      if (typeof result === "string") setNote(result);
+      if (typeof result !== "boolean") setNote(result);
       if (acknowledged === null) return;
       // only what was sent leaves the box: text added after it stays exactly as typed. Changed
       // inside while on its way, the whole edit stays, and the note says it was not sent
@@ -858,7 +897,7 @@ export function Composer({
     // a polish landing before the acknowledgement would count as an edit and keep the sent message here
     dictation.forget();
     try {
-      const result = onSend(sent, { comments: sentComments });
+      const result = onSend(sent, { comments: sentComments, ...(clearDraft !== undefined ? { clearDraft } : {}) });
       if (!(result instanceof Promise)) { settle(result); composerDrafts.end(draftKey); return; }
       void result.then(settle).catch(() => { if (mounted.current) setNote(t("Not confirmed. Check the terminal before sending again.")); }).finally(() => composerDrafts.end(draftKey));
     } catch {
@@ -871,8 +910,9 @@ export function Composer({
   const sendQuick = useCallback((reply: string) => {
     if (!connected || sending) return;
     setNote(null);
-    const settle = (result: boolean | string): void => {
-      if (mounted.current && typeof result === "string") setNote(result);
+    // a quick reply is not the box's text, so its note offers no send over a draft
+    const settle = (result: boolean | string | DraftRefusal): void => {
+      if (mounted.current && typeof result !== "boolean") setNote(typeof result === "string" ? result : submitNote("input_draft", result.note));
     };
     if (!composerDrafts.begin(draftKey)) return;
     try {
@@ -1274,7 +1314,15 @@ export function Composer({
           )}
         </div>
       </div>
-      {shownNote && <div className="composer-note" role="alert">{shownNote}</div>}
+      {typeof shownNote === "string" && <div className="composer-note" role="alert">{shownNote}</div>}
+      {shownNote !== null && typeof shownNote === "object" && (
+        <div className="composer-note composer-note-offer" role="alert">
+          <span>{shownNote.note}</span>
+          {/* the draft named above, never what has replaced it since: the server checks */}
+          <button type="button" className="composer-note-action" disabled={!connected || uploading || sending || !outgoing.sendable}
+            onClick={() => send(shownNote.draft)}>{t("Clear it and send")}</button>
+        </div>
+      )}
       {/* outside the surface: it takes drops, and a file dropped on the portalled editor would
           bubble there through React and start an upload */}
       {/* a comment the walk reached that has no pin: its popover as a dialog (a sheet on a phone), to edit, its field
