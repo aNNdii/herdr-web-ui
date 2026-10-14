@@ -168,6 +168,13 @@
   transform: translateX(var(--space-5));
 }
 
+/* a control that has no effect now reads as such, like .btn:disabled */
+.settings-toggle:disabled,
+.settings-segmented > button:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
 @media (max-width: 640px) {
   /* a control that needs the line gets it: under its label, as wide as the card */
   .settings-row.is-wide {

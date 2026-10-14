@@ -6,7 +6,12 @@
  *
  * The queries need only `querySelector`/`querySelectorAll`/`closest` and an element's `dataset`, so a stand-in object
  * tests them without a DOM.
+ *
+ * The code view's field is in a frame of its own (components/FrameField.tsx): its popover holds a slot
+ * (`FIELD_SLOT_CLASS`) where the textarea would be, and the queries for a popover's field find it through that slot
+ * (lib/frameField.ts `framedField`).
  */
+import { fieldAnchor, framedField } from "./frameField.ts";
 
 /** A comment popover's box, beside its pin or as a dialog (`.modal` too, portalled to the document's body). */
 export const POPOVER_CLASS = "comment-popover";
@@ -14,10 +19,18 @@ export const POPOVER_CLASS = "comment-popover";
 export const POPOVER_SCRIM_CLASS = "comment-popover-scrim";
 /** A surface's pin layer, which also holds the popover beside its pin. */
 export const PINS_CLASS = "comment-pins";
+/**
+ * The code view's comment layer (CodeComments.tsx): its cards, its ⊕ and the field under a line. It is a pin layer to
+ * everything that asks: a press in it does not dismiss the open field (its own click decides, as a pin's does), a click
+ * in it comments on no line, and its text is no comment's text.
+ */
+export const CODE_COMMENTS_CLASS = "code-comments";
 /** A comment's pin, a saved one's or the provisional one of a comment being written (`PENDING_PIN_CLASS`). */
 export const PIN_CLASS = "comment-pin";
 /** The provisional pin of a comment being written: shown, never pressed or focused. */
 export const PENDING_PIN_CLASS = "is-pending";
+/** In a popover, the place of a field drawn in a frame of its own (components/FrameField.tsx). */
+export const FIELD_SLOT_CLASS = "comment-field-slot";
 /** On a popover's box while its text is changed (`commentChanged`). */
 export const CHANGED_ATTR = "data-comment-changed";
 /** On a saved comment's pin: the comment's id (a new one with every edit). */
@@ -29,8 +42,18 @@ const POPOVER = `.${POPOVER_CLASS}`;
 const DIALOG = `.modal${POPOVER}`;
 const CHANGED = `[${CHANGED_ATTR}]`;
 const PIN_WITH_ANCHOR = `.${PIN_CLASS}[${PIN_ANCHOR_ATTR}]`;
-/** The pin layer, for a selector of what is not a comment's text (lib/commentSelection.ts). */
-export const PINS_SELECTOR = `.${PINS_CLASS}`;
+const SLOT = `.${FIELD_SLOT_CLASS}`;
+
+/** The field of the popover `popover` selects in `root`: its textarea, else the one in its slot's frame. */
+function fieldIn(root: Pick<ParentNode, "querySelector">, popover: string): HTMLTextAreaElement | null {
+  return root.querySelector<HTMLTextAreaElement>(`${popover} textarea`) ?? framedField(root.querySelector(`${popover} ${SLOT}`));
+}
+/**
+ * The pin layers, for a selector of what is not a comment's text (lib/commentSelection.ts). "Pin layer" here and in
+ * `inPinLayer` means a layer of comment UI over a surface's text: a surface's pins (`PINS_CLASS`) or the code view's
+ * comment layer (`CODE_COMMENTS_CLASS`), which has cards, a ⊕ and a field instead of pins.
+ */
+export const PINS_SELECTOR = `.${PINS_CLASS}, .${CODE_COMMENTS_CLASS}`;
 /** The comment UI on a surface: the pin layer (which holds a popover beside its pin) and a popover anywhere. */
 export const COMMENT_UI_SELECTOR = `${PINS_SELECTOR}, ${POPOVER}`;
 
@@ -54,7 +77,7 @@ export function isCommentUi(target: EventTarget | null): boolean {
   return elementOf(target)?.closest(COMMENT_UI_SELECTOR) != null;
 }
 
-/** Whether `target` lies in a surface's pin layer (a pin, or the popover beside its pin). */
+/** Whether `target` lies in a surface's pin layer (a pin, or the popover beside its pin; the code view's cards, ⊕ and field). */
 export function inPinLayer(target: EventTarget | null): boolean {
   return elementOf(target)?.closest(PINS_SELECTOR) != null;
 }
@@ -82,8 +105,7 @@ export function hasCommentDialog(root: Pick<ParentNode, "querySelector">): boole
  */
 export function changedField(scope: Element | null): HTMLTextAreaElement | null {
   if (scope === null) return null;
-  return scope.querySelector<HTMLTextAreaElement>(`${POPOVER}${CHANGED} textarea`)
-    ?? scope.ownerDocument.querySelector<HTMLTextAreaElement>(`${DIALOG}${CHANGED} textarea`);
+  return fieldIn(scope, `${POPOVER}${CHANGED}`) ?? fieldIn(scope.ownerDocument, `${DIALOG}${CHANGED}`);
 }
 
 /**
@@ -91,7 +113,7 @@ export function changedField(scope: Element | null): HTMLTextAreaElement | null 
  * viewer's, or drawn as a dialog) is changed. Turning comments off would lose it, so Settings asks first.
  */
 export function hasChangedComment(root: Pick<ParentNode, "querySelector">): boolean {
-  return root.querySelector(`${POPOVER}${CHANGED} textarea`) !== null;
+  return root.querySelector(`${POPOVER}${CHANGED} textarea`) !== null || root.querySelector(`${POPOVER}${CHANGED} ${SLOT}`) !== null;
 }
 
 /**
@@ -100,14 +122,14 @@ export function hasChangedComment(root: Pick<ParentNode, "querySelector">): bool
  */
 export function focusOpenField(scope: Element | null): void {
   if (scope === null) return;
-  const field = scope.querySelector<HTMLTextAreaElement>(`${POPOVER} textarea`) ?? scope.ownerDocument.querySelector<HTMLTextAreaElement>(`${DIALOG} textarea`);
+  const field = fieldIn(scope, POPOVER) ?? fieldIn(scope.ownerDocument, DIALOG);
   field?.focus({ preventScroll: true });
 }
 
-/** Focuses a popover's `field` and brings its popover into view: a send or a walk held back for it shows it. */
+/** Focuses a popover's `field` and brings its popover (the one its frame's slot is in) into view: a send or a walk held back for it shows it. */
 export function revealField(field: HTMLTextAreaElement): void {
   field.focus({ preventScroll: true });
-  field.closest(POPOVER)?.scrollIntoView({ block: "nearest" });
+  fieldAnchor(field).closest(POPOVER)?.scrollIntoView({ block: "nearest" });
 }
 
 /** The pins of saved comments in `scope` (not the provisional one), in reading order (the document's), `within` a selector when given. */

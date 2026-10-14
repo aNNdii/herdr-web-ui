@@ -20,6 +20,8 @@
  * the missing height matches the measured standalone top safe area.
  */
 
+import { deepActiveElement, isTypingField } from "./focus.ts";
+
 const viewport = window.visualViewport;
 const root = document.documentElement;
 
@@ -48,10 +50,6 @@ root.append(topInset);
 // shrinks all three viewports, but not when a split view shrinks the large
 // viewport while leaving only its ordinary visual inset.
 const unobstructedHeights = new Map<number, { large: number; height: number }>();
-const typing = (element: Element | null): boolean =>
-  (element instanceof HTMLTextAreaElement && (!element.classList.contains("xterm-helper-textarea") || element.closest("[data-direct-typing]") !== null))
-  || (element instanceof HTMLInputElement && !["button", "checkbox", "radio", "range", "submit", "reset", "file", "color"].includes(element.type))
-  || (element instanceof HTMLElement && element.isContentEditable);
 const syncKeyboard = (): void => {
   const width = window.innerWidth;
   const height = viewport?.height ?? window.innerHeight;
@@ -59,7 +57,8 @@ const syncKeyboard = (): void => {
   const remembered = unobstructedHeights.get(width);
   const resizedWindow = remembered && large < remembered.large && height < large && large - height <= large * 0.2;
   const reference = Math.max(large, resizedWindow ? 0 : remembered?.height ?? 0, window.innerHeight);
-  const focused = touch.matches && typing(document.activeElement);
+  // followed into a frame: the code view's comment field has one of its own (components/FrameField.tsx)
+  const focused = touch.matches && isTypingField(deepActiveElement(document));
   const visible = focused && ((keyboard?.boundingRect.height ?? 0) > 0
     || !!viewport && viewport.scale === 1 && reference - height > reference * 0.2);
   if (!visible) unobstructedHeights.set(width, { large, height: resizedWindow ? Math.max(large, height, window.innerHeight) : Math.max(reference, height) });

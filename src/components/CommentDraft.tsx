@@ -2,13 +2,14 @@
  * What the comment popover (CommentPopover.tsx, beside its pin or as a dialog) is written with: a
  * comment's text with its field and its keys, and where the focus goes when the editor closes.
  */
-import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type RefObject } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type RefObject } from "react";
 
 import "./CommentPopover.css";
 
 import { COMMENT_SURFACE } from "../lib/commentHighlight.ts";
 import { commentCanSave, commentChanged } from "../lib/commentPopover.ts";
 import { restoreFocusTarget } from "../lib/commentSelection.ts";
+import { fieldAnchor } from "../lib/frameField.ts";
 import { useT } from "../lib/i18n.ts";
 
 /**
@@ -47,6 +48,14 @@ export interface CommentDraft {
   leave: () => boolean;
   /** on the editor's box: Cmd/Ctrl+Enter in the field saves when `canSave`; in a popover beside its pin Escape closes while nothing was typed */
   onKeyDown: (event: ReactKeyboardEvent<HTMLDivElement>) => void;
+  /**
+   * The field's first focus, its caret at the end: once, and only where the field takes it as the editor opens
+   * (`focusField`). The editor asks as it opens; a field drawn a commit later (in a frame of its own, FrameField.tsx) asks
+   * again once it is there
+   */
+  focusStart: () => void;
+  /** sizes the field to its text (one line to start, up to its cap in CSS): a field whose width changed asks again */
+  fit: () => void;
 }
 
 export interface CommentDraftOptions {
@@ -104,12 +113,13 @@ export function useCommentDraft(
   useEffect(() => told.current?.(value), [value]);
 
   // one line to start, growing with the comment up to the cap in CSS, as the composer's box does
-  useLayoutEffect(() => {
+  const fit = useCallback((): void => {
     const node = field.current;
     if (!node) return;
     node.style.height = "auto";
     node.style.height = `${node.scrollHeight + node.offsetHeight - node.clientHeight}px`;
-  }, [value]);
+  }, []);
+  useLayoutEffect(fit, [value, fit]);
 
   // the opener and the fallback as the editor opened: read once, they do not change while it is up
   const askFallback = useRef(fallback);
@@ -127,7 +137,8 @@ export function useCommentDraft(
       // still in the document here: React runs this before it takes the editor's elements out
       if (nonModal.current) {
         const now = document.activeElement;
-        const held = now === null || now === document.body || (surface.current?.contains(now) ?? false);
+        // a field in a frame of its own (FrameField.tsx) counts as its slot in the box
+        const held = now === null || now === document.body || (surface.current?.contains(fieldAnchor(now)) ?? false);
         if (!held) return;
       }
       // chosen after the commit: a deleted comment's pin is still in the document here, and
@@ -147,16 +158,22 @@ export function useCommentDraft(
   // Without `focusField` the box takes it instead: the editor holds the focus (its Escape, a dialog's trap) and no
   // keyboard rises; a tap into the field starts editing
   const focusesField = useRef(focusField);
+  const started = useRef(false);
+  const focusStart = useCallback((): void => {
+    if (started.current || !focusesField.current) return;
+    const node = field.current;
+    if (!node) return;
+    started.current = true;
+    node.focus({ preventScroll: true });
+    node.setSelectionRange(node.value.length, node.value.length);
+  }, []);
   useLayoutEffect(() => {
     if (!focusesField.current) {
       surface.current?.focus({ preventScroll: true });
       return;
     }
-    const node = field.current;
-    if (!node) return;
-    node.focus({ preventScroll: true });
-    node.setSelectionRange(node.value.length, node.value.length);
-  }, []);
+    focusStart();
+  }, [focusStart]);
   // A dialog's Escape is its own, not the composer's or the chat's underneath: anywhere, from the window in the capture
   // phase. A popover beside its pin handles it in its surface's `onKeyDown` below, so only from inside it. Either closes only
   // while nothing was typed, else puts the focus back in the field; a dialog's still keeps the key from what is underneath
@@ -213,7 +230,7 @@ export function useCommentDraft(
     }
   };
 
-  return { surface, field, value, canSave, changed, setValue, save, leave, onKeyDown };
+  return { surface, field, value, canSave, changed, setValue, save, leave, onKeyDown, focusStart, fit };
 }
 
 /** The comment's field, in its popover. */

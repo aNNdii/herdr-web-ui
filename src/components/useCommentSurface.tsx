@@ -25,7 +25,7 @@ import { PENDING_COMMENT_ID } from "../lib/commentHighlight.ts";
 import { firstPin, focusOpenField, pinAnchors, pinByAnchor } from "../lib/commentDom.ts";
 import { focusAfter, type CommentPoint } from "../lib/commentPins.ts";
 import { popoverChanged, popoverEscape } from "../lib/commentPopover.ts";
-import { CommentPins as CommentPinLayer, type PinnedComment, type PopoverPlacement } from "./CommentPins.tsx";
+import { CommentPins as CommentPinLayer, type PinnedComment, type PinPlacement } from "./CommentPins.tsx";
 import { CommentPopover, type CommentPopoverProps } from "./CommentPopover.tsx";
 import type { FileReference } from "./FileReference.tsx";
 import { useCommentClick } from "./useCommentClick.ts";
@@ -181,7 +181,7 @@ export function useCommentSurface<T extends { point?: CommentPoint }, S>(options
       return gone !== null && gone.opening === open.id ? firstPin(within, gone.near) : pinByAnchor(within, anchor);
     };
     const fallback = (): HTMLElement | null => latest.current.focusFallback(surface.current);
-    return (placement: PopoverPlacement): JSX.Element => {
+    return (placement: PinPlacement): JSX.Element => {
       const { quote, reference } = latest.current.describe(open);
       return <CommentPopover
         key={open.id}

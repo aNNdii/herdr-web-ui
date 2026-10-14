@@ -1,0 +1,314 @@
+/* The code view's comment layer (CodeComments.tsx). It lies in the viewer's scrolled body at its top left, as the pin
+   layer does (CommentPins.css), so its rows scroll with the code; it has no height of its own. CodeComments.tsx writes
+   each row's place in the body's scrolled content, over the room after its line (FileViewer.css `[data-comment-room]`). */
+.code-comments {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 0;
+}
+
+/* a row under a line: as wide as the code's <pre>, on the body's own ground, so it covers the room and the divider
+   there. Its cards, or the open field in a card's place, stack in it */
+.code-comment-row {
+  position: absolute;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  box-sizing: border-box;
+  padding: var(--space-2) var(--space-4) var(--space-2) var(--space-3);
+  background: var(--bg);
+  color: var(--text);
+  /* the comment field's face and size (CommentPopover.css `.comment-popover`): a card reads as the field it was */
+  font-family: var(--font-chat, var(--font-ui));
+  font-size: calc(var(--fs-chat) * var(--chat-scale, 1));
+  line-height: var(--lh-base);
+  white-space: normal;
+}
+
+/* the mode off: the cards are read-only and out of a selection, so a drag across them, or let go over one, keeps to the
+   code's lines (the layer lies after the <pre> in the document, where a selection would otherwise run on into a card).
+   Not the open field, which may stay with text typed: Safari makes an input in a user-select: none box unusable */
+.code-comments:not(.is-mode) .code-comment-card {
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+.code-comment-row[hidden] {
+  display: none;
+}
+
+/* the row field's frame (FrameField.tsx `useFieldFrame`): made ahead and never moved in the document, at the layer's
+   top left; CodeComments.tsx places it over the open field's slot. Out of sight and of reach while no field is in it.
+   The layer's first child: lifted over the rows, which come after it (the ⊕ is lifted as well, and stays over it) */
+.code-comment-frame-host {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 1;
+  width: 0;
+  height: 0;
+}
+
+.code-comment-frame-host > .comment-frame {
+  position: absolute;
+  top: 0;
+  left: 0;
+  visibility: hidden;
+  pointer-events: none;
+}
+
+.code-comment-frame-host > .comment-frame[data-open]:not([data-unplaced]) {
+  visibility: visible;
+  pointer-events: auto;
+}
+
+/* a saved comment: the field's card (`.comment-popover.is-row`) at rest, its text and, while the mode is on, its Delete */
+.code-comment-card {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-2) var(--space-2) var(--space-4);
+  background: var(--bg-elevated);
+  border: var(--hairline) solid var(--border-strong);
+  border-radius: var(--radius-lg);
+}
+
+.code-comment-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin: 0;
+  padding: var(--space-1) 0;
+  background: none;
+  border: 0;
+  color: var(--text);
+  font: inherit;
+  text-align: start;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* the mode on: a card opens to edit, from its text (the button a keyboard reaches) or anywhere on it. A finger's tap
+   draws no native overlay over it (a pointer cursor makes the browser draw one), as on the app's buttons (styles.css) */
+.code-comments.is-mode .code-comment-card {
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.code-comments.is-mode .code-comment-text {
+  cursor: pointer;
+}
+
+.code-comment-text:focus-visible {
+  outline: none;
+}
+
+.code-comment-card:has(.code-comment-text:focus-visible) {
+  border-color: var(--accent);
+}
+
+/* hovered, the card takes the accent edge its field takes while written (`.comment-popover:focus-within`), as its
+   text's mark comes up */
+@media (hover: hover) {
+  .code-comments.is-mode .code-comment-card:hover {
+    border-color: var(--accent);
+  }
+}
+
+/* the card the composer's walk stands on */
+.code-comment-card.is-current {
+  border-color: var(--accent);
+}
+
+/* Delete, as the field's own (CommentPopover.css `.comment-popover-delete`) */
+.code-comment-delete {
+  color: var(--text-dim);
+}
+
+.code-comment-delete:focus-visible {
+  color: var(--status-blocked);
+}
+
+@media (hover: hover) {
+  .code-comment-delete:hover {
+    color: var(--status-blocked);
+  }
+}
+
+/* ⊕: one button, moved to the hovered or keyboard line, centred on the divider (CodeCommentAdd.tsx). Taller than a line on purpose;
+   the code starts clear of it (FileViewer.css). A secondary button as `.btn` (styles.css): no accent fill, no scaling */
+.code-comment-add {
+  position: absolute;
+  /* over the row field's frame (`.code-comment-frame-host`, lifted over the rows): it comes after it in the layer */
+  z-index: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  background: var(--bg-elevated);
+  border: var(--hairline) solid var(--border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-card);
+  color: var(--text-dim);
+  cursor: pointer;
+  transition:
+    background-color var(--dur-fast) var(--ease-out),
+    border-color var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out);
+}
+
+.code-comment-add[hidden] {
+  display: none;
+}
+
+/* on no line, or its divider out of the code's view: out of sight but still a Tab stop (no size, not `display: none`), so
+   the focus can land on it and CodeCommentAdd.tsx puts it on a line then */
+.code-comment-add.is-idle {
+  width: 0;
+  height: 0;
+  overflow: hidden;
+  border-width: 0;
+  box-shadow: none;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.code-comment-add svg {
+  width: 16px;
+  height: 16px;
+}
+
+@media (hover: hover) {
+  .code-comment-add:hover {
+    background: var(--bg-hover);
+    border-color: var(--border-strong);
+    color: var(--text-strong);
+  }
+}
+
+.code-comment-add:active {
+  background: var(--bg-elevated);
+  border-color: var(--accent);
+  color: var(--text-strong);
+}
+
+.code-comment-add:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+  color: var(--text-strong);
+}
+
+/* the line the ⊕ is on is tinted: its text rows only, drawn on the <pre>'s background, so the room after the line (the
+   line's own padding) is never tinted and no line changes its box. CodeCommentAdd.tsx writes where (`background-position`)
+   and how tall (`background-size`) on the <pre> itself: plain properties restyle the <pre> alone, where a custom
+   property set on it restyles each of its lines (slow in a long file). The accent tint is the preview's
+   code-line hover (FileViewer.css) */
+.file-viewer-text[data-comment-line] {
+  background-image: linear-gradient(var(--accent-tint), var(--accent-tint));
+  background-repeat: no-repeat;
+}
+
+/* a finger's field below the line (CodeComments.tsx `is-touch`): its text at least --fs-input whatever the pointer, the
+   size iOS does not zoom the page for (CommentPopover.css reads it) */
+.code-comment-row.is-touch {
+  --comment-field-min: var(--fs-input);
+}
+
+/* a finger (CodeCommentTouch.tsx), while the mode is on (`data-code-comments` on the viewer's body): the code raises no
+   callout, so a long press on a line is the press, never a menu. It keeps its text selection: a finger's press blocks
+   one only while it lasts (a `selectstart` it cancels, CodeCommentTouch.tsx). `user-select: none` over a long file's
+   <pre> makes WebKit slow on every keystroke typed in a field below a line */
+@media (pointer: coarse) {
+  .file-viewer-body[data-code-comments] .file-viewer-text {
+    -webkit-touch-callout: none;
+  }
+}
+
+/* a finger's press (CodeCommentTouch.tsx): the pressed line's text rows across the code, under its text (a negative
+   z-index in the body, which FileViewer.css isolates), so no line and not the <pre> changes its style. Hidden at rest.
+   Pressed: the --bg-hover band once the fill's delay is over (PRESS_FILL_DELAY_MS, 80 ms: a tap or the start of a
+   scroll never flashes it), and the --primary-tint fill from the left over the rest of the press (LONG_PRESS_MS,
+   300 ms), easing out to its end. One-shot transitions, run once per press. The line a finger opened keeps a band of
+   its own (`.code-comment-held`) while its comment is open: a separate element, so a press on another line starts from
+   hidden and still waits out its delay */
+.code-comment-press,
+.code-comment-held {
+  position: absolute;
+  z-index: -1;
+  background: var(--bg-hover);
+  opacity: 0;
+  pointer-events: none;
+}
+
+.code-comment-press::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: var(--primary-tint);
+  transform: scaleX(0);
+  transform-origin: left;
+}
+
+.code-comment-press.is-pressing {
+  opacity: 1;
+  transition: opacity 0s linear 80ms;
+}
+
+.code-comment-press.is-pressing::after {
+  transform: scaleX(1);
+  transition: transform 220ms var(--ease-out) 80ms;
+}
+
+.code-comment-held.is-held {
+  opacity: 1;
+}
+
+/* the hint as a finger turns the mode (CodeCommentTouch.tsx): a live region beside the layer, at the top of the body's
+   view (its top kept at the body's scroll), so under the viewer's header, the pill centred in it. It takes no tap: the
+   code under it stays pressable */
+.code-comment-status {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 1;
+  width: 100%;
+  height: 0;
+  pointer-events: none;
+}
+
+.code-comment-hint {
+  position: absolute;
+  top: var(--space-3);
+  left: 50%;
+  width: max-content;
+  max-width: calc(100% - 2 * var(--space-4));
+  margin: 0;
+  padding: var(--space-2) var(--space-4);
+  transform: translateX(-50%);
+  background: var(--bg-elevated);
+  border: var(--hairline) solid var(--border-strong);
+  border-radius: var(--radius-pill);
+  box-shadow: var(--shadow-card);
+  color: var(--text-strong);
+  font-family: var(--font-ui);
+  font-size: var(--fs-sm);
+  line-height: var(--lh-base);
+  text-align: center;
+  animation: code-comment-hint-in var(--dur-base) var(--ease-out);
+}
+
+@keyframes code-comment-hint-in {
+  from {
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .code-comment-hint {
+    animation: none;
+  }
+}

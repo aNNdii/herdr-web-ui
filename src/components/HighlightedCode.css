@@ -1,7 +1,9 @@
 /* Highlighted code (chat code blocks, file viewer). The host sets padding and background. */
 .hl-code {
-  /* the line-number gutter: the last line's digits (set by HighlightedCode) and a gap */
-  --hl-gutter: calc(var(--hl-digits, 5) * 1ch + var(--space-3));
+  /* a line number's own box: the last line's digits (set by HighlightedCode) and a gap */
+  --hl-number: calc(var(--hl-digits, 5) * 1ch + var(--space-3));
+  /* the gutter the code starts past: the number's box, or more where a host makes room (the file viewer's divider) */
+  --hl-gutter: var(--hl-number);
   margin: 0;
   overflow-x: auto;
   font-family: var(--font-mono);
@@ -21,6 +23,15 @@
  * blank lines from a copy or doubles them.
  */
 
+/*
+ * The file viewer's code is cut into chunks of lines (CodeLines `chunked`): blocks, so a line that changes its box (the
+ * room after it, FileViewer.css) lays out its own chunk again, not the whole file. A chunk's edge is the line break
+ * between its last line and the next chunk's first; CodeLines puts no "\n" there and no blank line beside it.
+ */
+.hl-chunk {
+  display: block;
+}
+
 /* a CSS counter, so the numbers are never part of the text a copy picks up */
 .hl-code[data-line-numbers] {
   counter-reset: line;
@@ -36,8 +47,9 @@
 .hl-code[data-line-numbers] .hl-line::before {
   display: inline-block;
   box-sizing: border-box;
-  width: var(--hl-gutter);
+  width: var(--hl-number);
   margin-inline-start: calc(-1 * var(--hl-gutter));
+  margin-inline-end: calc(var(--hl-gutter) - var(--hl-number));
   padding-inline-end: var(--space-3);
   counter-increment: line;
   content: counter(line);
@@ -46,11 +58,19 @@
   user-select: none;
 }
 
+/* the numbers of chunked code are each line's own `data-source-line`, not the counter: a line that changes its box
+   (its room) then renumbers nothing. With the counter, Firefox counts all of a long file's lines again on each one
+   (a third of a second at 20 000 lines) and WebKit renumbers every line after it. Still no text a copy picks up */
+.hl-code[data-line-numbers] .hl-chunk > .hl-line::before {
+  counter-increment: none;
+  content: attr(data-source-line);
+}
+
 /* a line with a comment on all of it (the file viewer, lib/fileCommentHighlight.ts): its number in
-   the accent; its text carries the comment's highlight */
+   the accent; its text carries the comment's highlight. Colour only: a weight would change the number's width, and
+   marking a few hundred lines would lay out a long file again */
 .hl-code[data-line-numbers] .hl-line.is-commented::before {
   color: var(--accent);
-  font-weight: var(--fw-semibold);
 }
 
 .hl-keyword { color: var(--syntax-keyword); }

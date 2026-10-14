@@ -45,6 +45,18 @@ between releases do not reach them. Remote-PC runtime bundles are versioned sepa
   A remote PC gets pushes once its bridge runs a bundle with this change. Approval-card polling
   remains independent.
   ([#689](https://github.com/devswha/herdr-web-ui/pull/689) by @zerodice0, [#757](https://github.com/devswha/herdr-web-ui/pull/757))
+- **File viewer: comment on code like Claude's code preview.** Turn on comment mode with the
+  comment button in the viewer's header (it shows the file's comment count; off by default,
+  remembered on this device). With a mouse, ⊕ beside a line number opens a field under the line,
+  and a saved comment stays there as a card; Settings → File viewer → Click a line to comment
+  lets a click anywhere on the line open it. With the keyboard, Tab to ⊕, move it with the arrow
+  keys and press Enter. On phones and tablets, press and hold a line (or tap, in Settings), and
+  write in a bottom sheet or under the line. A thin line now separates the line numbers from the
+  code. The header's counter no longer walks the file's comments; the composer's comments bar
+  still does. On a desktop the file viewer now hangs from the top of the window, so the text does
+  not move when a comment opens. Long files take a comment faster, in Firefox too, and
+  on an iPad the keyboard comes up in about a third of a second instead of over a second and a
+  half in a 20,000-line file. Comments in the Markdown preview are unchanged.
 
 ### Fixed
 - When a chat message is not sent because Claude Code's input box in the terminal is not empty,

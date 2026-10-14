@@ -328,12 +328,13 @@ function TerminalPage({ keyBarButtonRef, onEditKeyBar }: { keyBarButtonRef: RefO
 }
 
 /** File viewer: how a file opened from a pane reads. */
-function FileViewerPage() {
+function FileViewerPage({ onOpenChat }: { onOpenChat: () => void }) {
   const { settings, update } = useSettings();
   const t = useT();
   // literal keys, so the i18n check finds them
   const markdownWidthLabel = { readable: t("Default"), full: t("Full width") };
   return (
+    <>
     <SettingsGroup>
       <SettingsRow label={t("Wrap long lines")}>
         <Toggle label={t("Wrap long lines")} checked={settings.wrapCode} onChange={(wrapCode) => update({ wrapCode })} />
@@ -342,6 +343,18 @@ function FileViewerPage() {
         <Segmented label={t("Markdown width")} value={settings.markdownWidth} onChange={(markdownWidth) => update({ markdownWidth })} options={MARKDOWN_WIDTHS.map((width) => ({ value: width, label: markdownWidthLabel[width] }))} />
       </SettingsRow>
     </SettingsGroup>
+    <SettingsGroup title={t("Comments")} note={settings.comments ? undefined : <>{t("Comments are off on this device.")} <button type="button" className="btn btn-ghost" onClick={onOpenChat}>{t("Open Chat settings")}</button></>}>
+      <SettingsRow label={t("Click a line to comment")} description={t("With a mouse: a click anywhere on a line opens a comment. Off: only the ⊕ beside the line number.")}>
+        <Toggle label={t("Click a line to comment")} checked={settings.codeCommentLineClick} disabled={!settings.comments} onChange={(codeCommentLineClick) => update({ codeCommentLineClick })} />
+      </SettingsRow>
+      <SettingsRow label={t("On mobile, comment with")} description={t("Phones and tablets: how a line is commented while comment mode is on.")}>
+        <Segmented label={t("On mobile, comment with")} value={settings.mobileCommentGesture} disabled={!settings.comments} onChange={(mobileCommentGesture) => update({ mobileCommentGesture })} options={[{ value: "hold", label: t("Long press") }, { value: "tap", label: t("Tap") }]} />
+      </SettingsRow>
+      <SettingsRow label={t("On mobile, write comments in")} description={t("Phones and tablets: where the comment field opens.")}>
+        <Segmented label={t("On mobile, write comments in")} value={settings.mobileCommentInput} disabled={!settings.comments} onChange={(mobileCommentInput) => update({ mobileCommentInput })} options={[{ value: "sheet", label: t("Bottom sheet") }, { value: "inline", label: t("Below the line") }]} />
+      </SettingsRow>
+    </SettingsGroup>
+    </>
   );
 }
 
@@ -876,7 +889,7 @@ function OpenSettingsDialog({ section = null, linkPage = null, linkSection = nul
       case "appearance": return <AppearancePage />;
       case "chat": return <ChatPage />;
       case "terminal": return <TerminalPage keyBarButtonRef={keyBarButtonRef} onEditKeyBar={openKeyBar} />;
-      case "files": return <FileViewerPage />;
+      case "files": return <FileViewerPage onOpenChat={() => openPage("chat")} />;
       case "alerts": return <AlertsPage onEnableNotifications={onEnableNotifications} />;
       case "voice": return <VoicePage />;
       case "usage": return <UsagePage />;

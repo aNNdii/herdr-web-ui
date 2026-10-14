@@ -248,8 +248,12 @@ export class SurfaceMarks implements CommentSurface {
   /** the saved comment whose popover is open */
   private opened: string | null = null;
 
-  /** `view` carries `COMMENT_SURFACE` and takes the focus mode */
-  constructor(readonly view: Element) {}
+  /**
+   * `view` carries `COMMENT_SURFACE`. With `focusMode` it takes `FOCUS_ATTRIBUTE` while a comment's text is up; a surface
+   * whose view holds a very long document (the file viewer's code view) turns it off, as an attribute on an ancestor
+   * restyles every line in it
+   */
+  constructor(readonly view: Element, private readonly focusMode = true) {}
 
   /** Each saved comment's ranges as last published: a rebuild keeps those whose boundaries did not move. */
   get comments(): ReadonlyMap<string, readonly Range[]> { return this.commentRanges; }
@@ -324,7 +328,7 @@ export class SurfaceMarks implements CommentSurface {
     this.active.set(active);
     // focus mode, per surface (two panes are independent): the stylesheet fades every other comment's marks while a pin's
     // text is up. Only when there is such text: a pin whose text is gone would fade the rest for nothing
-    this.view.toggleAttribute(FOCUS_ATTRIBUTE, current.length + active.length > 0);
+    if (this.focusMode) this.view.toggleAttribute(FOCUS_ATTRIBUTE, current.length + active.length > 0);
   }
 
   dispose(): void {
@@ -336,7 +340,7 @@ export class SurfaceMarks implements CommentSurface {
     this.pendingRanges = null;
     this.current = this.pointed = this.focused = null;
     this.opened = null;
-    this.view.removeAttribute(FOCUS_ATTRIBUTE);
+    if (this.focusMode) this.view.removeAttribute(FOCUS_ATTRIBUTE);
   }
 }
 

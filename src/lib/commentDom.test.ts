@@ -1,6 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import { focusAfter } from "./commentPins.ts";
 import { changedAttrs, changedField, firstPin, focusOpenField, hasChangedComment, hasCommentDialog, pinAnchors, pinAttrs, pinByAnchor, pinById, revealField, savedPins } from "./commentDom.ts";
+import { setFrameAnchor } from "./frameField.ts";
 
 /** A stand-in for a comment surface: `querySelectorAll` hands back pins carrying these anchors (and ids `id-<anchor>`), in this order. */
 function surfaceWith(anchors: readonly string[]): { view: Element; pins: { dataset: { commentAnchor: string; commentId: string } }[]; asked: string[] } {
@@ -121,6 +122,43 @@ describe("focusOpenField", () => {
   it("does nothing without one", () => {
     expect(() => focusOpenField(scopeWith({}, {}))).not.toThrow();
     expect(() => focusOpenField(null)).not.toThrow();
+  });
+});
+
+describe("a field in a frame of its own (the code view's, lib/frameField.ts)", () => {
+  const focused: unknown[] = [];
+  const textarea = { focus: (options: unknown) => focused.push(options) };
+  const frame = { contentDocument: { querySelector: () => textarea } };
+  const slot = { slot: true };
+  setFrameAnchor(frame as unknown as Element, slot as unknown as Element);
+  const field = textarea as unknown as HTMLTextAreaElement;
+
+  it("changedField finds it through its slot, in the scope or in a dialog", () => {
+    expect(changedField(scopeWith({ ".comment-popover[data-comment-changed] .comment-field-slot": slot }, {}))).toBe(field);
+    expect(changedField(scopeWith({}, { ".modal.comment-popover[data-comment-changed] .comment-field-slot": slot }))).toBe(field);
+    expect(changedField(scopeWith({ ".comment-popover .comment-field-slot": slot }, {}))).toBeNull();
+  });
+  it("focusOpenField focuses it", () => {
+    focused.length = 0;
+    focusOpenField(scopeWith({ ".comment-popover .comment-field-slot": slot }, {}));
+    expect(focused).toEqual([{ preventScroll: true }]);
+    focusOpenField(scopeWith({}, { ".modal.comment-popover .comment-field-slot": slot }));
+    expect(focused).toEqual([{ preventScroll: true }, { preventScroll: true }]);
+  });
+  it("hasChangedComment counts its slot", () => {
+    const root = (found: Record<string, object>) => ({ querySelector: (selector: string) => found[selector] ?? null }) as unknown as ParentNode;
+    expect(hasChangedComment(root({ ".comment-popover[data-comment-changed] .comment-field-slot": slot }))).toBe(true);
+    expect(hasChangedComment(root({ ".comment-popover .comment-field-slot": slot }))).toBe(false);
+  });
+  it("revealField brings the popover of its slot into view", () => {
+    const calls: unknown[] = [];
+    const popover = { scrollIntoView: (options: unknown) => calls.push(options) };
+    const anchored = { closest: (selector: string) => selector === ".comment-popover" ? popover : null };
+    const inner = { focus: () => calls.push("focus"), closest: () => null, ownerDocument: { defaultView: { frameElement: frame } } };
+    setFrameAnchor(frame as unknown as Element, anchored as unknown as Element);
+    revealField(inner as unknown as HTMLTextAreaElement);
+    expect(calls).toEqual(["focus", { block: "nearest" }]);
+    setFrameAnchor(frame as unknown as Element, slot as unknown as Element);
   });
 });
 

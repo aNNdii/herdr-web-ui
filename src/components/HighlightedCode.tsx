@@ -59,6 +59,34 @@ interface CodeLinesProps {
   className?: string;
   /** the source line of the first line: with it each `.hl-line` carries its number as `data-source-line` */
   firstLine?: number;
+  /** the lines in block chunks of about `CODE_CHUNK_LINES` (`.hl-chunk`): the file viewer's code view, whose lines take room */
+  chunked?: boolean;
+}
+
+/**
+ * About how many lines a chunk of the file viewer's code holds. A line's room (its comment card, FileViewer.css) changes
+ * its box, and the browser lays out again the run of inline lines it is in: the whole file when that run is one `<code>`
+ * (slow in a long file: the design spec's "Performance", docs/superpowers/specs/2026-10-11-code-view-inline-comments-design.md),
+ * only its chunk when the lines are in block chunks.
+ */
+export const CODE_CHUNK_LINES = 200;
+
+const blank = (tokens: Lines[number]): boolean => tokens.every((token) => token.text === "");
+
+/**
+ * Where the chunks of `lines` end (exclusive indexes, the last one `lines.length`): after `size` lines, else the first
+ * line after that which is not blank and is followed by a line that is not blank. A blank line at either side of a
+ * chunk's edge would be dropped from `innerText` and a copied selection (Chromium) or doubled (a "\n" kept there).
+ */
+function chunkEnds(lines: Lines, size: number): number[] {
+  const ends: number[] = [];
+  let end = 0;
+  while (end < lines.length) {
+    end = Math.min(lines.length, end + size);
+    while (end < lines.length && (blank(lines[end - 1]!) || blank(lines[end]!))) end += 1;
+    ends.push(end);
+  }
+  return ends;
 }
 
 /**
@@ -73,21 +101,38 @@ interface CodeLinesProps {
  * The "\n" stays outside the `.hl-line`: a line's element holds its text only. Past
  * `LINE_ELEMENT_LIMIT` lines it is one text, as drawing an element per line would hold the page.
  * The ref is that `<pre>`: the file viewer selects it when the clipboard is out of reach.
+ *
+ * `chunked` puts the lines in block `.hl-chunk`s (`chunkEnds`), so a line's room lays out its chunk only. A chunk's
+ * edge is a line break of its own, so the "\n" after a chunk's last line is left out, and an edge never has a blank line
+ * beside it: the text, a copy and `innerText` stay the code's in Chromium and WebKit. A chunked code's numbers are its
+ * lines' `data-source-line` (HighlightedCode.css), not the counter, so it always carries it (from line 1 without
+ * `firstLine`).
  */
-export const CodeLines = memo(forwardRef<HTMLPreElement, CodeLinesProps>(function CodeLines({ lines, lineNumbers = false, wrap = false, className, firstLine }, ref) {
+export const CodeLines = memo(forwardRef<HTMLPreElement, CodeLinesProps>(function CodeLines({ lines, lineNumbers = false, wrap = false, className, firstLine, chunked = false }, ref) {
   // one text past LINE_ELEMENT_LIMIT lines, with no numbers then: they are an element per line
   const plain = lines.length > LINE_ELEMENT_LIMIT;
   // index keys: the lines are a static list that is rebuilt as a whole
-  const elements = useMemo(() => plain
-    ? lines.map((tokens) => tokens.map((token) => token.text).join("")).join("\n")
-    : lines.map((tokens, index) => (
-      <Fragment key={index}>
-        <span className="hl-line" data-source-line={firstLine === undefined ? undefined : firstLine + index}>
+  const elements = useMemo(() => {
+    if (plain) return lines.map((tokens) => tokens.map((token) => token.text).join("")).join("\n");
+    const first = firstLine ?? (chunked ? 1 : undefined);
+    /** Lines `start` to `end` (exclusive), a "\n" between each two. */
+    const run = (start: number, end: number): JSX.Element[] => lines.slice(start, end).map((tokens, offset) => {
+      const index = start + offset;
+      return <Fragment key={index}>
+        <span className="hl-line" data-source-line={first === undefined ? undefined : first + index}>
           {tokens.map((token, n) => token.role === null ? token.text : <span className={`hl-${token.role}`} key={n}>{token.text}</span>)}
         </span>
-        {index < lines.length - 1 && "\n"}
-      </Fragment>
-    )), [lines, plain, firstLine]);
+        {index < end - 1 && "\n"}
+      </Fragment>;
+    });
+    if (!chunked) return run(0, lines.length);
+    let start = 0;
+    return chunkEnds(lines, CODE_CHUNK_LINES).map((end) => {
+      const chunk = <span className="hl-chunk" key={start}>{run(start, end)}</span>;
+      start = end;
+      return chunk;
+    });
+  }, [lines, plain, firstLine, chunked]);
   const numbered = lineNumbers && !plain;
   // the gutter is as wide as the last line's number, at least two digits
   const gutter = numbered ? { "--hl-digits": String(Math.max(2, String(lines.length).length)) } as CSSProperties : undefined;

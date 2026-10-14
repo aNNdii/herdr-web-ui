@@ -146,10 +146,24 @@ export interface Settings {
   highlightCode: boolean;
   /** the width of a Markdown preview: the chat's lane (--chat-w), centered, or the viewer's width */
   markdownWidth: MarkdownWidth;
+  /** the code view's comment mode, switched from the viewer's header */
+  codeCommentMode: boolean;
+  /** with a mouse, a click anywhere on a line opens a comment; off, only the ⊕ beside the line number does */
+  codeCommentLineClick: boolean;
+  /** on a touch screen in comment mode: a long press or a tap comments on a line */
+  mobileCommentGesture: MobileCommentGesture;
+  /** on a touch screen: the comment field opens in a bottom sheet or inline below the line */
+  mobileCommentInput: MobileCommentInput;
 }
 
 export const MARKDOWN_WIDTHS = ["readable", "full"] as const;
 export type MarkdownWidth = (typeof MARKDOWN_WIDTHS)[number];
+
+export const MOBILE_COMMENT_GESTURES = ["hold", "tap"] as const;
+export type MobileCommentGesture = (typeof MOBILE_COMMENT_GESTURES)[number];
+
+export const MOBILE_COMMENT_INPUTS = ["sheet", "inline"] as const;
+export type MobileCommentInput = (typeof MOBILE_COMMENT_INPUTS)[number];
 
 export const DEFAULT_SETTINGS: Settings = {
   terminalInputMode: "auto",
@@ -198,6 +212,10 @@ export const DEFAULT_SETTINGS: Settings = {
   wrapCode: false,
   highlightCode: true,
   markdownWidth: "readable",
+  codeCommentMode: false,
+  codeCommentLineClick: false,
+  mobileCommentGesture: "hold",
+  mobileCommentInput: "sheet",
 };
 
 export const QUICK_REPLIES_MAX = 12;
@@ -363,6 +381,10 @@ export function sanitizeSettings(raw: unknown): Settings {
     wrapCode: typeof record["wrapCode"] === "boolean" ? record["wrapCode"] : DEFAULT_SETTINGS.wrapCode,
     highlightCode: typeof record["highlightCode"] === "boolean" ? record["highlightCode"] : DEFAULT_SETTINGS.highlightCode,
     markdownWidth: MARKDOWN_WIDTHS.find((width) => width === record["markdownWidth"]) ?? DEFAULT_SETTINGS.markdownWidth,
+    codeCommentMode: typeof record["codeCommentMode"] === "boolean" ? record["codeCommentMode"] : DEFAULT_SETTINGS.codeCommentMode,
+    codeCommentLineClick: typeof record["codeCommentLineClick"] === "boolean" ? record["codeCommentLineClick"] : DEFAULT_SETTINGS.codeCommentLineClick,
+    mobileCommentGesture: MOBILE_COMMENT_GESTURES.find((gesture) => gesture === record["mobileCommentGesture"]) ?? DEFAULT_SETTINGS.mobileCommentGesture,
+    mobileCommentInput: MOBILE_COMMENT_INPUTS.find((input) => input === record["mobileCommentInput"]) ?? DEFAULT_SETTINGS.mobileCommentInput,
   };
 }
 
@@ -436,7 +458,9 @@ const THEME_COLOR: Record<Palette, Record<ResolvedTheme, string>> = {
 
 function applyToDocument(settings: Settings, resolved: ResolvedTheme, language: Language): void {
   const root = document.documentElement;
-  root.lang = LOCALE_TAGS[language];
+  // only when it changes: Chromium restyles the whole document on any write of `lang`, the same value too (about 0.3 s
+  // with a 20 000-line file open), and this runs on every settings change (the code view's comment mode is one)
+  if (root.lang !== LOCALE_TAGS[language]) root.lang = LOCALE_TAGS[language];
   root.dataset["theme"] = resolved;
   root.dataset["density"] = settings.density;
   root.dataset["palette"] = settings.palette;
