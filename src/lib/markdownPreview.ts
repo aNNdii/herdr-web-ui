@@ -22,7 +22,8 @@ export function knownPreview(text: string): MarkdownBlock[] | null | undefined {
 
 /**
  * `text` parsed as Markdown in a worker. `null` when it took longer than `PREVIEW_BUDGET_MS`, the
- * parser failed (a stack overflow included) or it was cancelled before it started.
+ * parser failed (a stack overflow included), it would draw more than `PREVIEW_ELEMENT_LIMIT`
+ * elements, or it was cancelled before it started.
  */
 export function parsePreviewOffThread(text: string): OffThreadJob<MarkdownBlock[]> {
   const job = queue(text);

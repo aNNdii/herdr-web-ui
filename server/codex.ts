@@ -11,7 +11,7 @@ import { processStartedAt } from "./process-start.ts";
 import { codexImageParts } from "./codex-images.ts";
 import { codexReadCall, codexReadSkills, selectedSkill } from "./skill-activity.ts";
 import { trimOutput } from "./tool-output.ts";
-import { herdrRpc, paneRead, sessionSnapshot } from "./herdr/client.ts";
+import { agentGet, paneProcessInfo, paneRead, sessionSnapshot } from "./herdr/client.ts";
 
 type RecordValue = Record<string, unknown>;
 const record = (value: unknown): RecordValue => value !== null && typeof value === "object" && !Array.isArray(value) ? value as RecordValue : {};
@@ -967,6 +967,7 @@ function displayedFirstExchange(screen: string): CodexExchange | null {
   let promptAt = -1;
   for (let index = 0; index < lines.length; index++) {
     const line = lines[index] ?? "";
+    if (/^• (?:Model changed|Unrecognized command|Working directory changed)(?:[ \t]|$)/.test(line)) continue;
     if (/^•(?:[ \t]|$)/.test(line)) return null;
     if (/^›[ \t]+/.test(line)) { promptAt = index; break; }
   }
@@ -985,12 +986,12 @@ function displayedFirstExchange(screen: string): CodexExchange | null {
   return { user, assistant: response };
 }
 
-function matchingCodexExchanges(screen: string, candidates: readonly CodexFirstExchangeCandidate[]): { candidate: CodexFirstExchangeCandidate; index: number }[] {
+function matchingCodexExchanges(screen: string, candidates: readonly CodexFirstExchangeCandidate[], answerFloor: number): { candidate: CodexFirstExchangeCandidate; index: number }[] {
   const shown = displayedFirstExchange(screen);
   if (shown === null) return [];
   const prompt = normalizePrompt(shown.user);
   const answer = normalizePrompt(shown.assistant);
-  if (normalizeDisplay(prompt).length < 8 || normalizeDisplay(answer).length < 16) return [];
+  if (normalizeDisplay(prompt).length < 8 || normalizeDisplay(answer).length < answerFloor) return [];
   const matches: { candidate: CodexFirstExchangeCandidate; index: number }[] = [];
   for (const candidate of candidates) {
     for (const [index, exchange] of codexExchanges(candidate.text).entries()) {
@@ -1014,7 +1015,7 @@ export function matchCodexFirstExchange(
   if (!Number.isFinite(startedAtMs)) return null;
   if (candidates.filter((candidate) => typeof candidate.createdAtMs === "number"
     && candidate.createdAtMs >= startedAtMs).length !== 1) return null;
-  const matches = matchingCodexExchanges(screen, candidates);
+  const matches = matchingCodexExchanges(screen, candidates, 1);
   if (matches.length !== 1) return null;
   const match = matches[0]!;
   const first = codexExchanges(match.candidate.text)[0];
@@ -1089,10 +1090,10 @@ const VALUELESS_OPTIONS = new Set([
 
 /** A pane's Codex executables (or interpreter scripts), and their pids as one key. */
 async function codexProcessesOf(paneId: string): Promise<{ list: { pid: number; argv?: string[] }[]; key: string }> {
-  const processInfo = await herdrRpc<{ process_info?: { foreground_processes?: { pid: number; argv?: string[] }[] } }>(
-    "pane.process_info", { pane_id: paneId },
-  );
-  const list = (processInfo.process_info?.foreground_processes ?? [])
+  const processInfo = await paneProcessInfo(paneId);
+  // herdr's schema allows `argv: null`; this reader has always read argv as absent or a list
+  // (the cast is the inline result type herdrRpc was given before the typed seam)
+  const list = ((processInfo?.foreground_processes ?? []) as { pid: number; argv?: string[] }[])
     .map((foreground) => {
       if (foreground.argv?.length || process.platform !== "linux") return foreground;
       // herdr can report only pid/name. Read this process, never infer argv from
@@ -1277,29 +1278,9 @@ async function shortThreadFromProcess(
   finally { db?.close(); }
 }
 
-/**
- * The rollout a pane's Codex writes, or null when nothing tells. `panes`: the session's
- * panes, when the caller has them (saves a snapshot, and closed panes' bindings go).
- *
- * The thread id herdr has for a Codex pane is a hint, not proof: Codex's SessionStart
- * hook reports it, and since Codex 0.157 that hook runs in the app-server daemon every
- * Codex TUI shares. The daemon keeps the environment of the TUI that started it, so each
- * TUI's thread is reported to that first pane (live-verified 2026-09-26 with Codex
- * 0.157.1: a pane resumed on thread A left the daemon's own pane holding A). What
- * shows on screen decides first; the id is used only when nothing does and no other
- * pane owns that thread.
- */
-export async function codexTranscriptPath(paneId: string, cwd: string, home = defaultCodexHome(), panes?: HerdrPane[]): Promise<string | null> {
-  if (panes !== undefined) {
-    const open = new Set(panes.map((pane) => pane.pane_id));
-    for (const pane of [...boundRollouts.keys()]) if (!open.has(pane)) boundRollouts.delete(pane);
-  }
-  const info = await herdrRpc<{ agent: { agent_session?: { kind?: string; value?: string } } }>("agent.get", { target: paneId });
-  const session = info.agent.agent_session;
-  if (session?.kind === "path" && session.value) return codexRolloutPath(session.value, home);
-
+/** The pane's Codex processes, and the rollouts they hold open (lsof on macOS, /proc elsewhere): one alone is the pane's. */
+async function openRollouts(paneId: string, home: string): Promise<{ codexProcesses: Awaited<ReturnType<typeof codexProcessesOf>>["list"]; processes: string; open: Set<string> }> {
   const { list: codexProcesses, key: processes } = await codexProcessesOf(paneId);
-  const resumed = resumedThread(codexProcesses.map((process) => process.argv ?? []));
   const open = new Set<string>();
   if (globalThis.process.platform === "darwin" && codexProcesses.length > 0) {
     // lsof is available on macOS, where /proc does not exist. Keep the same
@@ -1333,7 +1314,58 @@ export async function codexTranscriptPath(paneId: string, cwd: string, home = de
       } catch { /* A descriptor may close while enumerating it. */ }
     }
   }
+  return { codexProcesses, processes, open };
+}
+
+/**
+ * The rollout a pane's Codex writes when that is certain without reading its screen: the path
+ * herdr reports, the one rollout its processes hold open, or the one a chat read last matched to
+ * the same processes while no thread begun in `cwd` since may have replaced it (/new). Nothing is
+ * matched or bound here, so a reader in the background (the session plan, server/session-plan.ts)
+ * never changes what codexTranscriptPath decides for the chat. Unlike the chat it does not ask the
+ * other panes' screens whose a newer thread is: such a thread leaves it unsure until a chat read
+ * matches the pane again.
+ */
+export async function codexOpenRollout(paneId: string, cwd: string | null | undefined, home = defaultCodexHome()): Promise<string | null> {
+  const session = (await agentGet(paneId)).agent_session;
+  if (session?.kind === "path" && session.value) return codexRolloutPath(session.value, home);
+  const { processes, open } = await openRollouts(paneId, home);
   if (open.size === 1) return [...open][0]!;
+  const bound = boundRollouts.get(paneId);
+  if (bound === undefined || bound.processes !== processes || processes === "" || !cwd || codexRolloutPath(bound.path, home) === null) return null;
+  let db: Database | undefined;
+  try {
+    db = new Database(join(home, "state_5.sqlite"), { readonly: true, create: false });
+    return newerThreads(db, cwd, Math.floor(bound.at / 1000), null, paneId, home).length === 0 ? bound.path : null;
+  } catch {
+    // no store to ask, as codexTranscriptPath then keeps its binding too
+    return bound.path;
+  } finally { db?.close(); }
+}
+
+/**
+ * The rollout a pane's Codex writes, or null when nothing tells. `panes`: the session's
+ * panes, when the caller has them (saves a snapshot, and closed panes' bindings go).
+ *
+ * The thread id herdr has for a Codex pane is a hint, not proof: Codex's SessionStart
+ * hook reports it, and since Codex 0.157 that hook runs in the app-server daemon every
+ * Codex TUI shares. The daemon keeps the environment of the TUI that started it, so each
+ * TUI's thread is reported to that first pane (live-verified 2026-09-26 with Codex
+ * 0.157.1: a pane resumed on thread A left the daemon's own pane holding A). What
+ * shows on screen decides first; the id is used only when nothing does and no other
+ * pane owns that thread.
+ */
+export async function codexTranscriptPath(paneId: string, cwd: string, home = defaultCodexHome(), panes?: HerdrPane[]): Promise<string | null> {
+  if (panes !== undefined) {
+    const open = new Set(panes.map((pane) => pane.pane_id));
+    for (const pane of [...boundRollouts.keys()]) if (!open.has(pane)) boundRollouts.delete(pane);
+  }
+  const session = (await agentGet(paneId)).agent_session;
+  if (session?.kind === "path" && session.value) return codexRolloutPath(session.value, home);
+
+  const { codexProcesses, processes, open } = await openRollouts(paneId, home);
+  if (open.size === 1) return [...open][0]!;
+  const resumed = resumedThread(codexProcesses.map((process) => process.argv ?? []));
 
   let db: Database | undefined;
   let paths: string[] = [...open];

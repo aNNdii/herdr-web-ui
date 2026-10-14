@@ -1,8 +1,9 @@
-import { forwardRef, Fragment, memo, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { forwardRef, Fragment, memo, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactElement } from "react";
 
 import { canHighlight, countLines, extendLines, LINE_ELEMENT_LIMIT, normalizeCode, plainLines, type Lines } from "../lib/highlight.ts";
 import { highlightedFrom, highlightKnown, highlightOffThread, type Highlighted } from "../lib/highlightOffThread.ts";
 import { useT } from "../lib/i18n.ts";
+import { linkFilePaths, linksFilePaths } from "./FilePathLink.tsx";
 import { useSettings } from "../lib/settings.ts";
 import "./HighlightedCode.css";
 
@@ -57,6 +58,10 @@ interface CodeLinesProps {
   lineNumbers?: boolean;
   wrap?: boolean;
   className?: string;
+  /** A requested source line; the host has checked that it is among the numbered lines. */
+  markedLine?: number | null;
+  /** opens a file path the code names; null leaves every path as text */
+  open: ((path: string) => void) | null;
   /** the source line of the first line: with it each `.hl-line` carries its number as `data-source-line` */
   firstLine?: number;
   /** the lines in block chunks of about `CODE_CHUNK_LINES` (`.hl-chunk`): the file viewer's code view, whose lines take room */
@@ -66,8 +71,7 @@ interface CodeLinesProps {
 /**
  * About how many lines a chunk of the file viewer's code holds. A line's room (its comment card, FileViewer.css) changes
  * its box, and the browser lays out again the run of inline lines it is in: the whole file when that run is one `<code>`
- * (slow in a long file: the design spec's "Performance", docs/superpowers/specs/2026-10-11-code-view-inline-comments-design.md),
- * only its chunk when the lines are in block chunks.
+ * (slow in a long file), only its chunk when the lines are in block chunks.
  */
 export const CODE_CHUNK_LINES = 200;
 
@@ -95,34 +99,33 @@ function chunkEnds(lines: Lines, size: number): number[] {
  * `wrap` or `lineNumbers` leaves them alone. The line-number gutter is a CSS counter, so it never
  * reaches a copy.
  *
- * The lines are inline spans, each but the last followed by a literal "\n" text node, so the
+ * The lines are inline spans joined by literal "\n" text nodes (none after the last line), so the
  * text of the `<pre>` is the code itself: `innerText` and a copied selection keep every blank line.
  * Block lines would add a line break of their own between lines and drop or double the blank ones.
- * The "\n" stays outside the `.hl-line`: a line's element holds its text only. Past
- * `LINE_ELEMENT_LIMIT` lines it is one text, as drawing an element per line would hold the page.
+ * Past `LINE_ELEMENT_LIMIT` lines it is one text, as drawing an element per line would hold the page.
  * The ref is that `<pre>`: the file viewer selects it when the clipboard is out of reach.
  *
- * `chunked` puts the lines in block `.hl-chunk`s (`chunkEnds`), so a line's room lays out its chunk only. A chunk's
- * edge is a line break of its own, so the "\n" after a chunk's last line is left out, and an edge never has a blank line
- * beside it: the text, a copy and `innerText` stay the code's in Chromium and WebKit. A chunked code's numbers are its
- * lines' `data-source-line` (HighlightedCode.css), not the counter, so it always carries it (from line 1 without
- * `firstLine`).
+ * `chunked` puts the lines in block `.hl-chunk`s (`chunkEnds`), so a line's room (a file comment's card) lays out its
+ * chunk only. A chunk's edge is a line break of its own, so no "\n" is written before a chunk's first line, and an edge
+ * never has a blank line beside it: the text, a copy and `innerText` stay the code's in Chromium and WebKit. A chunked
+ * code's numbers are its lines' `data-source-line` (HighlightedCode.css), not the counter, so it always carries it
+ * (from line 1 without `firstLine`).
  */
-export const CodeLines = memo(forwardRef<HTMLPreElement, CodeLinesProps>(function CodeLines({ lines, lineNumbers = false, wrap = false, className, firstLine, chunked = false }, ref) {
+export const CodeLines = memo(forwardRef<HTMLPreElement, CodeLinesProps>(function CodeLines({ lines, open, lineNumbers = false, wrap = false, className, markedLine = null, firstLine, chunked = false }, ref) {
   // one text past LINE_ELEMENT_LIMIT lines, with no numbers then: they are an element per line
   const plain = lines.length > LINE_ELEMENT_LIMIT;
   // index keys: the lines are a static list that is rebuilt as a whole
   const elements = useMemo(() => {
-    if (plain) return lines.map((tokens) => tokens.map((token) => token.text).join("")).join("\n");
+    if (plain) return linkFilePaths(lines.map((tokens) => tokens.map((token) => token.text).join("")).join("\n"), open);
     const first = firstLine ?? (chunked ? 1 : undefined);
     /** Lines `start` to `end` (exclusive), a "\n" between each two. */
-    const run = (start: number, end: number): JSX.Element[] => lines.slice(start, end).map((tokens, offset) => {
+    const run = (start: number, end: number): ReactElement[] => lines.slice(start, end).map((tokens, offset) => {
       const index = start + offset;
       return <Fragment key={index}>
-        <span className="hl-line" data-source-line={first === undefined ? undefined : first + index}>
-          {tokens.map((token, n) => token.role === null ? token.text : <span className={`hl-${token.role}`} key={n}>{token.text}</span>)}
+        {index > start && "\n"}
+        <span className={index + 1 === markedLine ? "hl-line is-marked" : "hl-line"} data-line={index + 1} data-source-line={first === undefined ? undefined : first + index}>
+          {tokens.map((token, n) => token.role === null ? <Fragment key={n}>{linkFilePaths(token.text, open)}</Fragment> : <span className={`hl-${token.role}`} key={n}>{linkFilePaths(token.text, open)}</span>)}
         </span>
-        {index < end - 1 && "\n"}
       </Fragment>;
     });
     if (!chunked) return run(0, lines.length);
@@ -132,7 +135,7 @@ export const CodeLines = memo(forwardRef<HTMLPreElement, CodeLinesProps>(functio
       start = end;
       return chunk;
     });
-  }, [lines, plain, firstLine, chunked]);
+  }, [lines, plain, open, markedLine, firstLine, chunked]);
   const numbered = lineNumbers && !plain;
   // the gutter is as wide as the last line's number, at least two digits
   const gutter = numbered ? { "--hl-digits": String(Math.max(2, String(lines.length).length)) } as CSSProperties : undefined;
@@ -144,22 +147,26 @@ interface HighlightedCodeProps {
   language: string | null;
   /** Characters; above it the code shows as plain text with the note. */
   limit?: number;
+  /** opens a file path the code names (output, a log); absent, paths stay text */
+  open?: ((path: string) => void) | null;
   /** the source line of the first line (a code block of the file viewer's preview): its lines carry their numbers */
   firstLine?: number;
 }
 
 /**
  * A code block that highlights itself and, when it was left plain for its length, says so under
- * the code. Every prop is a primitive, so `memo` skips a parent's re-render (a chat reply's other
+ * the code. Every prop is a primitive or a stable callback, so `memo` skips a parent's re-render (a chat reply's other
  * blocks while one grows). A host that says "too long" elsewhere (the file viewer, in its header)
  * calls `useHighlightedLines` and draws `CodeLines` itself.
  */
-export const HighlightedCode = memo(function HighlightedCode({ code, language, limit, firstLine }: HighlightedCodeProps) {
+export const HighlightedCode = memo(function HighlightedCode({ code, language, limit, open = null, firstLine }: HighlightedCodeProps) {
   const t = useT();
   const { lines, tooLong } = useHighlightedLines(code, language, limit);
+  // the whole block is measured, not each token of each line: a block of short lines is as long as its text
+  const links = useMemo(() => open !== null && linksFilePaths(code), [code, open]);
   return (
     <>
-      <CodeLines lines={lines} firstLine={firstLine} />
+      <CodeLines lines={lines} open={links ? open : null} firstLine={firstLine} />
       {tooLong && <p className="hl-note">{t("Too long to highlight")}</p>}
     </>
   );

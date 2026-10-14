@@ -151,7 +151,7 @@ export function useFileComments(scope: FileCommentScope | null): FileComments {
  * back, so the viewer never closes and loses that text; true while a popover had it, and the viewer then stays.
  * `comments` are the file's comments as placed (`useFileComments`, which the viewer calls once for both views).
  */
-export function useFileCommentLayer(scope: FileCommentScope | null, surface: RefObject<HTMLDivElement>, content: RefObject<HTMLElement>, comments: FileComments): {
+export function useFileCommentLayer(scope: FileCommentScope | null, surface: RefObject<HTMLDivElement | null>, content: RefObject<HTMLElement | null>, comments: FileComments): {
   overlay: ReactNode;
   surfaceProps: CommentSurfaceProps;
   escape: () => boolean;
@@ -261,7 +261,7 @@ export type FileHighlightWatcher = ReturnType<typeof watchFileCommentHighlights>
  * watched anew): a caller shows its pending comment again when it changes. Used by the preview's layer and the code's;
  * `focusMode` goes on to `SurfaceMarks` (lib/commentHighlight.ts), which says when to turn it off.
  */
-export function useFileCommentHighlights(active: boolean, surface: RefObject<HTMLDivElement>, content: RefObject<HTMLElement>, shown: readonly PlacedFileComment[], watcher: MutableRefObject<FileHighlightWatcher | null>, focusMode = true): HTMLElement | null {
+export function useFileCommentHighlights(active: boolean, surface: RefObject<HTMLDivElement | null>, content: RefObject<HTMLElement | null>, shown: readonly PlacedFileComment[], watcher: MutableRefObject<FileHighlightWatcher | null>, focusMode = true): HTMLElement | null {
   const [root, setRoot] = useState<HTMLElement | null>(null);
   useLayoutEffect(() => { setRoot(active ? content.current : null); });
   useLayoutEffect(() => {
@@ -301,9 +301,9 @@ export function useFileCommentWalk({ owner, view, comments, surface, content, sh
   view: FileView | null;
   comments: FileComments;
   /** the viewer's body, the comment surface the pins are in */
-  surface: RefObject<HTMLDivElement>;
+  surface: RefObject<HTMLDivElement | null>;
   /** the file's content root in the view shown (the code's `<pre>`, the preview's `.markdown`) */
-  content: RefObject<HTMLElement>;
+  content: RefObject<HTMLElement | null>;
   /** shows the file in `view` */
   showView: (view: FileView) => void;
   /** stands on comment `id` in the code view (`useCodeComments().stop`); false while its card is not drawn */

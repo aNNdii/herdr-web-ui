@@ -1,5 +1,5 @@
-import { memoizeLast } from "./memoizeLast.ts";
 import { fileUriPath } from "./terminalFileLinks.ts";
+import { parseHtmlBlock, startsHtml } from "./markdownHtml.ts";
 
 export type InlineNode =
   | { type: "text"; value: string }
@@ -7,6 +7,8 @@ export type InlineNode =
   | { type: "math"; value: string }
   | { type: "strong" | "em" | "del"; children: InlineNode[] }
   | { type: "link"; href: string; children: InlineNode[] }
+  /** `![alt](src)`; `fallback` is what a surface that draws no images shows after the `!` */
+  | { type: "image"; alt: string; src: string; fallback: InlineNode[]; /** CSS pixels, from an HTML `<img width>` */ width?: number }
   /** a link to a local file (`[report](/repo/out/REPORT.md)`): its label opens the path */
   | { type: "file"; path: string; children: InlineNode[] };
 
@@ -37,9 +39,10 @@ export interface ListBlock {
 
 export type MarkdownBlock =
   | { type: "math"; value: string; source?: SourceLines }
-  | { type: "heading"; level: 1 | 2 | 3 | 4 | 5 | 6; content: InlineNode[]; source?: SourceLines }
+  /** `align`: centered by the HTML a README wrote it in (lib/markdownHtml.ts) */
+  | { type: "heading"; level: 1 | 2 | 3 | 4 | 5 | 6; content: InlineNode[]; align?: "center"; source?: SourceLines }
   /** `lineNumbers` has one file line per entry of `lines` */
-  | { type: "paragraph"; lines: InlineNode[][]; source?: SourceLines; lineNumbers?: number[] }
+  | { type: "paragraph"; lines: InlineNode[][]; align?: "center"; source?: SourceLines; lineNumbers?: number[] }
   | ListBlock
   | { type: "blockquote"; blocks: MarkdownBlock[]; source?: SourceLines }
   /** `source` starts at the opening fence: body line `i` (0-based) is `source[0] + 1 + i` */
@@ -71,17 +74,17 @@ export function webLikeHref(target: string): string | null {
 /**
  * The file a link names, when its target is a path rather than an address: agents link
  * files they wrote (`[report](/repo/out/REPORT.md)`, `[x](src/x.ts#L12)`, `[x](x.ts:12)`).
- * A line anchor (`#L12`, `:12`) is dropped; the viewer opens the file. A line after a bare
+ * A line anchor (`#L12`, `:12`) stays for the viewer; other anchors are dropped. A line after a bare
  * word is a scheme's (`tel:123`), not a file's.
  */
 export function markdownFileTarget(href: string): string | null {
   const value = href.trim();
   if (/^file:\/\/\//i.test(value)) return fileUriPath(value);
   if (value === "" || value.startsWith("#")) return null;
-  const withoutAnchor = value.replace(/#.*$/, "");
-  const path = withoutAnchor.replace(/(?::\d+){1,2}$/, "");
-  if (path === "" || /^[a-z][a-z0-9+.-]*:/i.test(path) || (path !== withoutAnchor && !/[./]/.test(path))) return null;
-  return path;
+  const target = value.replace(/#(?!L\d+(?:-L?\d+)?$).*$/, "");
+  const path = target.replace(/(?::\d+){1,2}$|#L\d+(?:-L?\d+)?$/, "");
+  if (path === "" || /^[a-z][a-z0-9+.-]*:/i.test(path) || (path !== target && !/[./]/.test(path))) return null;
+  return target;
 }
 
 /** A bare URL without the punctuation that closes the sentence around it (GFM's autolink rule). */
@@ -182,8 +185,11 @@ export function parseInline(source: string, links = true, depth = 0): InlineNode
   let offset = 0;
   for (const match of inlineMarks(source)) {
     const index = match.index ?? 0;
-    if (index > offset) nodes.push({ type: "text", value: source.slice(offset, index) });
     let token = match[0];
+    // the `!` of an image stays in the text before its bracket
+    const image = token.startsWith("[") && index > offset && source[index - 1] === "!";
+    const textEnd = image ? index - 1 : index;
+    if (textEnd > offset) nodes.push({ type: "text", value: source.slice(offset, textEnd) });
     // like an http address it stops at the first non-ASCII character (`file:///tmp/a.md에서`); a
     // name with other letters in it is percent-encoded in a URI
     if (token.startsWith("file:///")) {
@@ -209,9 +215,11 @@ export function parseInline(source: string, links = true, depth = 0): InlineNode
       // a label holds no `]`, so no link nests in one: only emphasis counts toward the depth
       const href = safeMarkdownHref(target) ?? webLikeHref(target);
       const file = href === null ? markdownFileTarget(target) : null;
-      nodes.push(href !== null ? { type: "link", href, children: parseInline(label, false, depth) }
+      const shown: InlineNode = href !== null ? { type: "link", href, children: parseInline(label, false, depth) }
         : file !== null ? { type: "file", path: file, children: parseInline(label, false, depth) }
-        : { type: "text", value: label });
+        : { type: "text", value: label };
+      if (image) nodes.push({ type: "image", alt: label, src: target, fallback: [{ type: "text", value: "!" }, shown] });
+      else nodes.push(shown);
     } else if (token.startsWith("**") || token.startsWith("__")) {
       nodes.push({ type: "strong", children: parseInline(token.slice(2, -2), links, depth + 1) });
     } else if (token.startsWith("~~")) {
@@ -274,10 +282,10 @@ function parseTable(lines: string[], start: number, firstLine: number | null, wi
   return { block: { type: "table", header, rows, ...span(firstLine, start, index - 1), ...(rowLines === null ? {} : { rowLines }) }, next: index };
 }
 
-/** Whether a line opens a block of its own (math, fence, heading, quote, rule, list, table), so it ends a paragraph. */
-function startsBlock(lines: string[], index: number): boolean {
+/** Whether a line opens a block of its own (HTML in a file, math, fence, heading, quote, rule, list, table), so it ends a paragraph. */
+function startsBlock(lines: string[], index: number, html = false): boolean {
   const line = lines[index] ?? "";
-  return /^\s*\\\[/.test(line) || /^\s{0,3}```/.test(line) || /^#{1,6}\s+/.test(line) || /^\s*>/.test(line) || /^(?:\s*[-*_]){3,}\s*$/.test(line) || listLine.test(line)
+  return (html && startsHtml(line)) || /^\s*\\\[/.test(line) || /^\s{0,3}```/.test(line) || /^#{1,6}\s+/.test(line) || /^\s*>/.test(line) || /^(?:\s*[-*_]){3,}\s*$/.test(line) || listLine.test(line)
     || startsTable(lines, index);
 }
 
@@ -400,10 +408,11 @@ export function foldCode(value: string): { head: string; lines: number } | null 
 const MAX_QUOTE_DEPTH = 32;
 
 /**
- * Markdown source as blocks, uncached; `parseMarkdown` is the entry, and a quote's contents recurse here.
- * `firstLine` is the 1-based file line of the source's first line, or null to record no source lines.
+ * Markdown source as blocks; `parseMarkdown` and `parseMarkdownWithLines` are the entries, and a quote's contents
+ * recurse here. `firstLine` is the 1-based file line of the source's first line, or null to record no source lines.
+ * `html`: a file's markdown, whose HTML blocks are read as markdown (lib/markdownHtml.ts); an agent's text keeps them as text.
  */
-function parseBlocks(source: string, depth: number, firstLine: number | null): MarkdownBlock[] {
+function parseBlocks(source: string, depth: number, firstLine: number | null, html: boolean): MarkdownBlock[] {
   const lines = source.replace(/\r\n?/g, "\n").split("\n");
   const blocks: MarkdownBlock[] = [];
   let index = 0;
@@ -456,6 +465,14 @@ function parseBlocks(source: string, depth: number, firstLine: number | null): M
       unclosedMath = next;
     }
 
+    if (html && startsHtml(line)) {
+      // read as markdown, but with no source lines: a file comment cannot be written on an HTML block's parts
+      const read = parseHtmlBlock(lines, index);
+      blocks.push(...read.blocks);
+      index = read.next;
+      continue;
+    }
+
     const heading = /^(#{1,6})\s+(.+)$/s.exec(line);
     if (heading !== null) {
       blocks.push({ type: "heading", level: (heading[1] ?? "#").length as 1 | 2 | 3 | 4 | 5 | 6, content: parseInline(heading[2] ?? ""), ...span(firstLine, index) });
@@ -476,7 +493,7 @@ function parseBlocks(source: string, depth: number, firstLine: number | null): M
       // each quoted line is one line of the file, so the contents count on from the quote's first
       const quoteFirst = firstLine === null ? null : firstLine + quoteLine;
       // a line of thousands of ">" (text nobody wrote by hand) would otherwise overflow the stack
-      const inner: MarkdownBlock[] = depth < MAX_QUOTE_DEPTH ? parseBlocks(quoted.join("\n"), depth + 1, quoteFirst)
+      const inner: MarkdownBlock[] = depth < MAX_QUOTE_DEPTH ? parseBlocks(quoted.join("\n"), depth + 1, quoteFirst, html)
         : [{
           type: "paragraph",
           lines: quoted.map((quotedLine) => parseInline(quotedLine)),
@@ -503,7 +520,7 @@ function parseBlocks(source: string, depth: number, firstLine: number | null): M
 
     const paragraph: InlineNode[][] = [];
     const paragraphLine = index;
-    while (index < lines.length && lineAt(lines, index).trim() !== "" && (paragraph.length === 0 || !startsBlock(lines, index))) {
+    while (index < lines.length && lineAt(lines, index).trim() !== "" && (paragraph.length === 0 || !startsBlock(lines, index, html))) {
       paragraph.push(parseInline(lineAt(lines, index)));
       index += 1;
     }
@@ -517,23 +534,21 @@ function parseBlocks(source: string, depth: number, firstLine: number | null): M
   return blocks;
 }
 
-/**
- * Markdown source as blocks. The last call is remembered (`memoizeLast`): a file viewer's Preview,
- * toggled to the source and back, mounts anew and would parse a long document again.
- */
-export const parseMarkdown = memoizeLast((source: string): MarkdownBlock[] => parseBlocks(source, 0, null));
+/** `html`: a file's markdown, whose HTML blocks are read as markdown (lib/markdownHtml.ts); an agent's text keeps them as text */
+export function parseMarkdown(source: string, depth = 0, html = false): MarkdownBlock[] {
+  return parseBlocks(source, depth, null, html);
+}
 
-/**
- * The same blocks with their `source` lines, for a viewer that anchors comments to the file's lines.
- * Its own `memoizeLast`: the chat's calls to `parseMarkdown` never evict a file's parse, nor the reverse.
- */
-export const parseMarkdownWithLines = memoizeLast((source: string): MarkdownBlock[] => parseBlocks(source, 0, 1));
+/** The same blocks with their `source` lines, for a viewer that anchors comments to the file's lines. */
+export function parseMarkdownWithLines(source: string, html = false): MarkdownBlock[] {
+  return parseBlocks(source, 0, 1, html);
+}
 
 /**
  * The spans of the blocks a file comment can be written on, in document order, as `Markdown.tsx` draws them: a
  * heading, paragraph, code, table or math block, a whole blockquote (nothing inside it), each list
- * item's own text and then its nested blocks. A rule and a list itself are none. Needs the blocks
- * of `parseMarkdownWithLines`.
+ * item's own text and then its nested blocks. A rule and a list itself are none, nor is a block without source lines
+ * (one read from HTML). Needs the blocks of `parseMarkdownWithLines`.
  */
 export function previewHosts(blocks: readonly MarkdownBlock[]): SourceLines[] {
   const hosts: SourceLines[] = [];

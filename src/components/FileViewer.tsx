@@ -1,5 +1,5 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type RefObject } from "react";
-import { Check, Code, Copy, Download, ExternalLink, MessageSquareText, TriangleAlert, X } from "lucide-react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type RefObject } from "react";
+import { Braces, Check, Code, Copy, Download, ExternalLink, MessageSquareText, TriangleAlert, X } from "lucide-react";
 
 import "./FileViewer.css";
 import { useCodeComments } from "./CodeComments.tsx";
@@ -8,6 +8,7 @@ import { useFileCommentLayer, useFileComments, useFileCommentWalk, type FileComm
 import { CODE_CHUNK_LINES, useHighlightedLines } from "./HighlightedCode.tsx";
 import { RenderBoundary } from "./RenderBoundary.tsx";
 import { TextFileView } from "./TextFileView.tsx";
+import { MarkdownImageContext } from "./Markdown.tsx";
 
 import type { FileInfo } from "../../shared/protocol.ts";
 import { ApiError } from "../lib/api.ts";
@@ -18,21 +19,19 @@ import { useOpeningPaneLane } from "../lib/chatLane.ts";
 import { useMachineApi, useMachineId } from "../lib/machineContext.tsx";
 import { copyText, selectContents } from "../lib/clipboard.ts";
 import { fileLines, pathLabel, type FileComment, type FileView, type LineRange } from "../lib/fileComments.ts";
-import { pathParts } from "../lib/filePaths.ts";
-import { languageForPath, LINE_ELEMENT_LIMIT } from "../lib/highlight.ts";
-import { useT } from "../lib/i18n.ts";
+import { fileLineTarget, pathParts } from "../lib/filePaths.ts";
+import { lineRequest, readBudget, shownSource, sourceLayout, virtualHighlightable } from "../lib/sourcePreview.ts";
+import { canHighlight, countLines, languageForPath, LINE_ELEMENT_LIMIT, normalizeCode } from "../lib/highlight.ts";
+import { useLocale, useT } from "../lib/i18n.ts";
 import { useSettings } from "../lib/settings.ts";
+import { MAX_INLINE_IMAGE_BYTES, markdownImagePreview } from "../lib/markdownImages.ts";
 import { nativeModalOver, useFocusTrap } from "../lib/useFocusTrap.ts";
 import { previewHosts, type MarkdownBlock } from "../lib/markdown.ts";
 import { knownPreview, parsePreviewOffThread } from "../lib/markdownPreview.ts";
-import { hasPreview, readTextStart, TEXT_START_HEADERS, type LoadedText, type TextViewMode } from "../lib/textPreview.ts";
-
-/** Bigger images are offered as a download: a phone decodes an image whole. */
-const MAX_INLINE_IMAGE_BYTES = 20 * 1024 * 1024;
-
-/** A file's text as the viewer numbers it, as an editor does: a last line ending is no line of its own. */
-const withoutLastLineEnd = (text: string): string =>
-  text.endsWith("\r\n") ? text.slice(0, -2) : text.endsWith("\n") || text.endsWith("\r") ? text.slice(0, -1) : text;
+import { hasPreview, type TextViewMode } from "../lib/textPreview.ts";
+import { useSheetSwipe } from "../lib/sheets.ts";
+import { readFilePreviewText, SOURCE_PREVIEW_LINES, type FilePreviewText } from "../lib/filePreviewText.ts";
+import { readerHref } from "../lib/fileReader.ts";
 
 type Preview = { status: "none" | "pending" | "failed" } | { status: "ready"; blocks: MarkdownBlock[] };
 
@@ -66,29 +65,32 @@ function useMarkdownPreview(text: string | null): Preview {
 }
 
 export interface FileViewerProps {
-  /** absolute, `~/…`, or relative to the pane's folder */
+  /** absolute, `~/…`, or relative to the pane's folder; optionally with a line reference */
   path: string;
   paneId: string | null;
-  /** the PC of the pane: its comments are kept under `paneStorageId(machineId, paneId)` */
-  machineId: string;
+  /** the PC of the pane (default: the machine context's): its comments are kept under `paneStorageId(machineId, paneId)` */
+  machineId?: string;
   /** the pane's working folder (null: not known here): a comment names a file inside it relative to it */
-  paneFolder: string | null;
+  paneFolder?: string | null;
+  /** a file comment of the pane to open at (the composer's walk): its view shows, and the walk stops at it */
+  commentId?: string | null;
   onClose: () => void;
   /** Settings can open above this preview; its Escape must not also close the file. */
   keyboardActive?: boolean;
   /** a file chosen in a folder's listing: opened as the preview, so history and a reload keep it */
   onOpen?: (path: string) => void;
-  /** a file comment of the pane to open at (the composer's walk): its view shows, and the walk stops at it */
-  commentId?: string | null;
+  /** the document is the page (a markdown file's own tab, FileReader): no dialog, nothing to close */
+  page?: boolean;
 }
 
 /**
  * Copies the whole file; owns its "copied" flip, so only the button re-renders for it. When nothing
  * copies it (no clipboard API on plain-HTTP LAN, and the browser's copy command refused: copyText)
- * it selects the source `<pre>` instead; in a Markdown Preview there is none, so `onShowSource`
- * switches to Code first and the viewer selects it once rendered.
+ * it selects the source `<pre>` instead; in a Markdown Preview there is none, and a virtualized
+ * source has no element holding the whole text, so `onShowSource` shows a selectable source first
+ * and the viewer selects it once rendered.
  */
-function CopyFileButton({ text, sourceRef, onShowSource }: { text: string; sourceRef: RefObject<HTMLPreElement>; onShowSource: () => void }) {
+function CopyFileButton({ text, sourceRef, onShowSource }: { text: string; sourceRef: RefObject<HTMLElement | null>; onShowSource: () => void }) {
   const t = useT();
   const [copied, setCopied] = useState(false);
   useEffect(() => {
@@ -109,76 +111,105 @@ function CopyFileButton({ text, sourceRef, onShowSource }: { text: string; sourc
   </button>;
 }
 
+/** Selects a source element for a copy by hand: a text box selects its value, anything else its contents. */
+function selectSource(element: HTMLElement): void {
+  if (element instanceof HTMLTextAreaElement) { element.focus(); element.select(); }
+  else selectContents(element);
+}
+
 /**
  * A file an agent wrote, opened in the browser: images, video and audio (streamed, so they
- * play and seek at once), PDFs, and the start of a text file. Each opens whole in a new tab (a
- * text file raw), and anything can be downloaded: an installed app on a phone opens a new tab in
- * an in-app view, which does not always offer to save it.
+ * play and seek at once), PDFs, HTML pages, and the start of a text file (markdown drawn, its images read through the file endpoint). Anything can be downloaded.
  */
-export function FileViewer({ path: asked, paneId, machineId, paneFolder, onClose, onOpen, commentId = null, keyboardActive = true }: FileViewerProps) {
+export function FileViewer({ path: asked, paneId, machineId: machineProp, paneFolder = null, commentId = null, onClose, onOpen, keyboardActive = true, page = false }: FileViewerProps) {
   const t = useT();
+  const locale = useLocale();
   const { settings } = useSettings();
   const { fetchFileInfo, fileUrl, fetchDirectories } = useMachineApi();
   // a remote PC's bridge reads a relative folder from the pane's folder only from its next bundle
   // on; until then it would list the bridge's own folder, so only an absolute or ~/ one is listed there
-  const remote = useMachineId() !== LOCAL_MACHINE;
+  const contextMachine = useMachineId();
+  const machineId = machineProp ?? contextMachine;
+  const remote = machineId !== LOCAL_MACHINE;
   const [directory, setDirectory] = useState<string | null>(null);
   // the path as given, until a choice among files of that name replaces it
   const [path, setPath] = useState(asked);
+  const target = useMemo(() => fileLineTarget(path), [path]);
   const [info, setInfo] = useState<FileInfo | null>(null);
   const [candidates, setCandidates] = useState<string[] | null>(null);
+  // an HTML page shows as the page, or as its source when asked
+  const [source, setSource] = useState(false);
   // Escape closes it, Tab stays in it, and the focus goes back to the row that opened it
-  const surface = useFocusTrap<HTMLElement>(true);
+  const surface = useFocusTrap<HTMLElement>(!page);
   // Settings → Chat width, Default: the Preview is as wide as the chat of the pane that opened it
   useOpeningPaneLane(surface, paneId === null ? null : paneStorageId(machineId, paneId));
   // a kind, not a message: it is said in the language of the moment it shows
   const [error, setError] = useState<"missing" | "unreadable" | null>(null);
-  const [loaded, setLoaded] = useState<LoadedText | null>(null);
-  // the mode is the user's choice for this path, else Preview: derived, so a new path never paints the old mode
-  // opened at a comment: in the view it was written in, so the other one is not drawn first
+  const [loaded, setLoaded] = useState<FilePreviewText | null>(null);
+  // a line reference defaults to Code; otherwise Preview. A new path never paints the old choice.
+  // Opened at a comment: in the view it was written in, so the other one is not drawn first
   const [chosen, setChosen] = useState<{ path: string; mode: TextViewMode } | null>(() => {
     const comment = commentId === null || paneId === null ? undefined : blockComments.list(paneStorageId(machineId, paneId)).find((c) => c.id === commentId);
     return comment === undefined || isReplyComment(comment) ? null : { path: asked, mode: comment.view === "code" ? "code" : "preview" };
   });
-  const mode = chosen?.path === path ? chosen.mode : "preview";
-  // the code <pre> while the code shows, which Copy selects when the clipboard is out of reach
-  const sourceRef = useRef<HTMLPreElement>(null);
+  const mode = chosen?.path === path ? chosen.mode : target.line === null ? "preview" : "code";
+  // the source element while the code shows (its <pre>, or a virtualized source's text box), which
+  // Copy selects when the clipboard is out of reach
+  const sourceRef = useRef<HTMLElement>(null);
   // the Markdown preview's root while it shows, where the comments measure a selection
   const previewRef = useRef<HTMLDivElement>(null);
+  // a virtualized source shown as one readonly text box, for that selection: its rows hold only a window of the text
+  const [selectable, setSelectable] = useState(false);
   // Copy failed in a Preview: select the source as soon as the Code view has rendered
   const selectSourceOnCode = useRef(false);
   /** Switches a Preview to its source and has it selected once rendered, for Copy without a clipboard. */
   const showSourceToSelect = (): void => {
     selectSourceOnCode.current = true;
+    setSelectable(true);
     setChosen({ path, mode: "code" });
+    setSource(true);
   };
   useLayoutEffect(() => {
     if (!selectSourceOnCode.current || mode !== "code") return;
     selectSourceOnCode.current = false;
-    if (sourceRef.current) selectContents(sourceRef.current);
-  }, [mode, loaded]);
+    if (sourceRef.current) selectSource(sourceRef.current);
+  }, [mode, loaded, source, selectable]);
 
+  useSheetSwipe(surface, page ? null : onClose);
   useEffect(() => setPath(asked), [asked]);
+  useEffect(() => setSource(target.line !== null), [path, target.line]);
 
   useEffect(() => {
     let cancelled = false;
-    // a closed viewer, or another file, stops the download of up to a quarter megabyte
-    const download = new AbortController();
-    setInfo(null); setCandidates(null); setError(null); setLoaded(null); setDirectory(null);
-    fetchFileInfo(path, paneId).then(async (next) => {
+    const abort = new AbortController();
+    let deadline: ReturnType<typeof setTimeout> | undefined;
+    setInfo(null); setCandidates(null); setError(null); setLoaded(null); setDirectory(null); setSelectable(false);
+    fetchFileInfo(target.path, paneId).then(async (next) => {
       if (cancelled) return;
       if ("candidates" in next) { setCandidates(next.candidates); return; }
       setInfo(next);
       if (next.kind !== "text") return;
-      // only the first part of a text file travels
-      const text = await readTextStart(await fetch(fileUrl(next.path, paneId), { headers: TEXT_START_HEADERS, signal: download.signal }));
-      if (!cancelled) setLoaded(text);
+      // only a bounded part of a text file travels: a range, whatever the file's size, and a line
+      // cap, so the rows handed to the viewer are counted (readBudget: a Markdown file keeps its
+      // Preview's budget, a larger source reads up to the source budget)
+      const budget = readBudget(languageForPath(next.path), next.size);
+      // the deadline covers the request; the read gets the rest of it, and on a slow link it keeps
+      // what arrived by then as a cut prefix rather than failing the whole file
+      const started = Date.now();
+      deadline = setTimeout(() => abort.abort(), budget.timeoutMs);
+      try {
+        const response = await fetch(fileUrl(next.path, paneId), { signal: abort.signal, headers: { range: `bytes=0-${budget.bytes - 1}` } });
+        clearTimeout(deadline);
+        const timeoutMs = Math.max(1, budget.timeoutMs - (Date.now() - started));
+        const body = await readFilePreviewText(response, budget.bytes, { signal: abort.signal, maxLines: budget.lines, timeoutMs, partialOnTimeout: true });
+        if (!cancelled) setLoaded(body);
+      } finally { clearTimeout(deadline); }
     }).catch(async (reason: unknown) => {
       if (cancelled) return;
       // a folder is listed from the pane's folder, as a file is found from it
-      if (reason instanceof ApiError && reason.status === 404 && (!remote || /^(?:\/|~(?:\/|$)|[A-Za-z]:[\\/])/.test(path))) {
+      if (reason instanceof ApiError && reason.status === 404 && (!remote || /^(?:\/|~(?:\/|$)|[A-Za-z]:[\\/])/.test(target.path))) {
         try {
-          const listing = await fetchDirectories(path, false, true, paneId);
+          const listing = await fetchDirectories(target.path, false, true, paneId);
           if (!cancelled) setDirectory(listing.path);
           return;
         } catch { /* retain the file error when the target is not a readable directory */ }
@@ -186,8 +217,8 @@ export function FileViewer({ path: asked, paneId, machineId, paneFolder, onClose
       if (cancelled) return;
       setError(reason instanceof ApiError && reason.status === 404 ? "missing" : "unreadable");
     });
-    return () => { cancelled = true; download.abort(); };
-  }, [path, paneId, fetchFileInfo, fileUrl, fetchDirectories, remote]);
+    return () => { cancelled = true; clearTimeout(deadline); abort.abort(); };
+  }, [target.path, paneId, fetchFileInfo, fileUrl, fetchDirectories, remote]);
 
   // A comment popover is open: Escape is its own first, wherever the focus is. It closes one with nothing typed in it
   // and keeps one with text typed (`popoverEscape`), and the viewer stays either way, so no typed text is lost; the
@@ -195,7 +226,7 @@ export function FileViewer({ path: asked, paneId, machineId, paneFolder, onClose
   const commentEscape = useRef<() => boolean>(() => false);
   const walkDialogOpen = useRef(false);
   useEffect(() => {
-    if (!keyboardActive) return;
+    if (!keyboardActive || page) return;
     // the FilesDialog beneath listens on window too (and stands down while this is open); this
     // one is the topmost overlay, so it takes the key, unless a native modal (Add PC) is over it
     /** Escape closes the open comment popover, else the viewer, from anywhere in it, unless something in it took the key. */
@@ -206,61 +237,98 @@ export function FileViewer({ path: asked, paneId, machineId, paneFolder, onClose
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [onClose, keyboardActive]);
+  }, [onClose, keyboardActive, page]);
 
   // the file found (a bare name may have been found deeper in the folder), else as asked
-  const url = fileUrl(info?.path ?? path, paneId);
+  const url = fileUrl(info?.path ?? target.path, paneId);
+  // drawn by its own script in a sandbox with no origin and no network (server/file-view.ts); a PC
+  // whose bridge predates `render` answers with the source, which the frame shows as text
+  const htmlPage = info !== null && info.kind === "text" && info.mime === "text/html";
+  const pageUrl = `${url}&render=1`;
+  const modes = <div className="segmented file-viewer-modes" role="group" aria-label={t("Show the HTML file as")}>
+    <button type="button" aria-pressed={!source} onClick={() => setSource(false)}>{t("Page")}</button>
+    <button type="button" aria-pressed={source} onClick={() => setSource(true)}>{t("Source")}</button>
+  </div>;
   const textFile = info?.kind === "text";
-  const language = languageForPath(info?.path ?? path);
+  const language = languageForPath(info?.path ?? target.path);
   // a Preview its parser gave up on (too slow, or failed) opens the source instead
   const preview = useMarkdownPreview(textFile && loaded !== null && mode === "preview" && hasPreview(language) ? loaded.text : null);
   const previewRefused = preview.status === "failed";
   const previewable = hasPreview(language) && !previewRefused;
   const view = previewable && mode === "preview" ? "markdown" : "code";
-  const codeShown = textFile && loaded !== null && view === "code";
-  // a file's code has no length limit (the load limit bounds it): only a worker that gave up leaves it plain
-  const code = useHighlightedLines(codeShown ? withoutLastLineEnd(loaded.text) : "", codeShown ? language : null);
-  const shownPath = info?.path ?? path;
+  const codeShown = textFile && loaded !== null && view === "code" && (!htmlPage || source);
+  // the text as shown (a cut prefix without the row after its final newline), in either view: the file comments
+  // number its lines as the code view draws them
+  const shownText = useMemo(() => textFile && loaded !== null ? shownSource(normalizeCode(loaded.text), loaded.truncated) : null, [textFile, loaded]);
+  // the source as shown: past VIRTUAL_SOURCE_LINES it is the virtualizer's rows, colored in its worker while small
+  // enough (virtualHighlightable), else plain with the notice; below, CodeLines
+  const sourceText = codeShown && shownText !== null ? shownText : "";
+  const sourceLines = useMemo(() => countLines(sourceText), [sourceText]);
+  const layout = sourceLayout(sourceLines);
+  const colorable = settings.highlightCode && canHighlight(language);
+  const virtual = useMemo(() => codeShown && layout === "virtual" ? { text: sourceText, colored: colorable && virtualHighlightable(sourceText.length, sourceLines) } : null, [codeShown, layout, sourceText, colorable, sourceLines]);
+  // CodeLines' code has no length limit of its own (the layout bounds it): only a worker that gave up leaves it plain
+  const code = useHighlightedLines(codeShown && layout === "elements" ? sourceText : "", codeShown ? language : null);
+  const shownPath = info?.path ?? target.path;
   const { stem, extension } = pathParts(info?.name ?? shownPath);
   const { folder } = pathParts(shownPath);
   // what holds for the whole file is said with its size, where it is seen first, not after a megabyte of text
-  const cutShort = textFile && loaded !== null && loaded.truncated;
+  const cutShort = textFile && (!htmlPage || source) && loaded !== null && loaded.truncated;
+  const budget = textFile ? readBudget(language, info.size) : null;
+  // a cut at the byte budget is told in sizes; one at the line cap in lines; one by the deadline
+  // (a slow link) only says part is shown, since its size is not the budget's
+  const cutBytes = cutShort && budget !== null && loaded.truncatedBy !== "lines" && loaded.truncatedBy !== "time" && (loaded.total ?? info.size) > budget.bytes ? { shown: budget.bytes, total: loaded.total ?? info.size } : null;
+  // a cut prefix's lines are the reader's count of complete lines: the line just past the cap is unseen
+  const request = useMemo(() => codeShown ? lineRequest(target.line, sourceText, loaded.truncated, loaded.lines) : null, [codeShown, target.line, sourceText, loaded]);
+  const requestNotice = (() => {
+    if (request === null) return null;
+    switch (request.kind) {
+      case "shown": return null;
+      case "past-preview": return t("Line {line} is past the part of this file shown here. Download it to read the rest.", { line: request.line });
+      case "past-end": return t("This file has {count} lines; there is no line {line}.", { count: request.lines, line: request.line });
+    }
+  })();
   const notes = [
-    cutShort && t("Showing the first {shown}", { shown: formatBytes(loaded.limit) }),
+    requestNotice,
+    cutShort && (loaded.truncatedBy === "lines"
+      ? t("Showing the first {count} lines of this file. Download it to read the rest.", { count: SOURCE_PREVIEW_LINES.toLocaleString(locale) })
+      : cutBytes !== null
+        ? t("Showing the first {shown} of {total}.", { shown: formatBytes(cutBytes.shown), total: formatBytes(cutBytes.total) })
+        : t("Only part of this file is shown. Download it to read the rest.")),
     textFile && loaded !== null && previewRefused && t("Too long to preview"),
-    codeShown && code.tooLong && t("Too long to highlight"),
-    // past it the code is one text (CodeLines), and line numbers are an element per line
-    codeShown && code.lines.length > LINE_ELEMENT_LIMIT && t("Too many lines to number"),
+    codeShown && (code.tooLong || (virtual !== null && colorable && !virtual.colored)) && t("Too long to highlight"),
   ].filter((note): note is string => typeof note === "string");
   const noticed = notes.length > 0;
   const copyable = textFile && loaded !== null && !loaded.truncated;
   // Comments on the file's lines, kept with the pane the file was opened from: only with a pane, and
-  // only on the lines loaded. The lines are numbered as the code view numbers them: a last line
-  // ending is no line of its own, and a cut file's text ends where its last whole line does
+  // only on the lines shown. The lines are numbered as the code view numbers them, and a cut file's
+  // text ends where its last whole line does
   const owner = paneId === null ? null : paneStorageId(machineId, paneId);
-  const sourceText = textFile && loaded !== null ? loaded.text : null;
-  const sourceLines = useMemo(() => sourceText === null ? null : fileLines(withoutLastLineEnd(sourceText)), [sourceText]);
   const filePath = info?.path ?? null;
-  const wholeLines = sourceLines === null || loaded === null ? 0 : loaded.truncated && !/[\r\n]$/.test(loaded.text) ? sourceLines.length - 1 : sourceLines.length;
-  // the preview's blocks a card can follow, from the blocks the preview draws (parsed in the worker
+  // the preview's blocks a comment can follow, from the blocks the preview draws (parsed in the worker
   // with their lines). A preview still parsing takes no comments yet
   const previewBlocks = owner !== null && view === "markdown" && preview.status === "ready" ? preview.blocks : null;
   const hosts = useMemo<LineRange[] | null>(() => previewBlocks === null ? null : previewHosts(previewBlocks), [previewBlocks]);
-  const commentView = codeShown ? "code" : hosts !== null ? "preview" : null;
-  const scope = useMemo<FileCommentScope | null>(() => owner === null || commentView === null || filePath === null || sourceLines === null ? null
-    : { owner, path: filePath, label: pathLabel(filePath, paneFolder), view: commentView, lines: sourceLines, loaded: wholeLines, truncated: cutShort },
-  [owner, commentView, filePath, paneFolder, sourceLines, wholeLines, cutShort]);
+  // the code view takes comments only with an element per line to put them under (not a virtualized source)
+  const lineComments = codeShown && virtual === null && code.lines.length <= LINE_ELEMENT_LIMIT;
+  const commentView: FileView | null = lineComments ? "code" : hosts !== null ? "preview" : null;
+  // split only where comments can be written: a virtualized source can run to hundreds of thousands of lines
+  const commentable = commentView !== null;
+  const commentLines = useMemo(() => shownText === null || !commentable ? null : fileLines(shownText), [shownText, commentable]);
+  const wholeLines = commentLines === null || loaded === null ? 0 : loaded.truncated && !loaded.text.endsWith("\n") ? commentLines.length - 1 : commentLines.length;
+  const scope = useMemo<FileCommentScope | null>(() => owner === null || commentView === null || filePath === null || commentLines === null ? null
+    : { owner, path: filePath, label: pathLabel(filePath, paneFolder), view: commentView, lines: commentLines, loaded: wholeLines, truncated: cutShort },
+  [owner, commentView, filePath, paneFolder, commentLines, wholeLines, cutShort]);
   const bodyRef = useRef<HTMLDivElement>(null);
-  const contentRef = commentView === "preview" ? previewRef : sourceRef;
-  // the file's comments, placed once for both layers: the preview's pins, and the code view's cards (only with an
-  // element per line to put them under)
+  const codeRef = sourceRef as RefObject<HTMLPreElement>;
+  const contentRef = commentView === "preview" ? previewRef : codeRef;
+  // the file's comments, placed once for both layers: the preview's pins, and the code view's cards
   const fileComments = useFileComments(scope);
-  const lineComments = codeShown && code.lines.length <= LINE_ELEMENT_LIMIT;
   const comments = useFileCommentLayer(commentView === "preview" ? scope : null, bodyRef, previewRef, fileComments);
   // the comment mode's toggle: where a Delete that leaves no card puts the focus
   const modeToggleRef = useRef<HTMLButtonElement>(null);
   const codeComments = useCodeComments({
-    scope: commentView === "code" && lineComments ? scope : null, comments: fileComments, surface: bodyRef, content: sourceRef,
+    scope: commentView === "code" ? scope : null, comments: fileComments, surface: bodyRef, content: codeRef,
     focusFallback: () => modeToggleRef.current,
   });
   // the composer's walk stops at a file comment, switching to the view it was written in
@@ -278,7 +346,7 @@ export function FileViewer({ path: asked, paneId, machineId, paneFolder, onClose
   const paneComments = useBlockComments(owner ?? "");
   // Opened at a comment (the composer's walk): the walk stops at it once the file's comments are
   // placed, which waits for the file's text (and a preview's parse). Where the file cannot show it
-  // (gone, unreadable, no longer text), it opens in a dialog over what the viewer says
+  // (gone, unreadable, no longer text, too long for line elements), it opens in a dialog over what the viewer says
   const [pendingStop, setPendingStop] = useState(commentId);
   useEffect(() => setPendingStop(commentId), [commentId]);
   const { goTo, openInEditor } = walk;
@@ -310,23 +378,25 @@ export function FileViewer({ path: asked, paneId, machineId, paneFolder, onClose
   // the comment mode's toggle: in the code view of a file of a pane, with comments on and an element per line
   const toggleShown = owner !== null && settings.comments && lineComments;
   const toggleLabel = commentCount > 0 ? t("Comment mode, {count}", { count: countLabel }) : t("Comment mode");
-  // a phone stacks the actions under the name once there are two or more, and one fits beside it:
-  // every file has Download, and all but a binary one a new tab (Raw for text) as well; a binary
-  // one has a second action only in its comments
-  const stacked = info?.kind !== "binary" || toggleShown;
-  /** What the viewer shows below its header: a folder, an error, a choice of files, or the file. */
+  const markdown = info?.kind === "text" && /\.(?:md|markdown)$/i.test(info.name);
+  // a page of just the document, not the app over it (FileReader)
+  const previewUrl = readerHref(machineId, shownPath + (target.line === null ? "" : `#L${target.line}`));
+  // images of a markdown file load through the file endpoint, as the file itself does
+  const imagePreview = useCallback((src: string) => markdownImagePreview(
+    src, shownPath, (target) => fetchFileInfo(target, paneId), (target, download) => fileUrl(target, paneId, download),
+  ), [shownPath, paneId, fetchFileInfo, fileUrl]);
   const body = (() => {
     if (directory !== null) return <DirectoryBrowser key={directory} start={directory} onOpenFile={onOpen ?? setPath} />;
     if (error !== null) return <p className="file-viewer-note" role="alert">{error === "missing" ? t("No readable file at this path.") : t("The file could not be opened.")}</p>;
     if (candidates !== null) return <div className="file-viewer-choices">
-      <p className="file-viewer-note">Several files are named {path.split("/").pop()}:</p>
-      <ul>{candidates.map((candidate) => <li key={candidate}><button type="button" className="btn btn-ghost" onClick={() => setPath(candidate)}>{candidate}</button></li>)}</ul>
+      <p className="file-viewer-note">Several files are named {target.path.split("/").pop()}:</p>
+      <ul>{candidates.map((candidate) => <li key={candidate}><button type="button" className="btn btn-ghost" onClick={() => setPath(candidate + path.slice(target.path.length))}>{candidate}</button></li>)}</ul>
     </div>;
     if (info === null) return <p className="file-viewer-note">{t("Opening…")}</p>;
     switch (info.kind) {
       case "image":
         return info.size > MAX_INLINE_IMAGE_BYTES
-          ? <p className="file-viewer-note">{t("This image is {size}; open it in a new tab to view it.", { size: formatBytes(info.size) })}</p>
+          ? <p className="file-viewer-note">{t("This image is {size}; download it to view.", { size: formatBytes(info.size) })}</p>
           : <img className="file-viewer-media" src={url} alt={info.name} />;
       case "video":
         return <video className="file-viewer-media" src={url} controls playsInline preload="metadata" />;
@@ -335,9 +405,15 @@ export function FileViewer({ path: asked, paneId, machineId, paneFolder, onClose
       case "pdf":
         return <iframe className="file-viewer-pdf" src={url} title={info.name} />;
       case "text":
-        return loaded === null || (view === "markdown" && preview.status !== "ready")
+        if (htmlPage && !source) return <>
+          {modes}
+          <iframe className="file-viewer-page" src={pageUrl} sandbox="allow-scripts" title={info.name} />
+        </>;
+        return <>
+          {htmlPage && modes}
+          {loaded === null || (view === "markdown" && preview.status !== "ready")
           ? <p className="file-viewer-note">{t("Opening…")}</p>
-          // a text the renderer cannot draw fails here, not the app: the header (Show source, Raw,
+          // a text the renderer cannot draw fails here, not the app: the header (Show source, Open raw file,
           // Close) stays, and a Preview that fails offers its source
           : <RenderBoundary key={view} resetKey={loaded} fallback={() => view === "markdown"
             ? <div className="file-viewer-note" role="alert">
@@ -345,66 +421,81 @@ export function FileViewer({ path: asked, paneId, machineId, paneFolder, onClose
               <button type="button" className="btn btn-ghost" onClick={() => setChosen({ path, mode: "code" })}>{t("Show source")}</button>
             </div>
             : <p className="file-viewer-note" role="alert">{t("The file could not be opened.")}</p>}>
-            <TextFileView path={info.path} blocks={view === "markdown" && preview.status === "ready" ? preview.blocks : null} lines={code.lines} onOpen={onOpen ?? setPath} sourceRef={sourceRef} previewRef={previewRef} />
-          </RenderBoundary>;
+            <MarkdownImageContext.Provider value={imagePreview}><TextFileView path={info.path} blocks={view === "markdown" && preview.status === "ready" ? preview.blocks : null} lines={code.lines} virtual={virtual} selectable={selectable} onOpen={onOpen ?? setPath} sourceRef={sourceRef} previewRef={previewRef} markedLine={request?.kind === "shown" ? request.line : null} /></MarkdownImageContext.Provider>
+          </RenderBoundary>}
+        </>;
       default:
         return <p className="file-viewer-note">{info.mime}, {formatBytes(info.size)}. This file can't be shown here; download it instead.</p>;
     }
   })();
 
+  const Heading = page ? "h1" : "h2";
+  const header = <header className={
+    "modal-header file-viewer-header file-viewer-header-stacked" + (page ? " file-reader-header" : "")
+  }>
+    <div className="file-viewer-title">
+      {/* a long name is cut inside its stem, so its type stays in view */}
+      <Heading className="modal-title"><span className="file-viewer-stem">{stem}</span>{extension}</Heading>
+      <p className="file-viewer-meta" title={shownPath}>
+        {/* a partial view is told by the size ("256 KB of 1.3 MB") in the warning color, beside an
+            icon so the color is not the only sign; what it means is the tooltip (and read out) */}
+        {info && (noticed
+          ? <span className="file-viewer-notice" title={notes.join("\n")}>
+            <TriangleAlert aria-hidden="true" />
+            <span>{cutBytes !== null ? t("{done} of {total}", { done: formatBytes(cutBytes.shown), total: formatBytes(cutBytes.total) }) : formatBytes(info.size)}</span>
+            <span className="visually-hidden">{notes.join(". ")}</span>
+          </span>
+          : <span className="file-viewer-size">{formatBytes(info.size)}</span>)}
+        {/* the dot is the folder's, so where the folder has no room left no dot dangles */}
+        {folder !== "" && <span className="file-viewer-path"><span dir="ltr">{info && <span className="file-viewer-dot" aria-hidden="true">·</span>}{folder}</span></span>}
+      </p>
+    </div>
+    <div className="file-viewer-actions">
+      {/* comment mode (the code view's comments, CodeComments.tsx), with the file's comment count */}
+      {toggleShown && <div className="file-viewer-group">
+        <button ref={modeToggleRef} type="button" className="icon-button file-viewer-action file-viewer-comments" aria-pressed={settings.codeCommentMode} aria-label={toggleLabel} title={toggleLabel}
+          onPointerDown={(event) => { togglePress.current = event.pointerType; }}
+          onClick={(event) => { codeComments.toggleMode(event.detail === 0 ? "mouse" : togglePress.current); togglePress.current = "mouse"; }}>
+          <MessageSquareText aria-hidden="true" />
+          {/* the count as a badge on the corner; the full text (with any outdated) is the name and tooltip */}
+          {commentCount > 0 && <span className="file-viewer-comments-count" aria-hidden="true">{commentCount > 99 ? "99+" : commentCount}</span>}
+        </button>
+      </div>}
+      {/* how the text shows: Preview or source is one choice of two, so one toggle; wrapping is a
+          setting (Settings → File viewer), not an action here */}
+      {textFile && previewable && <div className="file-viewer-group">
+        <button type="button" className="icon-button file-viewer-action" aria-pressed={mode === "code"} aria-label={t("Show source")} title={t("Show source")} onClick={() => setChosen({ path, mode: mode === "code" ? "preview" : "code" })}><Braces aria-hidden="true" /></button>
+      </div>}
+      {/* the file itself: a Markdown tab is the reader; raw and download keep the original bytes */}
+      <div className="file-viewer-group">
+        {!page && <a className="icon-button file-viewer-action" href={htmlPage && !source ? pageUrl : markdown ? previewUrl : url} target="_blank" rel="noopener" aria-label={t("Open in a new tab")} title={t("Open in a new tab")}><ExternalLink aria-hidden="true" /></a>}
+        {(page || markdown) && <a className="icon-button file-viewer-action" href={url} target="_blank" rel="noopener" aria-label={t("Open raw file")} title={t("Open raw file")}><Code aria-hidden="true" /></a>}
+        <a className="icon-button file-viewer-action" href={fileUrl(shownPath, paneId, true)} download={info?.name ?? true} aria-label={t("Download")} title={t("Download")}><Download aria-hidden="true" /></a>
+        {copyable && <CopyFileButton text={loaded.text} sourceRef={sourceRef} onShowSource={showSourceToSelect} />}
+      </div>
+    </div>
+    {!page && <button type="button" className="icon-button file-viewer-action file-viewer-close" aria-label={t("Close file")} title={t("Close file")} onClick={onClose}><X aria-hidden="true" /></button>}
+  </header>;
+  // a virtualized source fills the viewer: its rows are a window the user scrolls, so the body
+  // takes a definite height for the scroll root to fill, instead of growing with the text
+  const bodyClass = virtual !== null && view === "code" ? "file-viewer-body file-viewer-body-virtual" : "file-viewer-body";
+  if (page) return (
+    <main ref={surface} className="file-reader">
+      {header}
+      <div className={`${bodyClass} file-reader-body`}>{body}</div>
+    </main>
+  );
+
   return (
     <div className="modal-scrim file-viewer-scrim" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
-      {/* on a desktop the viewer hangs from a fixed top (FileViewer.css): a comment's row, the mode or the view moves nothing */}
-      <section className="modal file-viewer" role="dialog" aria-modal="true" aria-label={info?.name ?? path} ref={surface} tabIndex={-1} data-tall={codeShown && code.lines.length > CODE_CHUNK_LINES ? "" : undefined}>
-        {/* three groups, spaced apart: how the text shows, the file itself, the window */}
-        <header className={stacked ? "modal-header file-viewer-header file-viewer-header-stacked" : "modal-header file-viewer-header"}>
-          <div className="file-viewer-title">
-            {/* a long name is cut inside its stem, so its type stays in view */}
-            <h2 className="modal-title"><span className="file-viewer-stem">{stem}</span>{extension}</h2>
-            <p className="file-viewer-meta" title={shownPath}>
-              {/* a partial view is told by the size ("256 KB of 1.3 MB") in the warning color, beside an
-                  icon so the color is not the only sign; what it means is the tooltip (and read out) */}
-              {info && (noticed
-                ? <span className="file-viewer-notice" title={notes.join("\n")}>
-                  <TriangleAlert aria-hidden="true" />
-                  <span>{cutShort ? t("{done} of {total}", { done: formatBytes(loaded.limit), total: formatBytes(loaded.size ?? info.size) }) : formatBytes(info.size)}</span>
-                  <span className="visually-hidden">{notes.join(". ")}</span>
-                </span>
-                : <span className="file-viewer-size">{formatBytes(info.size)}</span>)}
-              {/* the dot is the folder's, so where the folder has no room left no dot dangles */}
-              {folder !== "" && <span className="file-viewer-path"><span dir="ltr">{info && <span className="file-viewer-dot" aria-hidden="true">·</span>}{folder}</span></span>}
-            </p>
-          </div>
-          <div className="file-viewer-actions">
-            {/* how the text shows: Preview or source is one choice of two, so one toggle; wrapping is a
-                setting (Settings → File viewer), not an action here */}
-            {/* comment mode (the code view's comments, CodeComments.tsx), with the file's comment count */}
-            {toggleShown && <div className="file-viewer-group">
-              <button ref={modeToggleRef} type="button" className="icon-button file-viewer-action file-viewer-comments" aria-pressed={settings.codeCommentMode} aria-label={toggleLabel} title={toggleLabel}
-                onPointerDown={(event) => { togglePress.current = event.pointerType; }}
-                onClick={(event) => { codeComments.toggleMode(event.detail === 0 ? "mouse" : togglePress.current); togglePress.current = "mouse"; }}>
-                <MessageSquareText aria-hidden="true" />
-                {/* the count as a badge on the corner; the full text (with any outdated) is the name and tooltip */}
-                {commentCount > 0 && <span className="file-viewer-comments-count" aria-hidden="true">{commentCount > 99 ? "99+" : commentCount}</span>}
-              </button>
-            </div>}
-            {textFile && previewable && <div className="file-viewer-group">
-              <button type="button" className="icon-button file-viewer-action" aria-pressed={mode === "code"} aria-label={t("Show source")} title={t("Show source")} onClick={() => setChosen({ path, mode: mode === "code" ? "preview" : "code" })}><Code aria-hidden="true" /></button>
-            </div>}
-            {/* the file itself: a new tab shows it whole (Raw for text), except a file no tab can
-                show, and a download saves it, also where a new tab is an app's in-app view */}
-            <div className="file-viewer-group">
-              {info?.kind !== "binary" && <a className="icon-button file-viewer-action" href={url} target="_blank" rel="noopener" aria-label={textFile ? t("Raw") : t("Open in a new tab")} title={textFile ? t("Raw") : t("Open in a new tab")}><ExternalLink aria-hidden="true" /></a>}
-              <a className="icon-button file-viewer-action" href={fileUrl(shownPath, paneId, true)} download={info?.name ?? true} aria-label={t("Download")} title={t("Download")}><Download aria-hidden="true" /></a>
-              {copyable && <CopyFileButton text={loaded.text} sourceRef={sourceRef} onShowSource={showSourceToSelect} />}
-            </div>
-          </div>
-          <button type="button" className="icon-button file-viewer-action file-viewer-close" aria-label={t("Close file")} title={t("Close file")} onClick={onClose}><X aria-hidden="true" /></button>
-        </header>
+      {/* on a desktop a tall code view hangs from a fixed top (FileViewer.css): a comment's row, the mode or the view moves nothing */}
+      <section className={virtual !== null && view === "code" ? "modal file-viewer file-viewer-virtual" : "modal file-viewer"} role="dialog" aria-modal="true" aria-label={info?.name ?? path} ref={surface} tabIndex={-1}
+        data-tall={lineComments && code.lines.length > CODE_CHUNK_LINES ? "" : undefined}>
+        {header}
         {/* with comments the body is their surface (lib/commentHighlight.ts), the place the preview's pins and popover
             and the code view's cards and field are positioned in; in the preview a click on an element in it comments on
             its lines, a mouse's drag on what it selected */}
-        <div ref={bodyRef} className="file-viewer-body" {...comments.surfaceProps} data-comment-surface={comments.surfaceProps["data-comment-surface"] ?? (codeComments.shown ? "" : undefined)}>
+        <div ref={bodyRef} className={bodyClass} {...comments.surfaceProps} data-comment-surface={comments.surfaceProps["data-comment-surface"] ?? (codeComments.shown ? "" : undefined)}>
           {body}
           {comments.overlay}
           {codeComments.layer}

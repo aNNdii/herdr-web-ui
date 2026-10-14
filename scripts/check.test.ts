@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "bun:test";
-import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
@@ -9,21 +9,25 @@ import { acquire, describeHolders, isolate, lock, maxRuns, needsLock, plan, sani
 
 const made: string[] = [];
 afterEach(() => { for (const path of made.splice(0)) rmSync(path, { recursive: true, force: true }); });
-const scratch = (): string => { const dir = mkdtempSync(join(tmpdir(), "hwc-test-")); made.push(dir); return dir; };
+// /tmp where there is one, as `isolate` itself prefers: macOS keeps its temp dir under a path so long
+// that a socket inside a directory made there is past the limit `isolate` enforces
+const scratchBase = existsSync("/tmp") ? realpathSync("/tmp") : tmpdir();
+const scratch = (): string => { const dir = mkdtempSync(join(scratchBase, "hwc-")); made.push(dir); return dir; };
 const git = (cwd: string, ...args: string[]): void => {
   const result = spawnSync("git", ["-C", cwd, ...args], { encoding: "utf8" });
   if (result.status !== 0) throw new Error(result.stderr || `git ${args.join(" ")} failed`);
 };
 
 describe("plan", () => {
-  it("reads the modes: the fast steps, the lanes, both, or one command", () => {
-    expect(plan(["fast"])).toEqual({ fast: true, lanes: [], command: null, build: false });
-    expect(plan(["browser"])).toEqual({ fast: false, lanes: ["browser"], command: null, build: false });
-    expect(plan(["browser", "integration"])).toEqual({ fast: false, lanes: ["integration", "browser"], command: null, build: false });
-    expect(plan(["full"])).toEqual({ fast: true, lanes: ["integration", "browser"], command: null, build: false });
-    expect(plan(["run", "bun", "test", "./a.test.ts"])).toEqual({ fast: false, lanes: [], command: ["bun", "test", "./a.test.ts"], build: false });
-    expect(plan(["run", "--build", "bun", "scripts/browser-qa.ts"])).toEqual({ fast: false, lanes: [], command: ["bun", "scripts/browser-qa.ts"], build: true });
-    expect(plan(["run", "--build", "--", "bun", "scripts/browser-qa.ts"])).toEqual({ fast: false, lanes: [], command: ["bun", "scripts/browser-qa.ts"], build: true });
+  it("reads the modes: the fast steps, the lanes, both, concurrent, or one command", () => {
+    expect(plan(["fast"])).toEqual({ fast: true, lanes: [], command: null, build: false, concurrent: false });
+    expect(plan(["browser"])).toEqual({ fast: false, lanes: ["browser"], command: null, build: false, concurrent: false });
+    expect(plan(["browser", "integration"])).toEqual({ fast: false, lanes: ["integration", "browser"], command: null, build: false, concurrent: false });
+    expect(plan(["full"])).toEqual({ fast: true, lanes: ["integration", "browser"], command: null, build: false, concurrent: false });
+    expect(plan(["concurrent"])).toEqual({ fast: false, lanes: ["integration", "browser"], command: null, build: false, concurrent: true });
+    expect(plan(["run", "bun", "test", "./a.test.ts"])).toEqual({ fast: false, lanes: [], command: ["bun", "test", "./a.test.ts"], build: false, concurrent: false });
+    expect(plan(["run", "--build", "bun", "scripts/browser-qa.ts"])).toEqual({ fast: false, lanes: [], command: ["bun", "scripts/browser-qa.ts"], build: true, concurrent: false });
+    expect(plan(["run", "--build", "--", "bun", "scripts/browser-qa.ts"])).toEqual({ fast: false, lanes: [], command: ["bun", "scripts/browser-qa.ts"], build: true, concurrent: false });
   });
 
   it("refuses what it does not know instead of running something else", () => {
@@ -33,6 +37,7 @@ describe("plan", () => {
   it("uses the existing lock for herdr-backed run commands and never serializes inline credentials", () => {
     expect(needsLock(plan(["run", "bun", "test", "./a.contract.test.ts"]))).toBe(true);
     expect(needsLock(plan(["fast"]))).toBe(false);
+    expect(needsLock(plan(["concurrent"]))).toBe(true);
     expect(sanitizeCommand(["bun", "--api-token", "private", "--access-token=value", "https://example.test/?token=secret"]))
       .toEqual(["bun", "--api-token", "[REDACTED]", "--access-token=[REDACTED]", "https://example.test/?token=[REDACTED]"]);
   });

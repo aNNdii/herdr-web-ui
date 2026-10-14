@@ -1,9 +1,16 @@
 import { describe, expect, it } from "bun:test";
-import { codeIsFilePath, pathParts, resolveFromFile, splitFilePaths } from "./filePaths.ts";
+import { codeIsFilePath, fileLineTarget, pathParts, splitFilePaths } from "./filePaths.ts";
 
 const paths = (text: string) => splitFilePaths(text).filter((part) => typeof part !== "string").map((part) => (part as { path: string }).path);
 
 describe("file paths in chat text", () => {
+  it("keeps line references whole in prose and code spans", () => {
+    const targets = ["src/app.ts:12", "src/app.ts:12:8", "src/app.ts#L12", "src/app.ts#L12-L18", "src/app.ts#L12-18"];
+    expect(paths(targets.join(" "))).toEqual(targets);
+    for (const target of targets) expect(codeIsFilePath(target)).toBe(true);
+    for (const target of ["Math.random:12", "tool.monitor#L12", "1.2.3:12"]) expect(codeIsFilePath(target)).toBe(false);
+    expect(splitFilePaths("see src/app.ts:12:8.")).toEqual(["see ", { path: "src/app.ts:12:8" }, "."]);
+  });
   it("finds paths with a folder and an extension, absolute, ~ or relative", () => {
     expect(paths("Saved to docs/screenshots/demo-mobile.mp4 and ~/out/shot.png, see /tmp/run.log.")).toEqual([
       "docs/screenshots/demo-mobile.mp4", "~/out/shot.png", "/tmp/run.log",
@@ -36,15 +43,18 @@ describe("file paths in chat text", () => {
   });
 });
 
-describe("resolveFromFile", () => {
-  it("resolves ./ and ../ from the file's folder", () => {
-    expect(resolveFromFile("/repo/docs/a.md", "./b.md")).toBe("/repo/docs/b.md");
-    expect(resolveFromFile("/repo/docs/specs/a.md", "../../src/x.ts")).toBe("/repo/src/x.ts");
-    expect(resolveFromFile("C:\\repo\\docs\\a.md", "../b.md")).toBe("C:\\repo\\b.md");
+describe("fileLineTarget", () => {
+  it("selects only the first line, not the column or range end", () => {
+    for (const suffix of [":12", ":12:8", "#L12", "#L12-L18", "#L12-18"]) {
+      expect(fileLineTarget(`src/app.ts${suffix}`)).toEqual({ path: "src/app.ts", line: 12 });
+    }
+    expect(fileLineTarget("C:\\repo\\app.ts:12:8")).toEqual({ path: "C:\\repo\\app.ts", line: 12 });
   });
-  it("leaves every other path to the pane's folder and the server's search", () => {
-    for (const href of ["src/components/X.tsx", "/etc/hosts", "~/notes.md", "README.md"]) {
-      expect(resolveFromFile("/repo/docs/a.md", href)).toBe(href);
+  it("leaves ordinary names intact and ignores invalid line numbers", () => {
+    expect(fileLineTarget("src/app.ts")).toEqual({ path: "src/app.ts", line: null });
+    expect(fileLineTarget("docs/a.md#usage")).toEqual({ path: "docs/a.md#usage", line: null });
+    for (const suffix of [":0", "#L0", ":99999999999999999999"]) {
+      expect(fileLineTarget(`src/app.ts${suffix}`)).toEqual({ path: "src/app.ts", line: null });
     }
   });
 });

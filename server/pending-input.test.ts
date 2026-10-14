@@ -1,5 +1,32 @@
 import { describe, expect, it } from "bun:test";
-import { MAX_PENDING_PER_OWNER, PendingInputs } from "./pending-input.ts";
+import { MAX_PENDING_PER_OWNER, PendingInputs, samePendingIdentity, type PendingIdentity } from "./pending-input.ts";
+
+describe("pending target identity", () => {
+  const identity: PendingIdentity = { agent: "claude", terminalId: "t1", session: null, processPid: 12, processBirth: 100_000, omoSession: null };
+
+  it("refuses known process, birth, native session and OmO session replacements (regression #540)", () => {
+    expect(samePendingIdentity(identity, { ...identity, processPid: 13 })).toBe(false);
+    expect(samePendingIdentity(identity, { ...identity, processBirth: 110_000 })).toBe(false);
+    expect(samePendingIdentity({ ...identity, session: "old" }, { ...identity, session: "new" })).toBe(false);
+    expect(samePendingIdentity({ ...identity, omoSession: "old" }, { ...identity, omoSession: "new" })).toBe(false);
+  });
+
+  it("permits identity parts that were unknown on either read (control #540)", () => {
+    const unknown: PendingIdentity = { agent: "claude", terminalId: "t1", session: null };
+    const known = { ...identity, session: "native", omoSession: "omo" };
+    expect(samePendingIdentity(unknown, known)).toBe(true);
+    expect(samePendingIdentity(known, unknown)).toBe(true);
+    expect(samePendingIdentity(identity, { ...identity })).toBe(true);
+    expect(samePendingIdentity(identity, { ...identity, terminalId: "t2" })).toBe(false);
+    expect(samePendingIdentity(identity, { ...identity, agent: null })).toBe(false);
+  });
+
+  it("tolerates only the existing macOS birth precision (control #540)", () => {
+    expect(samePendingIdentity(identity, { ...identity, processBirth: 101_000 }, "darwin")).toBe(true);
+    expect(samePendingIdentity(identity, { ...identity, processBirth: 101_001 }, "darwin")).toBe(false);
+    expect(samePendingIdentity(identity, { ...identity, processBirth: 101_000 }, "linux")).toBe(false);
+  });
+});
 
 function fixture() {
   let now = 1_000;
@@ -47,6 +74,17 @@ describe("bridge pending input", () => {
     expect(f.queue.outcome("b", "p1", item.message.id)).toBeUndefined();
   });
 
+  it("never offers a held message to automatic delivery, only to an explicit send", () => {
+    const f = fixture();
+    const held = f.queue.enqueue("a", "p1", 1, "later", "lease", { agent: "claude", terminalId: "t1", session: null }, true);
+    const queued = f.enqueue(2);
+    expect(held.message.state).toBe("held");
+    f.queue.status("p1", "idle");
+    expect(f.queue.next("p1")).toBe(queued);
+    expect(f.queue.claim(held, true)).toBe(false);
+    expect(f.queue.claim(held, false)).toBe(true);
+  });
+
   it("does not flush a second message from a lagging ready snapshot", () => {
     const f = fixture(); const first = f.enqueue(1); const second = f.enqueue(2);
     f.queue.status("p1", "done");
@@ -63,6 +101,45 @@ describe("bridge pending input", () => {
     expect(f.queue.claim(first, false)).toBe(true); f.queue.committing(first, true); f.queue.settle(first);
     expect(f.queue.next("p1")).toBeNull();
     f.queue.status("p1", "done"); expect(f.queue.next("p1")).toBe(second);
+  });
+
+  for (const settleBeforeIdle of [true, false]) it(`keeps the interruption's ready state from draining the queue (${settleBeforeIdle ? "settled" : "in flight"})`, () => {
+    const f = fixture(); const first = f.enqueue(1); const second = f.enqueue(2);
+    f.queue.status("p1", "working"); f.queue.claim(first, false);
+    f.queue.committing(first, true, true);
+    if (settleBeforeIdle) f.queue.settle(first);
+    f.queue.status("p1", "idle");
+    if (!settleBeforeIdle) f.queue.settle(first);
+    expect(f.queue.next("p1")).toBeNull();
+    f.queue.status("p1", "done"); expect(f.queue.next("p1")).toBeNull();
+    f.queue.status("p1", "working"); expect(f.queue.next("p1")).toBeNull();
+    f.queue.status("p1", "done"); expect(f.queue.next("p1")).toBe(second);
+  });
+
+  it("holds remaining input when an interruption never exposes its ready transition", () => {
+    const f = fixture(); const first = f.enqueue(1); const second = f.enqueue(2);
+    f.queue.status("p1", "working"); f.queue.claim(first, false);
+    f.queue.committing(first, true, true); f.queue.settle(first);
+    f.queue.status("p1", "working"); f.queue.status("p1", "working"); f.advance(101);
+    expect(second.message.state).toBe("held");
+    f.queue.status("p1", "done"); expect(f.queue.next("p1")).toBeNull();
+  });
+
+  it("holds remaining input when the interrupted turn stops but its replacement never starts", () => {
+    const f = fixture(); const first = f.enqueue(1); const second = f.enqueue(2);
+    f.queue.status("p1", "working"); f.queue.claim(first, false);
+    f.queue.committing(first, true, true); f.queue.settle(first);
+    f.queue.status("p1", "idle"); f.advance(101);
+    expect(second.message.state).toBe("held");
+    expect(second.message.error?.code).toBe("pending_turn_unconfirmed");
+  });
+
+  it("retains a restarted turn's completion observed before the send settles", () => {
+    const f = fixture(); const first = f.enqueue(1); const second = f.enqueue(2);
+    f.queue.status("p1", "working"); f.queue.claim(first, false); f.queue.committing(first, true, true);
+    f.queue.status("p1", "idle"); f.queue.status("p1", "working"); f.queue.status("p1", "done");
+    expect(f.queue.next("p1")).toBeNull(); f.queue.settle(first);
+    expect(f.queue.next("p1")).toBe(second);
   });
 
   it("holds the remaining queue when no new turn was confirmed before its deadline", () => {

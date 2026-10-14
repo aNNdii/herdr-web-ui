@@ -23,7 +23,7 @@ import { isCommentDrag } from "../lib/commentClick.ts";
  * goes. Only while `enabled` (comments are on and the surface takes them).
  */
 export function useSelectionComment<T>({ view, enabled, measure, onComment }: {
-  view: RefObject<HTMLElement>;
+  view: RefObject<HTMLElement | null>;
   enabled: boolean;
   measure: (selection: Selection | null, view: Element) => T | null;
   /** opens the comment on `found`, its pin at `at` (client pixels), where the drag let go */

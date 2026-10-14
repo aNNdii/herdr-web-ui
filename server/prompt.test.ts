@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { InteractivePrompt } from "../shared/protocol.ts";
 
-import { answerKeys, claudeClearableDraft, claudeInputDraft, viewportShowsLive, removedInvisible, noteSubmitted, codexQuestionsCollapsed, codexQueuedPrompt, handlePromptRequest, modelListWaits, openOmoAsks, parseClaudeSuggestion, parseFallbackPrompt, parseInteractivePrompt, pendingOmoAsk, promptWaitEnded, claudeRestoredDraft, lastChatSubmitted } from "./prompt.ts";
+import { answerKeys, claudeClearableDraft, claudeInputBoxText, claudeInputDraft, claudeInputEmpty, viewportShowsLive, removedInvisible, noteSubmitted, codexQuestionsCollapsed, codexQueuedPrompt, handlePromptRequest, modelListWaits, openOmoAsks, parseClaudeSuggestion, parseFallbackPrompt, parseInteractivePrompt, pendingOmoAsk, promptWaitEnded, claudeRestoredDraft, lastChatSubmitted } from "./prompt.ts";
 
 const labels = (prompt: InteractivePrompt | null) => prompt?.options.map((option) => option.label);
 const CLAUDE_BACKGROUND_APPROVAL_FOOTER = "Esc to cancel · ctrl+x ctrl+k twice to stop background agents";
@@ -1638,6 +1638,50 @@ describe("Claude's suggested next prompt", () => {
     expect(draft("❯ loose text\nmore")).toBe(false);
   });
 
+  test("Claude's tip drawn without colors (NO_COLOR, #926) is no draft; other plain words are", () => {
+    // Claude Code 2.1.296 under NO_COLOR=1: an empty input box, no SGR color or dim anywhere
+    const plainRule = "\u2500".repeat(60);
+    const colorless = (row: string) => ["", plainRule, row, plainRule, "  \u23f5\u23f5 auto mode on (shift+tab to cycle) \u00b7 \u2190 for agents"].join("\r\n");
+    const strip = (ansi: string) => ansi.replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, "");
+    const tip = colorless('\u276f Try "how does <filepath> work?"');
+    expect(claudeInputDraft(strip(tip), tip)).toBe(false);
+    expect(claudeInputEmpty(strip(tip), tip)).toBe(true);
+    expect(claudeClearableDraft(strip(tip), tip)).toBeNull();
+    // Claude's drawn cursor on its first character
+    const cursor = colorless('\u276f \u001b[7mT\u001b[27mry "how does <filepath> work?"');
+    expect(claudeInputDraft(strip(cursor), cursor)).toBe(false);
+    // typed words that are not the tip's whole form stay a draft
+    for (const typed of ['\u276f Try this instead', '\u276f Try "x" and more', '\u276f please Try "x"']) {
+      expect(claudeInputDraft(strip(colorless(typed)), colorless(typed))).toBe(true);
+    }
+    // on a colored screen only dim tells the tip: typed `Try "\u2026"` there is a draft
+    expect(claudeInputDraft(strip(screen('\u276f Try "x"')), screen('\u276f Try "x"'))).toBe(true);
+    // colors not verified to show the live screen prove nothing
+    expect(claudeInputDraft(strip(tip), null)).toBe(true);
+  });
+
+  test("OmO's box while it works, under a rule its status labels, is read like Claude's", () => {
+    // OmO (reported by herdr as Claude) as it draws its box mid-turn: two dashes lead the label
+    const rule = "\u2500".repeat(60);
+    const working = (row: string) => ["● earlier output", "\u2500\u2500 • Running eval (7s • esc to interrupt) " + "\u2500".repeat(40), row, rule,
+      "~/workspace/app • main • 27.1% (auto)   claude-opus-5-5:medium"].join("\r\n");
+    expect(claudeInputDraft(working("❯"), null)).toBe(false);
+    expect(claudeInputEmpty(working("❯"), null)).toBe(true);
+    expect(claudeInputDraft(working("❯ still typing"), null)).toBe(true);
+    expect(claudeInputBoxText(working("❯ still typing"))).toBe("❯ still typing");
+    // a row with one dash before its words is no rule
+    expect(claudeInputDraft(["─ not a rule ─", "❯", rule].join("\r\n"), null)).toBe(true);
+  });
+
+  test("the box a refusal shows: its rows as plain text, nothing when it cannot be read whole", () => {
+    const rule = "\u2500".repeat(60);
+    expect(claudeInputBoxText([rule, "\u001b[2m! ls\u001b[0m", rule].join("\r\n"))).toBe("! ls");
+    expect(claudeInputBoxText([rule, "❯ first line", "  second line", rule].join("\r\n"))).toBe("❯ first line\n  second line");
+    expect(claudeInputBoxText(["  more of a tall draft", rule, "  footer"].join("\r\n"))).toBe("");
+    expect(claudeInputBoxText("no box here")).toBe("");
+    expect(claudeInputBoxText([rule, `❯ ${"x".repeat(300)}`, rule].join("\r\n"))).toBe(`❯ ${"x".repeat(198)}…`);
+  });
+
   test("a viewport's colors count only when it is verified to show the live screen", () => {
     const live = screen("❯ \u001b[2mrun the tests\u001b[0m").replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, "");
     const colors = screen("❯ \u001b[2mrun the tests\u001b[0m");
@@ -1834,6 +1878,33 @@ Step 4: Credential source
     expect(labels(parseFallbackPrompt("gjc", `Pick one:\n❯ Alpha\n  Beta\n${footer}\n`))).toEqual(generic);
     expect(labels(parseFallbackPrompt("gjc", `Pick one:\n❯ Alpha\n  Beta\n↑/↓ to move · Enter to choose · Esc to cancel\n`))).toEqual(generic);
     expect(labels(parseFallbackPrompt("claude", `Pick one:\n\n❯ Alpha\n  Beta\n${footer}\n`))).toEqual(generic);
+  });
+
+  test("hashes a framed GJC question without the transcript or ticking status above it", () => {
+    const dialog = "──────────────\n\nUse staging only.\n\nWhich approach?\n\n──────────────\n│❯ First     │\n│  Second    │\n──────────────\n\nup/down navigate  enter select  esc cancel\n\n──────────────\n";
+    const first = parseFallbackPrompt("gjc", `Earlier output\n◷ 12h23m\n${dialog}`);
+    const later = parseFallbackPrompt("gjc", `New output\n◷ 12h24m\n${dialog}`);
+    expect(later.id).toBe(first.id);
+    expect(first.question).toBe("Which approach?");
+    expect(first.body).toBe("Use staging only.");
+    expect(parseFallbackPrompt("gjc", dialog.replace("Use staging only.", "Use production.")).id).not.toBe(first.id);
+    expect(parseFallbackPrompt("gjc", dialog.replace("Which approach?", "Delete everything?")).id).not.toBe(first.id);
+    expect(parseFallbackPrompt("gjc", dialog.replace("Second", "Remove")).id).not.toBe(first.id);
+    expect(parseFallbackPrompt("gjc", dialog.replace("│❯ First     │", "│  First     │").replace("│  Second    │", "│❯ Second    │")).id).toBe(first.id);
+  });
+
+  test("keeps approval details above a padded Markdown rule in a framed GJC title", () => {
+    const dialog = (target: string) => `──────────────\n\n Delete ${target}.\n\n ────────── \n\n Proceed?\n\n❯ Yes\n  No\n\nup/down navigate  enter select  esc cancel\n\n──────────────\n`;
+    const staging = parseFallbackPrompt("gjc", dialog("staging"));
+    expect(staging.body).toBe("Delete staging.");
+    expect(parseFallbackPrompt("gjc", dialog("production")).id).not.toBe(staging.id);
+  });
+
+  test("keeps the full GJC screen when a matching outer frame is absent", () => {
+    for (const close of ["", "────"]) {
+      const screen = (target: string) => `Delete ${target}.\n──────────────\n\nProceed?\n\n❯ Yes\n  No\n\nup/down navigate  enter select  esc cancel\n\n${close}\n`;
+      expect(parseFallbackPrompt("gjc", screen("production")).id).not.toBe(parseFallbackPrompt("gjc", screen("staging")).id);
+    }
   });
 
   test("titles a GJC selector with its own heading, not an earlier question on the screen", () => {
@@ -3241,6 +3312,27 @@ ${heldRule}
     });
   });
 
+  test("answers a framed GJC question across unrelated output and status redraws", async () => {
+    const screen = (at: number, tick: number) => `Output ${tick}\n◷ 12h${tick}m\n──────────────\n\n${gjcSelector(at)}\n──────────────\n`;
+    await withPane("gjc", "blocked", screen(0, 23), async (pane) => {
+      const prompt = (await card())!;
+      pane.screen = screen(0, 24);
+      pane.onSent = (sent) => { if (sent === "down") pane.screen = screen(1, 25); };
+      expect(await answer(prompt.id, { option_index: 1 })).toEqual({ status: 200, code: undefined });
+      expect(pane.sent).toEqual(["down", "enter"]);
+    });
+  });
+
+  test("refuses a framed GJC answer when its approval details change during navigation", async () => {
+    const screen = (target: string, at = 0) => `──────────────\n\n Delete ${target}.\n\n ────────── \n\n Proceed?\n\n${at === 0 ? "❯" : " "} Yes\n${at === 1 ? "❯" : " "} No\n\nup/down navigate  enter select  esc cancel\n\n──────────────\n`;
+    await withPane("gjc", "blocked", screen("staging"), async (pane) => {
+      const prompt = (await card())!;
+      pane.onSent = (sent) => { if (sent === "down") pane.screen = screen("production", 1); };
+      expect(await answer(prompt.id, { option_index: 1 })).toEqual({ status: 409, code: "prompt_changed" });
+      expect(pane.sent).toEqual(["down"]);
+    });
+  });
+
   test("checks a GJC selector after each move and stops once it is gone", async () => {
     const rows = ["First", "Second", "Third", "Fourth"];
     await withPane("gjc", "blocked", gjcSelector(0, rows), async (pane) => {
@@ -4234,6 +4326,35 @@ Enter to select · ↑/↓ to navigate · Esc to cancel
       expect(pane.sent).toEqual([]);
       expect((await card())!.id).not.toBe(first.id);
     });
+  });
+
+  test("logs prompt answer requests with pane_id, prompt_matched and outcome", async () => {
+    const logged: string[] = [];
+    const originalLog = console.log;
+    console.log = (...args: unknown[]) => { logged.push(args.map(String).join(" ")); };
+    try {
+      await withPane("codex", "blocked", menu(RESUME), async (pane) => {
+        const prompt = (await card())!;
+        logged.length = 0;
+        expect(await answer(prompt.id, { option_index: 0 })).toEqual({ status: 200, code: undefined });
+        expect(logged.some((line) => line.includes("[prompt/answer]") && line.includes("pane=\"p_1\"") && line.includes("prompt_matched=true") && line.includes("outcome=ok"))).toBe(true);
+        logged.length = 0;
+        expect(await answer(prompt.id, { option_index: 0 })).toEqual({ status: 409, code: "prompt_changed" });
+        expect(logged.some((line) => line.includes("[prompt/answer]") && line.includes("pane=\"p_1\"") && line.includes("prompt_matched=false") && line.includes("outcome=prompt_changed"))).toBe(true);
+        // the pane id is the client's until the snapshot has checked it: no newline or escape of it reaches the log
+        logged.length = 0;
+        const url = new URL("http://127.0.0.1/api/pane/prompt/answer");
+        const forged = "p_1\nFORGED \u001b[2J prompt_matched=true outcome=ok";
+        const response = (await handlePromptRequest(new Request(url, { method: "POST", body: JSON.stringify({ pane_id: forged, prompt_id: prompt.id, option_index: 0 }) }), url, {}))!;
+        expect(response.ok).toBe(false);
+        const line = logged.find((entry) => entry.includes("[prompt/answer]"));
+        expect(line).toBeDefined();
+        expect(line!.includes("\n")).toBe(false);
+        expect(line!.includes("\u001b")).toBe(false);
+        // the forged fields stay inside the quoted id; the line's own fields follow it
+        if (!line!.includes(`pane=${JSON.stringify(forged)} prompt_matched=false outcome=`)) throw new Error(`unexpected log line: ${line}`);
+      });
+    } finally { console.log = originalLog; }
   });
 });
 

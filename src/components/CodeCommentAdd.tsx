@@ -56,7 +56,7 @@ function movedTo(key: string, line: number, bounds: { first: number; last: numbe
  * pressed it, not by the click's `detail` alone (a click with no pointer is a key's).
  */
 export const CodeCommentAdd = memo(function CodeCommentAdd({ surface, pre, active, openLine, onAdd, register }: {
-  surface: RefObject<HTMLDivElement>;
+  surface: RefObject<HTMLDivElement | null>;
   pre: HTMLElement | null;
   active: boolean;
   openLine: number | null;

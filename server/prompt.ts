@@ -2536,10 +2536,19 @@ export function parseFallbackPrompt(agent: string, screen: string): InteractiveP
     }, steadyFields(question, body, steady.read)));
   }
   if (selectionMenu) {
-    const above = shown.filter((index) => index < selectionMenu.start).map((index) => cleanLine(lines[index]!));
     // the selector's own heading: the block of lines right above its rows, never an earlier question
     let headEnd = selectionMenu.start;
     while (headEnd > 0 && (!cleanLine(lines[headEnd - 1]!) || isDivider(lines[headEnd - 1]!))) headEnd -= 1;
+    // GJC's question dialog has its own opening border before the title. The transcript and
+    // ticking status above it do not belong to this asking. Its outer borders are unindented
+    // and identical; Markdown title rules have left padding. Keep every title paragraph inside,
+    // including approval details; without the matching frame keep the whole screen.
+    const closing = lines[findLastIndex(lines, (line) => Boolean(line.trim()))]?.trimEnd();
+    const border = closing && isDivider(closing) && !/^\s/.test(closing)
+      ? findLastIndex(lines.slice(0, headEnd), (line) => line.trimEnd() === closing)
+      : -1;
+    const dialogShown = border < 0 ? shown : shown.filter((index) => index > border);
+    const above = dialogShown.filter((index) => index < selectionMenu.start).map((index) => cleanLine(lines[index]!));
     let headStart = headEnd;
     while (headStart > 0 && cleanLine(lines[headStart - 1]!) && !isDivider(lines[headStart - 1]!)) headStart -= 1;
     const heading = lines.slice(headStart, headEnd).map((line) => cleanLine(line));
@@ -2553,7 +2562,7 @@ export function parseFallbackPrompt(agent: string, screen: string): InteractiveP
       { label: "Esc", steps: keySteps([KEY.escape]) },
     ];
     const body = withoutLine(above, question);
-    return screenCard(lines, shown, steady, finishPrompt(agent, {
+    return screenCard(lines, dialogShown, steady, finishPrompt(agent, {
       kind: "menu", fallback: true, title: "Waiting for your answer", question: question ?? "The agent is waiting for your answer.",
       body,
       options: choices.map(({ label }) => ({ label, description: null })),
@@ -2865,6 +2874,13 @@ function claudeGreyInput(ansi: string): string | null {
 }
 
 /**
+ * A labeled rule over an input box: Claude's named session (`──── my-session ─`), and OmO's own
+ * box while it works (`── • Running eval (7s • esc to interrupt) ───`), which herdr reports as
+ * Claude. Only the box reader takes the shorter lead; the task panel keeps LABELED_RULE_RE.
+ */
+const BOX_LABELED_RULE_RE = /^─{2,}\s.*─$/;
+
+/**
  * Claude Code's input box: the rows between the screen's last two rules (a named session labels
  * its rule). "clipped" when only the bottom rule is on screen, as under a draft taller than the
  * pane; null when the screen has no rule at all.
@@ -2872,7 +2888,7 @@ function claudeGreyInput(ansi: string): string | null {
 function claudeInputBox(screen: string): { plain: string[]; raw: string[] } | "clipped" | null {
   const raw = screen.split("\n").map((line) => line.replace(/\r$/, ""));
   const plain = raw.map((line) => line.replace(ANSI_RE, "").replace(/\u001b\][^\u0007\u001b]*(?:\u0007|\u001b\\)/g, "").trimEnd());
-  const rule = (line: string): boolean => SOLID_RULE_RE.test(line.trim()) || LABELED_RULE_RE.test(line.trim());
+  const rule = (line: string): boolean => SOLID_RULE_RE.test(line.trim()) || BOX_LABELED_RULE_RE.test(line.trim());
   let end = plain.length - 1;
   while (end >= 0 && !rule(plain[end]!)) end--;
   if (end < 0) return null;
@@ -2880,6 +2896,19 @@ function claudeInputBox(screen: string): { plain: string[]; raw: string[] } | "c
   while (start >= 0 && !rule(plain[start]!)) start--;
   if (start < 0) return "clipped";
   return { plain: plain.slice(start + 1, end), raw: raw.slice(start + 1, end) };
+}
+
+/** Claude's new-session tip as a whole input row: `Try "how does <filepath> work?"`. */
+const CLAUDE_TIP_ROW_RE = /^Try "[^"]+"$/;
+
+/** Whether an ANSI read sets no color and no dim anywhere, as Claude Code draws under NO_COLOR. */
+function colorless(ansi: string): boolean {
+  for (const match of ansi.matchAll(/\u001b\[([0-9;:]*)m/g)) {
+    for (const code of (match[1] || "0").split(/[;:]/).map((value) => Number(value || 0))) {
+      if (code === 2 || (code >= 30 && code <= 38) || (code >= 40 && code <= 48) || (code >= 90 && code <= 97) || (code >= 100 && code <= 107)) return false;
+    }
+  }
+  return true;
 }
 
 /**
@@ -2903,6 +2932,9 @@ export function claudeInputDraft(live: string, colors: string | null): boolean {
   if (colors === null) return true;
   const shown = claudeInputBox(colors);
   if (shown === null || shown === "clipped" || shown.plain.join("\n") !== box.plain.join("\n")) return true;
+  // Under NO_COLOR (#926) the tip is not dim: only its exact form as the box's whole one row, on a
+  // screen drawn without any color, tells it from typed words. Typed `Try "…"` reads the same there.
+  if (box.plain.length === 1 && CLAUDE_TIP_ROW_RE.test(box.plain[0]!.slice(1).replace(/\u00a0/g, " ").trim()) && colorless(colors)) return false;
   let prompt = false;
   let first = true;
   let cursor = false;
@@ -2953,6 +2985,30 @@ export function claudeClearableDraft(live: string, colors: string | null): strin
   if (shown === null || shown === "clipped" || shown.raw.length !== 1 || rowText(shown.raw[0]!) !== row) return null;
   const draft = row.slice(1).replace(/^[ \u00a0]/, "");
   return draft.trim() === "" ? null : draft;
+}
+
+/** How much of the box an input_draft refusal shows: enough to tell a draft from Claude's own text. */
+export const INPUT_BOX_SHOWN_CHARS = 200;
+
+/**
+ * The live input box (claudeInputBox) as plain text, whole: what a refusal that names no clearable
+ * draft records, so a send anyway goes only over exactly that box. null when no box could be read
+ * whole (none on screen, or clipped by the pane): such a box cannot be compared, so nothing is sent over it.
+ */
+export function claudeInputBoxContent(live: string): string | null {
+  const box = claudeInputBox(live);
+  if (box === null || box === "clipped") return null;
+  return box.plain.map((row) => row.replace(/\u00a0/g, " ").trimEnd()).join("\n").trim();
+}
+
+/** What the user is shown of a box's content: enough to tell a real draft from a box misread. */
+export function shownInputBox(content: string): string {
+  return content.length > INPUT_BOX_SHOWN_CHARS ? `${content.slice(0, INPUT_BOX_SHOWN_CHARS)}…` : content;
+}
+
+/** The live input box as a refusal shows it (claudeInputBoxContent, cut by shownInputBox). */
+export function claudeInputBoxText(live: string): string {
+  return shownInputBox(claudeInputBoxContent(live) ?? "");
 }
 
 /**
@@ -3256,6 +3312,8 @@ export interface PromptRequestOptions {
 
 export async function handlePromptRequest(request: Request, url: URL, options: PromptRequestOptions = {}): Promise<Response | null> {
   if (url.pathname !== "/api/pane/prompt" && url.pathname !== "/api/pane/prompt/answer") return null;
+  // the answer being handled, once its body was read: what the log line says even when the handling throws
+  let answerLog: { paneId: string; matched: boolean } | null = null;
   try {
     if (url.pathname === "/api/pane/prompt") {
       if (request.method !== "GET") return badRequest("method_not_allowed", "GET is required.");
@@ -3293,11 +3351,14 @@ export async function handlePromptRequest(request: Request, url: URL, options: P
     // one sent meanwhile waits until the queue is opened, answered and closed again
     const serialize = options.serialize ?? (<T>(_paneId: string, task: () => Promise<T>) => task());
     const form: { answered?: string } = {};
+    const log = { paneId: body.pane_id, matched: false };
+    answerLog = log;
     const response = await serialize(body.pane_id, async () => {
       // given up while it waited its turn: nothing is read, opened or sent for it
       if (request.signal.aborted) return promptChanged();
       const { prompt, agent, pane, panes } = await readPrompt(body.pane_id, options.codexHome);
       if (!prompt || prompt.id !== body.prompt_id) return promptChanged();
+      log.matched = true;
       // checked against the card before anything is sent: an invalid answer never opens the queue
       let steps: AnswerStep[];
       try {
@@ -3502,8 +3563,22 @@ export async function handlePromptRequest(request: Request, url: URL, options: P
     // the wait for the form's next step only reads the pane: after the pane's turn, so a message
     // queued for it meanwhile is not held up behind the polls
     if (form.answered !== undefined) await formMovedOn(body.pane_id, form.answered, options.codexHome);
+    await logAnswer(log, response);
     return response;
   } catch (error) {
-    return errorResponse(error);
+    // a read or a send that threw (a herdr timeout, 502) is an outcome too
+    const response = errorResponse(error);
+    if (answerLog !== null) await logAnswer(answerLog, response);
+    return response;
   }
+}
+
+/** One line per answer that got as far as the pane: the pane, whether the card's prompt still stood, and the
+ * refusal's own code (prompt_changed, invalid_answer, agent_blocked, a herdr error...). Never the answer. The pane
+ * id is the client's until the snapshot has checked it, so it is logged as a JSON string: one field, whatever it holds. */
+async function logAnswer(log: { paneId: string; matched: boolean }, response: Response): Promise<void> {
+  const outcome = response.ok ? "ok" : ((await response.clone().json().catch(() => null)) as { error?: { code?: string } } | null)?.error?.code ?? `status_${response.status}`;
+  // quoted as JSON: a space or a newline in the client's id cannot pass for a field of the line
+  const pane = JSON.stringify(log.paneId.slice(0, 80));
+  console.log(`[prompt/answer] pane=${pane} prompt_matched=${log.matched} outcome=${outcome}`);
 }
