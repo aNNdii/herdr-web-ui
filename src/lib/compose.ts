@@ -42,25 +42,34 @@ export function composerPayload(text: string, bracketedPaste: boolean): string {
 const UNTYPED_REFUSAL_CODES: readonly string[] = Object.freeze(["agent_blocked", "read_only", "submit_timeout",
   "agent_not_ready", "pending_input_unsupported", "invalid_delivery", "invalid_submit_text",
   "invalid_submit_id", "pending_limit", "pending_not_found", "pending_busy", "invalid_pending_action", "pending_target_changed", "pending_lease_lost", "not_attached",
-  "input_not_ready", "attach_held", "pane_not_found", "retired_submit_id", "input_draft"]);
+  "input_not_ready", "attach_held", "pane_not_found", "retired_submit_id", "input_draft",
+  // refused by this view while the terminal holds input (PaneTerminal), before anything was sent
+  "held_input"]);
 
 /**
  * Nothing of a refused message reached the pane: the result says so (`typed: false`), or, from a
- * bridge that does not say, its code is one such a bridge used only before typing.
+ * bridge that does not say, its code is one such a bridge used only before typing. A bare code is
+ * judged by the code alone.
  */
-export function submitNotTyped(result: { code: string; typed?: false }): boolean {
+export function submitNotTyped(result: string | { code: string; typed?: false }): boolean {
+  if (typeof result === "string") return UNTYPED_REFUSAL_CODES.includes(result);
   return result.typed === false || UNTYPED_REFUSAL_CODES.includes(result.code);
 }
 
-/** A send refused over a one-row draft in Claude's terminal input box: the note, and the draft a send may clear first. */
-export interface DraftRefusal { note: string; draft: string }
+/**
+ * A send refused over Claude's terminal input box: the note, and either the one-row draft a send may
+ * clear first (`draft`), or, where the server named none but showed the box, a send anyway (`anyway`).
+ */
+export type DraftRefusal = { note: string; draft: string } | { note: string; anyway: true };
 
 /**
- * submitNote, or a DraftRefusal when the server named a draft it can clear (SubmitResult's `draft`).
+ * submitNote, or a DraftRefusal when the server named a draft it can clear (SubmitResult's `draft`)
+ * or showed a box it could not tell empty (`box`; empty when it could not read one whole).
  * `agentOnly` as in submitNote.
  */
-export function submitRefusal(code: string, message: string, draft?: string, agentOnly = false): string | DraftRefusal {
+export function submitRefusal(code: string, message: string, draft?: string, box?: string, agentOnly = false): string | DraftRefusal {
   if (code === "input_draft" && draft) return { note: t("Not sent: Claude Code's input box in the terminal already holds “{draft}”.", { draft }), draft };
+  if (code === "input_draft" && box) return { note: t("Not sent: Claude Code's input box in the terminal may not be empty. It shows “{box}”.", { box }), anyway: true };
   return submitNote(code, message, agentOnly);
 }
 
@@ -79,6 +88,7 @@ export function submitNote(code: string, message: string, agentOnly = false): st
   if (code === "submit_partial") return t("Not confirmed: the terminal draft was cleared or may have changed. Your message stayed here. Check the terminal before sending again.");
   if (code === "agent_blocked") return t("Not sent: the agent is waiting for an answer in the terminal. Answer it first.");
   if (code === "read_only") return t("Not sent: this view only watches the pane.");
+  if (code === "held_input") return t("Not sent: send or discard the held input first.");
   if (agentOnly && code === "agent_not_found") return t("Not sent: comments go to an agent only, and none runs in this pane now.");
   if (agentOnly && code === "agent_not_ready") return t("Not sent: the agent is not ready for a message yet. Nothing was typed. Send it again when it is ready.");
   if (code === "agent_queue_busy") return t("Not sent: the agent is busy with questions it queued. Nothing was typed. Send it again when it is ready.");
@@ -100,22 +110,30 @@ export function imageMention(path: string): string {
 }
 
 /**
- * Puts a mention over the selection [start, end) as its own token: a space goes in
- * front when the text before it does not already end in whitespace, because the chat
- * and the agent only read `@path` after whitespace or at the start. The insertion is
- * cut to what still fits under MAX_COMPOSER_CHARS.
+ * Where an attached file's mention goes: at the start of the message, after a leading `/command`
+ * (it must stay first to be one), and after the mentions of files picked before it in the same
+ * batch that are still there, so a batch reads in pick order however its uploads finish. An upload
+ * finishes while the user may be typing, so the mention never goes where the caret is: the caller
+ * shifts the caret and selection by `length` when they sit at or after `at`. The mention goes in
+ * whole, with its separating space, or not at all (`length` 0): a cut `@path` would name a file
+ * that does not exist, so the caller keeps the attachment waiting until there is room; `missing`
+ * says how many characters the message is short of it.
  */
-export function insertMention(
+export function insertLeadingMention(
   text: string,
-  start: number,
-  end: number,
   mention: string,
-): { text: string; caret: number } {
-  const before = text.slice(0, start);
+  earlier: readonly string[],
+): { text: string; at: number; length: number; missing?: number } {
+  let at = /^\/\S+\s*/u.exec(text)?.[0].length ?? 0;
+  for (const previous of earlier) {
+    const found = text.indexOf(previous);
+    if (found >= 0) at = Math.max(at, found + previous.length);
+  }
+  const before = text.slice(0, at);
   const snippet = before.length > 0 && !/\s$/u.test(before) ? ` ${mention}` : mention;
-  const room = Math.max(0, MAX_COMPOSER_CHARS - text.length + end - start);
-  const inserted = snippet.slice(0, room);
-  return { text: before + inserted + text.slice(end), caret: start + inserted.length };
+  const missing = text.length + snippet.length - MAX_COMPOSER_CHARS;
+  if (missing > 0) return { text, at, length: 0, missing };
+  return { text: before + snippet + text.slice(at), at, length: snippet.length };
 }
 
 /** Ready states affect the held-message hint only; sending always requires a user action. */
@@ -197,9 +215,15 @@ export function composerDelivery(agent: string | null, status?: AgentStatus): "q
  * it is uploading, and nothing else in the card would say why Stop and add are off. Otherwise
  * an upload says so while it runs.
  */
-export function composerStatusHint(state: { uploading: boolean; connected: boolean; text: string }): "uploading" | "offline" | null {
+/** Characters left at which the composer starts counting them: further off, a count is noise. */
+export const COMPOSER_CHARS_WARNING = 200;
+
+/** `noRoom`: a finished upload's path waits for the message to be shortened. */
+export function composerStatusHint(state: { uploading: boolean; connected: boolean; text: string; noRoom?: boolean }): "uploading" | "offline" | "no-room" | "near-limit" | null {
   if (!state.connected && state.text.length > 0) return "offline";
-  return state.uploading ? "uploading" : null;
+  if (state.noRoom) return "no-room";
+  if (state.uploading) return "uploading";
+  return MAX_COMPOSER_CHARS - state.text.length <= COMPOSER_CHARS_WARNING ? "near-limit" : null;
 }
 
 /**

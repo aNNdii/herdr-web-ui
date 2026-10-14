@@ -201,9 +201,12 @@ function itemBlock(list: ListBlock, index: number): ListBlock {
     : { type: "list", ordered: false, items: [item] };
 }
 
-/** The text of inline nodes with their markup dropped: a link or emphasis reads as its words. */
+/**
+ * The text of inline nodes with their markup dropped: a link or emphasis reads as its words, and an image as the text the
+ * chat draws in its place (its `fallback`: the chat draws no images).
+ */
 function inlineText(nodes: InlineNode[]): string {
-  return nodes.map((node) => "value" in node ? node.value : inlineText(node.children)).join("");
+  return nodes.map((node) => "value" in node ? node.value : inlineText(node.type === "image" ? node.fallback : node.children)).join("");
 }
 
 /** The plain text of a block, without markup: what is quoted, and what tells two blocks apart. */

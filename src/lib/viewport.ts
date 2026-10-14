@@ -1,3 +1,6 @@
+import { deepActiveElement, isTypingField } from "./focus.ts";
+import { shouldSyncViewportOnResume } from "./viewportResume.ts";
+
 /*
  * Sizes the shell to the VISUAL viewport. When the soft keyboard opens, iOS
  * Safari shrinks window.visualViewport but leaves the layout viewport (and so
@@ -20,19 +23,21 @@
  * the missing height matches the measured standalone top safe area.
  */
 
-import { deepActiveElement, isTypingField } from "./focus.ts";
-
 const viewport = window.visualViewport;
 const root = document.documentElement;
 
 /**
- * Focus is necessary, not sufficient: dismissal and hardware keyboards leave the
+ * Focus starts it, and is not sufficient: dismissal and hardware keyboards leave the
  * field focused. Accept keyboard geometry where available, or detect a
  * substantial viewport occlusion relative to the large CSS viewport or a remembered
  * unobstructed height. Comparing visualViewport with innerHeight alone misses browsers
  * that resize both. The relative cutoff excludes ordinary browser/status-bar insets;
  * Safari has no exact keyboard-visibility API, so small floating keyboards cannot be
  * inferred this way. xterm's automatically focused helper only counts in direct typing.
+ * Once up, the keyboard counts as up until its occlusion ends, whatever holds the focus: a
+ * field unmounted under it (the chat's composer as the lens switches) or a tap that moves the
+ * focus to a button leaves the keyboard on screen for its own hide animation, and the shell,
+ * the sheets and the terminal's grid (#1045) follow the keyboard, not the focus.
  */
 const touch = window.matchMedia("(pointer: coarse)");
 const keyboard = (navigator as Navigator & {
@@ -59,7 +64,7 @@ const syncKeyboard = (): void => {
   const reference = Math.max(large, resizedWindow ? 0 : remembered?.height ?? 0, window.innerHeight);
   // followed into a frame: the code view's comment field has one of its own (components/FrameField.tsx)
   const focused = touch.matches && isTypingField(deepActiveElement(document));
-  const visible = focused && ((keyboard?.boundingRect.height ?? 0) > 0
+  const visible = (focused || root.hasAttribute("data-keyboard")) && ((keyboard?.boundingRect.height ?? 0) > 0
     || !!viewport && viewport.scale === 1 && reference - height > reference * 0.2);
   if (!visible) unobstructedHeights.set(width, { large, height: resizedWindow ? Math.max(large, height, window.innerHeight) : Math.max(reference, height) });
   root.toggleAttribute("data-keyboard", visible);
@@ -83,6 +88,12 @@ window.addEventListener("orientationchange", syncKeyboard);
 touch.addEventListener("change", syncKeyboard);
 keyboard?.addEventListener("geometrychange", syncKeyboard);
 document.addEventListener("focusin", syncKeyboard);
+document.addEventListener("visibilitychange", () => {
+  if (shouldSyncViewportOnResume("visibilitychange", document.visibilityState)) syncKeyboard();
+});
+window.addEventListener("pageshow", () => {
+  if (shouldSyncViewportOnResume("pageshow", document.visibilityState)) syncKeyboard();
+});
 // focus moving from one field to the next blurs first: read where it landed
 document.addEventListener("focusout", () => window.setTimeout(syncKeyboard, 0));
 // Switching xterm direct typing leaves its helper focused; observe the mode change.

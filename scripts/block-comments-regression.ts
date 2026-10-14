@@ -21,6 +21,7 @@ import { chromium, devices, type Browser, type BrowserContext, type BrowserConte
 import { createServer } from "../server/index.ts";
 import { herdrRpc, workspaceClose, workspaceCreate } from "../server/herdr/client.ts";
 import { openSettingsPage } from "./settings-page.ts";
+import { sheetsSettled } from "./sheets-settled.ts";
 
 const INTRO = "Intro paragraph about the state.";
 const LONG_PARAGRAPH = "A longer paragraph that runs across several lines on a phone, so its first line reaches the right edge where the comment button sits.";
@@ -1137,6 +1138,8 @@ const cases: Record<string, Case> = {
     await tapWord(page, intro, "Intro");
     await dialogOf(page).waitFor();
     assert.equal(await besidePinOf(page).count(), 0, "on a phone the popover is the sheet");
+    // measured where it comes to rest, not while it still rises (styles.css `sheet-in`)
+    await sheetsSettled(page);
     const sheet = await dialogOf(page).evaluate((node) => ({ bottom: node.getBoundingClientRect().bottom, height: window.innerHeight }));
     assert.ok(Math.abs(sheet.bottom - sheet.height) <= 2, `the sheet sits at the bottom of the viewport (${sheet.bottom} of ${sheet.height})`);
     await fieldFocused(page);

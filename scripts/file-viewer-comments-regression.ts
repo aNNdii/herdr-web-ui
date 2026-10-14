@@ -20,8 +20,9 @@
  *
  * One server, pane and browser per run. Each case starts from a fresh page with an empty comment
  * store, so a case runs alone: `FILE_COMMENTS_CASE=<name>[,<name>]` runs only those (unset: all).
- * Waits are bounded polls (`eventually`, `frames`); the only sleeps are a touch's holds in `code-touch`, which are the
- * gesture itself (a finger resting past `LONG_PRESS_MS`, or short of it). Serves `dist/`: build first.
+ * Waits are bounded polls (`eventually`, `frames`); a touch's holds in `code-touch` wait for the clock (`holdUntil`),
+ * since the time is the gesture itself (a finger resting past `LONG_PRESS_MS`, or short of it) and no state on the page
+ * tells an armed press from a pressing one. Serves `dist/`: build first.
  */
 import "./test-herdr.ts";
 import assert from "node:assert/strict";
@@ -32,9 +33,11 @@ import { join } from "node:path";
 import { chromium, devices, type Browser, type BrowserContextOptions, type Locator, type Page } from "playwright-core";
 import { createServer } from "../server/index.ts";
 import { LONG_PRESS_MS } from "../src/lib/codeCommentPress.ts";
-import { TEXT_LOAD_LIMIT } from "../src/lib/textPreview.ts";
+import { SOURCE_PREVIEW_BYTES } from "../src/lib/filePreviewText.ts";
+import { VIRTUAL_SOURCE_LINES } from "../src/lib/sourcePreview.ts";
 import { herdrRpc, workspaceClose, workspaceCreate } from "../server/herdr/client.ts";
 import { openSettingsPage } from "./settings-page.ts";
+import { sheetsSettled } from "./sheets-settled.ts";
 
 /** How long a finger rests to be past the long press (`LONG_PRESS_MS`), and so armed: the press is checked at this mark. */
 const HOLD_MS = LONG_PRESS_MS + 150;
@@ -124,10 +127,11 @@ mkdirSync(join(root, "src"));
 writeFileSync(join(root, "src", "sync.ts"), `${SYNC_LINES.join("\n")}\n`);
 mkdirSync(join(root, "docs"));
 writeFileSync(join(root, "docs", "spec.md"), `${SPEC_LINES.join("\n")}\n`);
-// `src/big.txt`, a little past the viewer's load limit, opens cut short
-writeFileSync(join(root, "src", "big.txt"), "a line of plain text, 0123456789\n".repeat(Math.ceil((TEXT_LOAD_LIMIT + 1024) / 33)));
-/** One line longer than the load limit: it opens cut inside its only line, which is then no whole line to comment on. */
-writeFileSync(join(root, "src", "long.txt"), "one long line ".repeat(Math.ceil((TEXT_LOAD_LIMIT + 1024) / 14)));
+// `src/big.txt`, a long file still drawn with an element per line (below VIRTUAL_SOURCE_LINES, which a virtualized source
+// takes no comments past), many chunks of lines long
+writeFileSync(join(root, "src", "big.txt"), "a line of plain text, 0123456789\n".repeat(VIRTUAL_SOURCE_LINES - 100));
+/** One line longer than a source's load limit: it opens cut inside its only line, which is then no whole line to comment on. */
+writeFileSync(join(root, "src", "long.txt"), "one long line ".repeat(Math.ceil((SOURCE_PREVIEW_BYTES + 1024) / 14)));
 /** `src/wide.ts`: line 2 ends well inside the code view, line 3 runs far past it, so the view (no wrapping) scrolls sideways. */
 const WIDE_LINES = [
   "// one line here runs far past the view",
@@ -176,6 +180,14 @@ async function eventually(what: string, check: () => Promise<boolean>, ms = 3000
     if (Date.now() > deadline) throw new Error(`timed out waiting for ${what}`);
     await Bun.sleep(50);
   }
+}
+
+/**
+ * Polls the clock until it reaches `at` (`Date.now()` ms): a finger held on the screen until then. A long press is
+ * measured in time alone, so the clock is the condition waited for; never past `at` by more than one 25 ms step.
+ */
+async function holdUntil(at: number): Promise<void> {
+  while (Date.now() < at) await Bun.sleep(Math.max(1, Math.min(25, at - Date.now())));
 }
 
 /** Waits `count` animation frames (the page's own updates run once per frame): for something that must not happen. */
@@ -765,7 +777,8 @@ const cases: Record<string, Case> = {
           const token = (name: string): number => parseFloat(style.getPropertyValue(name));
           const probe = document.createElement("span");
           probe.style.cssText = "position: absolute; visibility: hidden; width: 1ch; color: var(--border)";
-          pre.append(probe);
+          // in the <code>: the divider and the numbers are placed in its 1ch (its font is the UA's monospace, not the <pre>'s)
+          code.append(probe);
           const ch = probe.getBoundingClientRect().width;
           const border = getComputedStyle(probe).color;
           probe.remove();
@@ -812,8 +825,10 @@ const cases: Record<string, Case> = {
           };
         }, { rooms, room: ROOM, copies });
 
-        assert.equal(report.before.text, check.text, `${label}: the text is the file's`);
-        assert.equal(report.after.text, check.text, `${label}: innerText with rooms is still the file's text`);
+        // the file ends with a newline, and upstream draws the empty row after it (DESIGN.md: a complete file keeps it), so
+        // innerText has that final newline; a selection of the whole <pre> stops at the last character, as before
+        assert.equal(report.before.text, `${check.text}\n`, `${label}: the text is the file's`);
+        assert.equal(report.after.text, `${check.text}\n`, `${label}: innerText with rooms is still the file's text`);
         copies.forEach(([first, last], i) => {
           assert.equal(report.copies[i], check.text.split("\n").slice(first - 1, last).join("\n"), `${label}: a selection of lines ${first}–${last} copies those lines`);
         });
@@ -903,7 +918,8 @@ const cases: Record<string, Case> = {
     // the keyboard, the pointer off the code: Tab from the toggle reaches the one ⊕, on the first line in view, named for it
     const add = viewer.locator("button.code-comment-add");
     const keyField = body.locator(".comment-popover.is-row");
-    const lastLine = SYNC_LINES.length;
+    // the last line is the empty row after the file's final newline: upstream draws it, as a complete file's last line (DESIGN.md)
+    const lastLine = SYNC_LINES.length + 1;
     await toggle.focus();
     for (let i = 0; i < 20 && !(await focusedMatches(page, "button.code-comment-add")); i++) await page.keyboard.press("Tab");
     assert.ok(await focusedMatches(page, "button.code-comment-add"), "Tab reaches the ⊕");
@@ -1020,7 +1036,8 @@ const cases: Record<string, Case> = {
     });
     assert.equal(copies.across, SYNC_LINES.slice(2, 5).join("\n"), "a selection of lines 3–5 across the card is those lines");
     assert.equal(copies.all, SYNC_LINES.join("\n"), "the whole <pre> is the file's text");
-    assert.equal(copies.inner, SYNC_LINES.join("\n"), "innerText is the file's text");
+    // innerText ends with the file's final newline (the empty row upstream draws after it); a selection stops before it
+    assert.equal(copies.inner, `${SYNC_LINES.join("\n")}\n`, "innerText is the file's text");
     console.log("PASS code-inline: a selection across the card, and the whole <pre>, copy the file's text exactly");
 
     // the card opens to edit, in its place; Escape unchanged closes it, changed keeps it with the focus
@@ -1065,7 +1082,7 @@ const cases: Record<string, Case> = {
     await page.evaluate((was) => { if (was === null) delete document.documentElement.dataset["theme"]; else document.documentElement.dataset["theme"] = was; }, theme);
     console.log("PASS code-inline: the row's field is in the layer's frame (the same one for each opening, over the field's slot, the card's edge following its focus); Ctrl+Shift+, opens Settings from it and Escape closes Settings alone; Tab and Shift+Tab go on in the page's order; a theme change reaches the frame");
     // the focus elsewhere in the viewer: Escape is the field's first, and keeps it
-    await viewer.getByRole("link", { name: "Raw", exact: true }).focus();
+    await viewer.getByRole("link", { name: "Open in a new tab", exact: true }).focus();
     await page.keyboard.press("Escape");
     await frames(page);
     assert.equal(await rowPopover.count(), 1, "Escape from elsewhere keeps a changed field");
@@ -1617,7 +1634,7 @@ const cases: Record<string, Case> = {
           const tint = await tintIn(viewer, n);
           return tint.shown && tint.onLine;
         }, 1000);
-        await Bun.sleep(Math.max(0, started + HOLD_MS - Date.now()));
+        await holdUntil(started + HOLD_MS);
         assert.equal(await popoverOf(page).count(), 0, `${device}: nothing opens while the finger is still down after 300 ms`);
         assert.deepEqual(await pressedIn(viewer), [String(n)], `${device}: line ${n} is still pressed, armed`);
         assert.equal((await tintIn(viewer, n)).shown, true, `${device}: and tinted`);
@@ -1648,6 +1665,8 @@ const cases: Record<string, Case> = {
       assert.equal(await sheet.locator(".comment-popover-code").textContent(), `4${SYNC_LINES[3]}`, `${device}: and quotes it`);
       assert.deepEqual(await pressedIn(viewer), [], `${device}: no line is pressed once it opened`);
       assert.equal(await page.evaluate(() => window.getSelection()?.toString() ?? ""), "", `${device}: no text selected`);
+      // measured where it comes to rest, not while it still rises (styles.css `sheet-in`)
+      await sheetsSettled(page);
       const sheetBox = await sheet.boundingBox();
       assert.ok(sheetBox !== null && Math.abs(sheetBox.y + sheetBox.height - size.height) <= 1 && Math.abs(sheetBox.width - size.width) <= 1, `${device}: a bottom sheet, full width (${JSON.stringify(sheetBox)})`);
       assert.deepEqual(await tintIn(viewer, 4, true), { shown: true, onLine: true }, `${device}: line 4 stays tinted behind the sheet`);
@@ -1696,9 +1715,9 @@ const cases: Record<string, Case> = {
       const at6 = await rowPoint(lineOf(viewer, 6));
       let started = Date.now();
       await finger("touchStart", at6);
-      await Bun.sleep(LONG_PRESS_MS / 2);
+      await holdUntil(started + LONG_PRESS_MS / 2);
       await finger("touchEnd");
-      await Bun.sleep(Math.max(0, started + HOLD_MS - Date.now()));
+      await holdUntil(started + HOLD_MS);
       await frames(page);
       assert.equal(await popoverOf(page).count(), 0, `${device}: a press of 150 ms opens nothing`);
       assert.deepEqual(await pressedIn(viewer), [], `${device}: and leaves no line pressed`);
@@ -1710,9 +1729,10 @@ const cases: Record<string, Case> = {
         line.dispatchEvent(new PointerEvent(kind, { bubbles: true, cancelable: true, composed: true, pointerType: "touch", pointerId: 9, isPrimary: true, clientX: row.left + 8, clientY: row.top + row.height / 2 }));
       }, type);
       const openedWithoutClick = async (): Promise<void> => {
+        const down = Date.now();
         await touchOn(6, "pointerdown");
         // past the 300 ms that arm it; the lift opens it
-        await Bun.sleep(HOLD_MS);
+        await holdUntil(down + HOLD_MS);
         assert.equal(await sheet.count(), 0, `${device}: an armed press opens nothing before its lift`);
         await touchOn(6, "pointerup");
         await sheet.waitFor({ timeout: 1000 });
@@ -1726,7 +1746,7 @@ const cases: Record<string, Case> = {
       await toggle.tap();
       await openedWithoutClick();
       // past the moment a lift's click would have come (CLICK_AFTER_LIFT_MS, 500 ms, in CodeCommentTouch.tsx)
-      await Bun.sleep(600);
+      await holdUntil(Date.now() + 600);
       await toggle.focus();
       await page.keyboard.press("Enter");
       assert.equal(await toggle.getAttribute("aria-pressed"), "false", `${device}: a keyboard's click after a long press no click followed is not swallowed`);
@@ -1747,7 +1767,7 @@ const cases: Record<string, Case> = {
       await finger("touchStart", at20);
       for (const dy of [10, 20, 30]) await finger("touchMove", { x: at20.x, y: at20.y - dy });
       await eventually(`${device}: a move of 30 px leaves no line pressed`, async () => (await pressedIn(big)).length === 0, 1000);
-      await Bun.sleep(Math.max(0, started + HOLD_MS - Date.now()));
+      await holdUntil(started + HOLD_MS);
       await finger("touchEnd");
       await frames(page);
       assert.equal(await popoverOf(page).count(), 0, `${device}: a touch that moves 30 px opens nothing`);
@@ -1757,7 +1777,7 @@ const cases: Record<string, Case> = {
       await eventually(`${device}: line 24 pressed`, async () => (await pressedIn(big)).includes("24"), 1000);
       await bigBody.evaluate((node) => { node.scrollTop += 30; });
       await eventually(`${device}: the scroll leaves no line pressed`, async () => (await pressedIn(big)).length === 0, 1000);
-      await Bun.sleep(Math.max(0, started + HOLD_MS - Date.now()));
+      await holdUntil(started + HOLD_MS);
       await finger("touchEnd");
       await frames(page);
       assert.equal(await popoverOf(page).count(), 0, `${device}: a scroll under a resting finger opens nothing`);
@@ -1766,7 +1786,7 @@ const cases: Record<string, Case> = {
       const at28 = await rowPoint(lineOf(big, 28));
       started = Date.now();
       await finger("touchStart", at28);
-      await Bun.sleep(Math.max(0, started + HOLD_MS - Date.now()));
+      await holdUntil(started + HOLD_MS);
       assert.deepEqual(await pressedIn(big), ["28"], `${device}: line 28 is armed`);
       for (const dy of [10, 20, 30]) await finger("touchMove", { x: at28.x, y: at28.y - dy });
       await eventually(`${device}: a move after arming leaves no line pressed`, async () => (await pressedIn(big)).length === 0, 1000);

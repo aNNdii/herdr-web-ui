@@ -46,7 +46,7 @@ const HELD_CLASS = "is-held";
 
 export interface CodeCommentPressOptions {
   /** the viewer's scrolling body */
-  surface: RefObject<HTMLDivElement>;
+  surface: RefObject<HTMLDivElement | null>;
   /** the code's `<pre>` while the layer is drawn, else null */
   pre: HTMLElement | null;
   /** comment mode */
@@ -60,9 +60,9 @@ export interface CodeCommentPressOptions {
 
 export interface CodeCommentPress {
   /** the press's tint, an element of the layer (`.code-comment-press`) */
-  tint: RefObject<HTMLDivElement>;
+  tint: RefObject<HTMLDivElement | null>;
   /** the band of the line a finger opened, an element of the layer (`.code-comment-held`) */
-  band: RefObject<HTMLDivElement>;
+  band: RefObject<HTMLDivElement | null>;
   /** places the tint and the band again, after the layer moved the lines */
   place: () => void;
   /** what pressed last: "touch", "mouse" or "pen" (a keyboard's click keeps what was before) */
@@ -255,7 +255,7 @@ export function useModeHint(): { hint: ModeHint | null; show: (hint: ModeHint) =
  * The hint, beside the layer in the viewer's body: a live region (always there, so a screen reader hears each hint) kept at the top of the
  * body's view, under the viewer's header, as the body scrolls. It takes no tap: the code under it stays pressable.
  */
-export const CodeCommentHint = memo(function CodeCommentHint({ surface, hint }: { surface: RefObject<HTMLDivElement>; hint: ModeHint | null }) {
+export const CodeCommentHint = memo(function CodeCommentHint({ surface, hint }: { surface: RefObject<HTMLDivElement | null>; hint: ModeHint | null }) {
   const t = useT();
   const region = useRef<HTMLDivElement>(null);
   const shown = hint !== null;

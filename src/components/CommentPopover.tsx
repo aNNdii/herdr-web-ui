@@ -27,7 +27,7 @@
  * and a Save that says so. There (`framed`) the field is drawn in a frame of its own (FrameField.tsx): iOS focuses it
  * without first working over the viewer's long document.
  */
-import { useCallback, useContext, useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type MutableRefObject, type ReactNode, type RefObject } from "react";
+import { useCallback, useContext, useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type MutableRefObject, type ReactNode, type ReactElement, type RefObject } from "react";
 import { createPortal } from "react-dom";
 import { ArrowUp, Trash2, X } from "lucide-react";
 
@@ -82,7 +82,7 @@ export interface CommentPopoverProps {
 
 interface FrameProps {
   placement: PopoverPlacement;
-  surface: RefObject<HTMLDivElement>;
+  surface: RefObject<HTMLDivElement | null>;
   /** the dialog's accessible name; without one it is named "Comment" */
   label: string | undefined;
   /** the box takes the focus itself (a saved comment opened on a touch screen: its field does not) */
@@ -119,7 +119,7 @@ function besideText(placement: PopoverPlacement): boolean {
  * lies over (the file viewer) does not pull Tab out of it. Where the focus goes as it closes is
  * the popover's own to say (`restoreFocusTarget`), not the trap's.
  */
-function Frame({ placement, surface, label, focusable, changed, onKeyDown, dismiss, children }: FrameProps): JSX.Element {
+function Frame({ placement, surface, label, focusable, changed, onKeyDown, dismiss, children }: FrameProps): ReactElement {
   const t = useT();
   const dismissRef = useRef(dismiss);
   dismissRef.current = dismiss;
@@ -195,7 +195,7 @@ function Frame({ placement, surface, label, focusable, changed, onKeyDown, dismi
 function Top({ quote, reference, label, note, actions }: Pick<CommentPopoverProps, "reference" | "label" | "note"> & {
   quote: CommentPopoverProps["quote"] | null;
   actions: ReactNode | null;
-}): JSX.Element {
+}): ReactElement {
   return <div className="comment-popover-top">
     <div className="comment-popover-context">
       {reference !== undefined && <p className={label === undefined ? "comment-popover-reference" : "comment-popover-reference visually-hidden"}><FileReferenceLabel reference={reference} /></p>}
@@ -211,7 +211,7 @@ function Top({ quote, reference, label, note, actions }: Pick<CommentPopoverProp
  * colours are the viewer's and no second highlighter runs), cloned again as its highlighting arrives or changes. Without
  * that line (past the lines the viewer draws as elements) the plain `text`.
  */
-function QuotedCode({ text, source }: { text: string; source: Element | null }): JSX.Element {
+function QuotedCode({ text, source }: { text: string; source: Element | null }): ReactElement {
   const host = useRef<HTMLSpanElement>(null);
   useLayoutEffect(() => {
     const node = host.current;
@@ -229,7 +229,7 @@ function QuotedCode({ text, source }: { text: string; source: Element | null }):
   return <span ref={host} />;
 }
 
-function Quote({ quote, reference }: Pick<CommentPopoverProps, "quote" | "reference">): JSX.Element {
+function Quote({ quote, reference }: Pick<CommentPopoverProps, "quote" | "reference">): ReactElement {
   return <>
     <div className={"code" in quote ? "comment-popover-quote is-code" : "comment-popover-quote"}>
       {"code" in quote
@@ -249,7 +249,7 @@ function Quote({ quote, reference }: Pick<CommentPopoverProps, "quote" | "refere
  * The popover of one opening: a new comment, or a saved one, to edit. A caller keys it by the opening
  * (`OpenComment.id`), so another comment opened is another popover.
  */
-export function CommentPopover({ placement, quote, reference, label, note, comment, startValue, onText, onSave, onDelete, onClose, opener, fallback, framed = false }: CommentPopoverProps): JSX.Element {
+export function CommentPopover({ placement, quote, reference, label, note, comment, startValue, onText, onSave, onDelete, onClose, opener, fallback, framed = false }: CommentPopoverProps): ReactElement {
   const t = useT();
   const rowFrame = useContext(FieldFrameContext);
   const inFrame = framed && (placement === "sheet" || (placement === "row" && rowFrame !== null));

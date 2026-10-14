@@ -19,7 +19,7 @@
  * - the pin layer is memoized and gets only props that keep their identity while the comments and the opening do: a
  *   host that re-renders often (the chat, on every conversation poll while an agent streams) does not redraw it.
  */
-import { memo, useCallback, useLayoutEffect, useMemo, useRef, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode, type RefObject } from "react";
+import { memo, useCallback, useLayoutEffect, useMemo, useRef, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode, type ReactElement, type RefObject } from "react";
 
 import { PENDING_COMMENT_ID } from "../lib/commentHighlight.ts";
 import { firstPin, focusOpenField, pinAnchors, pinByAnchor } from "../lib/commentDom.ts";
@@ -51,7 +51,7 @@ export interface CommentSurfaceProps {
 
 export interface CommentSurfaceOptions<T, S> {
   /** the scrolling element: it gets `surfaceProps`, and the pin layer lies in its content */
-  surface: RefObject<HTMLDivElement>;
+  surface: RefObject<HTMLDivElement | null>;
   /** the Comments setting: off, nothing is drawn and an open popover closes */
   enabled: boolean;
   /**
@@ -181,7 +181,7 @@ export function useCommentSurface<T extends { point?: CommentPoint }, S>(options
       return gone !== null && gone.opening === open.id ? firstPin(within, gone.near) : pinByAnchor(within, anchor);
     };
     const fallback = (): HTMLElement | null => latest.current.focusFallback(surface.current);
-    return (placement: PinPlacement): JSX.Element => {
+    return (placement: PinPlacement): ReactElement => {
       const { quote, reference } = latest.current.describe(open);
       return <CommentPopover
         key={open.id}

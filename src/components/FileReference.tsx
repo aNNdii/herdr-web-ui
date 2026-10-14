@@ -1,6 +1,8 @@
 /**
  * The file and lines a comment on a file is on, as a comment's popover, card and editor name them.
  */
+import type { ReactElement } from "react";
+
 import "./FileReference.css";
 
 import type { LineRange } from "../lib/fileComments.ts";
@@ -18,7 +20,7 @@ export interface FileReference {
  * as its title, and a long name cut inside its stem so its type stays in view (as the file
  * viewer's title, `.file-viewer-stem`).
  */
-export function FileReferenceLabel({ reference }: { reference: FileReference }): JSX.Element {
+export function FileReferenceLabel({ reference }: { reference: FileReference }): ReactElement {
   const t = useT();
   const { stem, extension } = pathParts(reference.path);
   const [first, last] = reference.lines;

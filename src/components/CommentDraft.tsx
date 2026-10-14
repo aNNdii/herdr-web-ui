@@ -31,8 +31,8 @@ export const COMMENT_MAX_CHARS = 2000;
 /** A comment being written in the popover: its text, its field and its keys. */
 export interface CommentDraft {
   /** the editor's own box */
-  surface: RefObject<HTMLDivElement>;
-  field: RefObject<HTMLTextAreaElement>;
+  surface: RefObject<HTMLDivElement | null>;
+  field: RefObject<HTMLTextAreaElement | null>;
   value: string;
   /** Save does something (`commentCanSave`): a new comment with only blanks, or a saved one unchanged, has nothing to save */
   canSave: boolean;

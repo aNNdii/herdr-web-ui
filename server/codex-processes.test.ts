@@ -3,7 +3,7 @@ import { Database } from "bun:sqlite";
 import { appendFileSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { codexTranscriptPath } from "./codex.ts";
+import { codexOpenRollout, codexTranscriptPath } from "./codex.ts";
 import { processStartedAt } from "./process-start.ts";
 
 // Native stores and the real RPC client; only herdr's foreground metadata is synthetic.
@@ -131,6 +131,23 @@ it("finds the threads of a Windows cwd that Codex stored with the \\\\?\\ prefix
   }])).toBe(path);
 });
 
+it("gives a background reader the chat's binding only while no newer thread may have replaced it, and binds nothing itself", async () => {
+  foreground = [{ pid: 2147483647, argv: ["/usr/bin/codex"] }];
+  expect(await codexOpenRollout(root, root, home)).toBeNull();
+  screen = answer;
+  expect(await codexOpenRollout(root, root, home)).toBeNull();
+  expect(await resolve()).toBe(path);
+  screen = "";
+  expect(await codexOpenRollout(root, root, home)).toBe(path);
+  const db = new Database(join(home, "state_5.sqlite"));
+  const now = Math.floor(Date.now() / 1000);
+  db.query("INSERT INTO threads VALUES (?, ?, ?, 0, NULL, ?, ?, 'cli')").run(
+    "01a0c7a1-56d9-7e20-9f08-f7a2d973bc02", join(home, "sessions", "missing.jsonl"), root, now, now,
+  );
+  db.close();
+  expect(await codexOpenRollout(root, root, home)).toBeNull();
+});
+
 it("does not guess a session when argv and proc data are unavailable", async () => {
   foreground = [{ pid: 2147483647, name: "codex" }];
   expect(await resolve()).toBeNull();
@@ -234,7 +251,7 @@ shortIt("handles a Windows stored cwd prefix using a Linux fixture process", asy
   expect(await codexTranscriptPath(root, cwd, home, [fixturePane(root, cwd)])).toBe(path);
 });
 
-shortIt("requires a submitted first prompt and substantive answer, not a composer or quote", async () => {
+shortIt("requires a submitted first prompt and exact answer, not a composer or quote (control)", async () => {
   await shortSession();
   for (const shown of [
     `OpenAI Codex (v1.0)\n› ${shortPrompt}`,
@@ -249,7 +266,10 @@ shortIt("requires a submitted first prompt and substantive answer, not a compose
   }
   shortRollout(path, shortPrompt, "Ready");
   screen = shortScreen.replace(shortAnswer, "Ready");
-  expect(await resolve()).toBeNull();
+  expect(await resolve()).toBe(path); // regression: a tiny but exact answer is sufficient
+  shortRollout(path, shortPrompt, "");
+  screen = shortScreen.replace(shortAnswer, "");
+  expect(await resolve()).toBeNull(); // control: no answer is not a submitted exchange
 });
 
 shortIt("retains older resumed later turns as competitors to a new first prompt", async () => {

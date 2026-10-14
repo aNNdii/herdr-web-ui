@@ -15,7 +15,8 @@ function fakePage() {
   return { page, frameView, frame, body, state, doc };
 }
 
-const tick = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 1));
+/** one turn of the timer queue: the deferred blur check (`watchWindowPresence`, a 0 ms timer set before it) has run */
+const tick = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0));
 
 describe("watchWindowPresence", () => {
   let fake: ReturnType<typeof fakePage>;

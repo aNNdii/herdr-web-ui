@@ -7,6 +7,7 @@ import { appFaces } from "./app-faces.ts";
 import panes from "../site/demo/fixtures/panes.json";
 import { buildDemoApp } from "./demo-build.ts";
 import { openSettingsPage } from "./settings-page.ts";
+import { chromePath } from "./chrome-path.ts";
 
 // The model label in the input card's last row, fitted to what is measured there, on the
 // unmodified app over the demo's fixture transport. The demo's panes name no context window and
@@ -207,7 +208,7 @@ try {
   };
 
   try {
-    const browser = await chromium.launch({ executablePath: process.env.CHROME_PATH ?? "/opt/google/chrome/chrome", headless: true, args: ["--no-sandbox"] });
+    const browser = await chromium.launch({ executablePath: chromePath(), headless: true, args: ["--no-sandbox"] });
     try {
       // One primary control across agents: Stop with an empty working draft, Send with text.
       for (const agent of ["claude", "codex"] as const) for (const width of [350, 390, 800, 1440]) for (const mic of [false, true]) await withCard(browser, width, { agent, model: "gpt-5.6", mic }, async (page) => {
@@ -238,7 +239,7 @@ try {
       });
       console.log("PASS agents at 350, 390, 800 and 1440px use one Stop/Send control with no Queue or dropdown");
 
-      for (const width of [350, 390]) await withCard(browser, width, { agent: "codex", model: LONG_MODEL, mic: true }, async (page) => {
+      for (const width of [320, 330, 350, 390]) await withCard(browser, width, { agent: "codex", model: LONG_MODEL, mic: true }, async (page) => {
         await draft(page);
         await upload(page);
         const row = await measure(page);
@@ -327,6 +328,10 @@ try {
         assert.equal(await page.getByRole("textbox", { name: "Message", exact: true }).inputValue(), "hold this");
         assert.equal(await page.locator(".pending-message-bubble").count(), 0);
         assert.match(await page.locator(".composer-note").textContent() ?? "", /Update this PC/);
+        // the reason sits on the box's top edge, the box's width, not under it
+        const [noteBox, surfaceBox] = await Promise.all([page.locator(".composer-note").boundingBox(), page.locator(".composer-surface").boundingBox()]);
+        assert.ok(noteBox && surfaceBox && noteBox.y + noteBox.height <= surfaceBox.y + 1, "the note is above the message box");
+        assert.ok(noteBox && surfaceBox && Math.abs(noteBox.width - surfaceBox.width) <= 1 && Math.abs(noteBox.x - surfaceBox.x) <= 1, "and as wide as it");
       });
       console.log("PASS connection loss suspends pending items, confirmed holds need Send now, and old bridges keep the draft");
 

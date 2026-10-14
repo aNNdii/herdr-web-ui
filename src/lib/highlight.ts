@@ -29,7 +29,6 @@ import { vue } from "@tanstack/highlight/languages/vue";
 import { yaml } from "@tanstack/highlight/languages/yaml";
 
 import { pathParts } from "./filePaths.ts";
-import { memoizeLast } from "./memoizeLast.ts";
 
 /** What a token means, independent of any theme; CSS maps each role to a token color. */
 export type SyntaxRole =
@@ -176,9 +175,9 @@ const ROLES: readonly (SyntaxRole | null)[] = [null, "keyword", "string", "numbe
 const ROLE_INDEX = new Map(ROLES.map((role, index) => [role, index]));
 
 /**
- * The text a view shows: "\r\n" and a lone "\r" end a line like "\n" (as `parseMarkdown` and
- * `fileLines` read them). No other whitespace is dropped, a final line ending included, so a manual
- * selection holds the source; the file viewer leaves out a file's last line ending itself.
+ * Normalize line endings without discarding source whitespace from rendered text and selection:
+ * "\r\n" and a lone "\r" end a line like "\n" (as `parseMarkdown` and `fileLines` read them), so
+ * the file viewer numbers lines as a line comment quotes them.
  */
 export function normalizeCode(code: string): string {
   return code.replace(/\r\n?/g, "\n");
@@ -242,15 +241,22 @@ export function extendLines(lines: Lines, tail: string): Lines {
   return next;
 }
 
+/** The last code `highlightNow` highlighted, as it answered. */
+let lastHighlight: { source: string; language: string; lines: Lines } | null = null;
+
 /**
  * `source` (normalized) highlighted at once, on the calling thread. Never throws: a highlighter
- * error gives plain lines. Remembered for its last call (`memoizeLast`), so a remount does not
- * tokenize again. Only for short code (`SYNC_HIGHLIGHT_LIMIT`) or in a worker.
+ * error gives plain lines. The last call is remembered, so a block mounted anew with the same code
+ * is not tokenized again. Only for short code (`SYNC_HIGHLIGHT_LIMIT`) or in a worker.
  */
-export const highlightNow = memoizeLast(function highlightNow(source: string, language: string): Lines {
+export function highlightNow(source: string, language: string): Lines {
+  if (lastHighlight !== null && lastHighlight.source === source && lastHighlight.language === language) return lastHighlight.lines;
+  let lines: Lines;
   try {
-    return linesFromRuns(source, highlightRuns(source, language));
+    lines = linesFromRuns(source, highlightRuns(source, language));
   } catch {
-    return plainLines(source);
+    lines = plainLines(source);
   }
-});
+  lastHighlight = { source, language, lines };
+  return lines;
+}

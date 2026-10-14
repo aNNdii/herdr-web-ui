@@ -18,7 +18,7 @@
  * and the page's queries map the frame to its slot (lib/frameField.ts `fieldAnchor`, lib/commentDom.ts). The row's field
  * is scrolled above a soft keyboard by the app (the page itself is pinned, lib/viewport.ts).
  */
-import { createContext, useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type RefObject } from "react";
+import { createContext, useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ReactElement, type RefObject } from "react";
 import { createPortal } from "react-dom";
 
 import "./FrameField.css";
@@ -169,7 +169,7 @@ export interface FieldFrame {
   /** the field in the frame has its size: the layer places its rows (and the room under the field's line) now */
   sized(): void;
   /** the viewer's scrolling body: the field is scrolled above a soft keyboard in it */
-  scroller: RefObject<HTMLElement>;
+  scroller: RefObject<HTMLElement | null>;
 }
 
 export const FieldFrameContext = createContext<FieldFrame | null>(null);
@@ -190,7 +190,7 @@ export const slotSized = (slot: Element): boolean => slot.hasAttribute(SLOT_SIZE
  * The code comment layer's frame (`row`): made in `host` once `wanted` (the mode is on) after the layer has painted, or at
  * once by `ensure` where a field opens first; kept until the layer goes, so a field with text typed stays as it was.
  */
-export function useFieldFrame(host: RefObject<HTMLDivElement>, wanted: boolean, scroller: RefObject<HTMLElement>, placeRows: RefObject<() => void>): FieldFrame {
+export function useFieldFrame(host: RefObject<HTMLDivElement | null>, wanted: boolean, scroller: RefObject<HTMLElement | null>, placeRows: RefObject<() => void>): FieldFrame {
   const id = useId();
   const frameRef = useRef<HTMLIFrameElement | null>(null);
   const t = useT();
@@ -282,7 +282,7 @@ const KEY_FIELDS = ["key", "code", "location", "repeat", "ctrlKey", "metaKey", "
  * the slot) or its `sheet` (a frame inside the slot). The slot is a Tab stop that hands its focus on to the field. Where
  * no frame can be made or written, the plain `CommentField` is drawn instead (`failed`).
  */
-export function FrameField({ draft, placement }: { draft: CommentDraft; placement: FramePlacement }): JSX.Element {
+export function FrameField({ draft, placement }: { draft: CommentDraft; placement: FramePlacement }): ReactElement {
   const t = useT();
   const shared = useContext(FieldFrameContext);
   const row = placement === "row" ? shared : null;

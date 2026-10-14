@@ -14,7 +14,7 @@
  * view without wrapping, a chat code block or table) has scrolled out of view sideways
  * (`visiblePoint`, `visibleAnchor`).
  */
-import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type FocusEvent, type PointerEvent, type ReactNode, type RefObject } from "react";
+import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type FocusEvent, type PointerEvent, type ReactNode, type ReactElement, type RefObject } from "react";
 import { MessageSquare } from "lucide-react";
 
 import "./CommentPins.css";
@@ -150,7 +150,7 @@ function sidewaysBox(range: Range, surface: Element): PinBox | null {
  */
 export function CommentPins({ surface, comments, openId, pendingPoint, popover, onPin }: {
   /** the scrolling surface carrying `data-comment-surface` */
-  surface: RefObject<HTMLElement>;
+  surface: RefObject<HTMLElement | null>;
   /** the comments shown, any order */
   comments: readonly PinnedComment[];
   /**
@@ -165,7 +165,7 @@ export function CommentPins({ surface, comments, openId, pendingPoint, popover, 
   /** draws the open comment's popover; called with "dialog" when it has no pin or the screen is narrow */
   popover: ((placement: PinPlacement) => ReactNode) | null;
   onPin: (id: string, pin: HTMLButtonElement) => void;
-}): JSX.Element {
+}): ReactElement {
   const narrow = useMediaQuery("(max-width: 640px)");
   const coarse = useMediaQuery("(pointer: coarse)");
   const coarseRef = useRef(coarse);
@@ -397,7 +397,7 @@ const focusOn = (event: FocusEvent<HTMLElement>): void => {
 const focusOff = (event: FocusEvent<HTMLElement>): void => activateComment(event.currentTarget, "focus", false);
 
 /** A saved comment's pin: opens its popover. Keyed by anchor, so an edit (a new id) keeps the button and its focus. */
-function Pin({ comment, left, top, onPin }: { comment: PinnedComment; left: number; top: number; onPin: (id: string, pin: HTMLButtonElement) => void }): JSX.Element {
+function Pin({ comment, left, top, onPin }: { comment: PinnedComment; left: number; top: number; onPin: (id: string, pin: HTMLButtonElement) => void }): ReactElement {
   const pin = useRef<HTMLButtonElement>(null);
   // a pin that leaves (its comment deleted or sent, its text gone) gets no pointerleave or blur: release what it held
   // while it is still in the document, or its text stays up (React runs a layout cleanup before it removes the element)
@@ -431,7 +431,7 @@ function Pin({ comment, left, top, onPin }: { comment: PinnedComment; left: numb
  * the drag let go, under the pointer: a press there goes through it to the text (CommentPins.css), so the second click
  * of a double click selects the word under it, as it would with no pin.
  */
-function PendingPin({ left, top }: { left: number; top: number }): JSX.Element {
+function PendingPin({ left, top }: { left: number; top: number }): ReactElement {
   return <button type="button" className={`${PIN_CLASS} ${PENDING_PIN_CLASS}`} style={{ left, top }} tabIndex={-1} aria-hidden="true">
     <MessageSquare aria-hidden="true" strokeWidth={2.75} />
   </button>;

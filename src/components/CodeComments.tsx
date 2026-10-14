@@ -23,7 +23,7 @@
  *   least `--fs-input`, so iOS does not zoom.
  * - What each comment is on is highlighted (`useFileCommentHighlights`), the line of a new one as pending.
  */
-import { Fragment, memo, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type FocusEvent, type PointerEvent as ReactPointerEvent, type ReactNode, type RefObject } from "react";
+import { Fragment, memo, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type FocusEvent, type PointerEvent as ReactPointerEvent, type ReactElement, type ReactNode, type RefObject } from "react";
 import { Trash2 } from "lucide-react";
 
 import "./CodeComments.css";
@@ -54,8 +54,8 @@ export interface CodeCommentsOptions {
   /** the file's comments as placed (`useFileComments`) */
   comments: FileComments;
   /** the viewer's scrolling body and the code's <pre> */
-  surface: RefObject<HTMLDivElement>;
-  content: RefObject<HTMLPreElement>;
+  surface: RefObject<HTMLDivElement | null>;
+  content: RefObject<HTMLPreElement | null>;
   /** where the focus goes when a Delete leaves no card (the header's comment-mode toggle; null: it is let go) */
   focusFallback: () => HTMLElement | null;
 }
@@ -73,7 +73,7 @@ const pointerOn = (event: ReactPointerEvent<HTMLElement>): void => {
 const pointerOff = (event: ReactPointerEvent<HTMLElement>): void => activateComment(event.currentTarget, "pointer", false);
 
 /** A saved comment's card in its row: `children` are its text and Delete. The card is the element the highlight reads the comment from (`data-comment-id`). */
-function CodeCommentCard({ id, current, onOpen, children }: { id: string; current: boolean; onOpen: (() => void) | undefined; children: ReactNode }): JSX.Element {
+function CodeCommentCard({ id, current, onOpen, children }: { id: string; current: boolean; onOpen: (() => void) | undefined; children: ReactNode }): ReactElement {
   const card = useRef<HTMLDivElement>(null);
   // a card that leaves (deleted, opened to edit, the mode turned off) gets no pointerleave or blur: release what it held
   // while it is still in the document, or its text stays up (React runs a layout cleanup before it removes the element)
@@ -173,7 +173,7 @@ interface PlacedPass {
  * stops after measuring the rows: the lines did not move, so the rows' tops, the ⊕ and the press's tint stand.
  */
 const CodeCommentLayer = memo(function CodeCommentLayer({ surface, pre, rows, mode, openLine, currentId, field, overlay, onAdd, onOpen, onDelete, onPlaced, layerRef }: {
-  surface: RefObject<HTMLDivElement>;
+  surface: RefObject<HTMLDivElement | null>;
   pre: HTMLElement;
   rows: readonly LayerRow[];
   /** the comment mode is on: a card opens to edit and has its Delete, and the ⊕ is there (a Tab stop, shown on a hovered or keyboard line) */
@@ -191,7 +191,7 @@ const CodeCommentLayer = memo(function CodeCommentLayer({ surface, pre, rows, mo
   onDelete: (comment: FileComment) => void;
   /** after each pass: the press's tint follows the lines */
   onPlaced: () => void;
-  layerRef: RefObject<HTMLDivElement>;
+  layerRef: RefObject<HTMLDivElement | null>;
 }) {
   const t = useT();
   // a card's text names it for its Delete (`aria-describedby`): cards of one line read alike otherwise
