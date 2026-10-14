@@ -384,7 +384,7 @@ export function Composer({
     const inChat = notes.length + missing.length;
     const stops = inChat + files.length;
     if (stops === 0) return;
-    // the viewer walked its file's comments since (its counter, or a stop of this walk): this walk goes on after the one it showed last
+    // the viewer showed a file comment of this walk last (`lastFileStop`): this walk goes on after that one
     const last = lastFileStop.get(commentOwner);
     lastFileStop.delete(commentOwner);
     const shownLast = last === undefined ? -1 : files.findIndex((comment) => comment.id === last);

@@ -1,0 +1,30 @@
+/* The code view's comment field in a frame of its own (FrameField.tsx). In the page: the frame (`iframe.comment-frame`)
+   and the slot that holds the field's place in the card. In the frame's own document, which carries the app's CSS:
+   its `<html>` (`.comment-frame-doc`) and its body (`body.comment-frame`, `.is-row` or `.is-sheet`), on no ground of their
+   own, so the card or the sheet shows through as it did around the field. */
+iframe.comment-frame {
+  display: block;
+  width: 100%;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+
+/* the slot passes a focus on to the field at once: it shows none of its own */
+.comment-field-slot {
+  display: block;
+  min-width: 0;
+}
+
+.comment-field-slot:focus {
+  outline: none;
+}
+
+.comment-frame-doc,
+.comment-frame-doc body {
+  height: auto;
+  margin: 0;
+  overflow: hidden;
+  background: transparent;
+}

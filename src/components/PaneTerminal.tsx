@@ -51,6 +51,7 @@ import { adjustTerminalGlyphs } from "../lib/terminalGlyphs.ts";
 import { terminalLabel } from "../lib/terminalLabel.ts";
 import { useMediaQuery } from "../lib/useMediaQuery.ts";
 import { modalOpen } from "../lib/focus.ts";
+import { watchWindowPresence } from "../lib/presence.ts";
 import { pinchFontSize } from "../lib/pinchFontSize.ts";
 
 /** How long a resize must rest before the grid refits and the pty follows it. */
@@ -1560,8 +1561,8 @@ export function PaneTerminal({
     const onPointer = (event: PointerEvent): void => {
       if (releasedRef.current && stackRef.current?.contains(event.target as Node)) back();
     };
-    window.addEventListener("focus", back);
-    window.addEventListener("blur", leave);
+    // the window left and come back to, the page's own frames counted as the page (lib/presence.ts)
+    const stopWindowWatch = watchWindowPresence(leave, back);
     window.addEventListener("pointerdown", onPointer, { capture: true });
     document.addEventListener("visibilitychange", onVisibility);
 
@@ -1592,8 +1593,7 @@ export function PaneTerminal({
       cancelLeaveRef.current = () => {};
       watchRef.current = () => {};
       onWatchedResize.dispose();
-      window.removeEventListener("focus", back);
-      window.removeEventListener("blur", leave);
+      stopWindowWatch();
       window.removeEventListener("pointerdown", onPointer, { capture: true });
       document.removeEventListener("visibilitychange", onVisibility);
       onModifiedEnter.dispose();

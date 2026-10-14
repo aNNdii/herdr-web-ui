@@ -2,23 +2,24 @@
  * The file viewer's comment layer: comments on lines of the file the viewer shows, kept with the
  * pane it was opened from. It finds this file's comments in the pane's store and places each one
  * on the lines it was written on, or where those lines moved (`placeFileComment`); one that is
- * nowhere to be found is outdated. It highlights what each comment is on, and shows a pin on each
- * comment's text, where it was made or after its end (CommentPins.tsx, as in the chat). The viewer's one comment popover
- * (`useCommentSurface`) is opened by a pin, by a mouse's drag over text, or by a click or tap on a line (the code
- * view's line, the preview's line element; a preview paragraph is one block). The
- * viewer's header walks the file's comments (`useFileCommentWalk`), an outdated one in a dialog.
+ * nowhere to be found is outdated. In the Markdown preview it highlights what each comment is on, and shows a pin on each
+ * comment's text, where it was made or after its end (CommentPins.tsx, as in the chat). The preview's one comment popover
+ * (`useCommentSurface`) is opened by a pin, by a mouse's drag over text, or by a click or tap on a line element (a
+ * paragraph is one block). The code view has its own layer (CodeComments.tsx), which shares the comments, their targets
+ * (`linesTarget`, `targetOf`) and their highlights (`useFileCommentHighlights`) with it. The composer's walk stops at the
+ * file's comments (`useFileCommentWalk`): on a pin in the preview, on a card in the code view, an outdated one in a dialog.
  */
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type MutableRefObject, type ReactNode, type RefObject } from "react";
 
 import { blockComments, isReplyComment, quoteExcerpt, useBlockComments } from "../lib/blockComments.ts";
 import { markCurrentComment, PENDING_COMMENT_ID, showWalkStop } from "../lib/commentHighlight.ts";
-import { changedField, pinById, revealField } from "../lib/commentDom.ts";
+import { pinById } from "../lib/commentDom.ts";
 import { popoverOutlived } from "../lib/commentPopover.ts";
 import { pointOnText } from "../lib/commentSelection.ts";
 import { lastFileStop } from "../lib/commentWalk.ts";
 import { clickedLines, lineElementsIn, lineRanges, measureFileSelection, unfoldAt } from "../lib/fileCommentDom.ts";
 import { watchFileCommentHighlights } from "../lib/fileCommentHighlight.ts";
-import { fileAnchor, fileCommentAt, placeFileComment, sortFileComments, type FileComment, type FileTarget, type FileView, type LineRange } from "../lib/fileComments.ts";
+import { fileAnchor, fileCommentAt, placeFileComment, type FileComment, type FileTarget, type FileView, type LineRange } from "../lib/fileComments.ts";
 import { useT } from "../lib/i18n.ts";
 import { useSettings } from "../lib/settings.ts";
 import { CommentPopover } from "./CommentPopover.tsx";
@@ -67,7 +68,7 @@ const persistFile = blockComments.saveFile.bind(blockComments);
  * The target a stored comment was written on, to edit it: with its stored anchor, so the edit
  * replaces this comment wherever a move left it (`saveFile`), never the one now on its lines' anchor.
  */
-function targetOf(comment: FileComment): FileTarget {
+export function targetOf(comment: FileComment): FileTarget {
   const { path, label, view, lines, source, quoteLines, selection, anchor, point } = comment;
   return { path, label, view, lines, source, quoteLines, anchor, ...(selection === undefined ? {} : { selection }), ...(point === undefined ? {} : { point }) };
 }
@@ -83,6 +84,24 @@ function pointed(root: Element, target: FileTarget, at: { x: number; y: number }
 
 /** The anchor the pin of a comment on `target` carries: a stored comment's own, else the one a save gives it (`saveFile`). */
 const anchorOf = (target: FileTarget): string => target.anchor ?? fileAnchor(target);
+
+/**
+ * The target `found` lines make in `scope`'s file as loaded, with the pane it is kept in: the file's raw lines there as
+ * its source, `found`'s quote and selection. Null without a scope, or on the cut-off last line of a file cut short (past
+ * `scope.loaded`). The preview's layer (`useFileCommentLayer`) and the code view's (`useCodeComments`) both build their
+ * targets here.
+ */
+export function linesTarget(scope: FileCommentScope | null, found: { lines: LineRange; quoteLines: string[]; selection?: FileTarget["selection"] }): { owner: string; target: FileTarget } | null {
+  if (scope === null || found.lines[1] > scope.loaded) return null;
+  return {
+    owner: scope.owner,
+    target: {
+      path: scope.path, label: scope.label, view: scope.view, lines: found.lines,
+      source: scope.lines.slice(found.lines[0] - 1, found.lines[1]), quoteLines: found.quoteLines,
+      ...(found.selection === undefined ? {} : { selection: found.selection }),
+    },
+  };
+}
 
 /**
  * The comments of `scope`'s file in its pane: those shown (placed, of this view), those outdated
@@ -121,25 +140,24 @@ export function useFileComments(scope: FileCommentScope | null): FileComments {
 }
 
 /**
- * The comment layer of the viewer's `surface` (its scrolling body) over the file's `content` (the code's `<pre>`, or the
- * preview's `.markdown` root), for `scope`'s file; the view takes no comments while `scope` is null. The comments are
+ * The Markdown preview's comment layer: the viewer's `surface` (its scrolling body) over the preview's `content` (its
+ * `.markdown` root), for `scope`'s file; the viewer passes null for the code view, which has its own (CodeComments.tsx),
+ * and the preview takes no comments while `scope` is null. The comments are
  * wired by `useCommentSurface`: a click on a line comments on all of it, as a click on a reply's block does in the chat,
  * among the lines loaded whole (`clickedLines`); a mouse's drag over text on what it selected (`measureFileSelection`).
  * `overlay` goes into the surface (the pins with the open
  * popover); `surfaceProps` go on the surface; `escape` is the viewer's Escape asked first (`popoverEscape`): it closes
  * an open popover with its text unchanged, wherever the focus is, and keeps a changed one, its field taking the focus
- * back, so the viewer never closes and loses that text; true while a popover had it, and the viewer then stays;
- * `comments` are the file's comments as placed, for the header's counter and walk (none while comments are off).
+ * back, so the viewer never closes and loses that text; true while a popover had it, and the viewer then stays.
+ * `comments` are the file's comments as placed (`useFileComments`, which the viewer calls once for both views).
  */
-export function useFileCommentLayer(scope: FileCommentScope | null, surface: RefObject<HTMLDivElement>, content: RefObject<HTMLElement>): {
+export function useFileCommentLayer(scope: FileCommentScope | null, surface: RefObject<HTMLDivElement>, content: RefObject<HTMLElement>, comments: FileComments): {
   overlay: ReactNode;
   surfaceProps: CommentSurfaceProps;
   escape: () => boolean;
-  comments: FileComments;
 } {
   const t = useT();
   const { settings } = useSettings();
-  const comments = useFileComments(scope);
   const { shown } = comments;
   // read as a click or a drag lets go, which comes after the render that drew what it landed on
   const scopeRef = useRef(scope);
@@ -158,24 +176,13 @@ export function useFileCommentLayer(scope: FileCommentScope | null, surface: Ref
     comment: comment.comment,
   })), [shown, t]);
 
-  /** The target `found` lines make in the file loaded; null without a scope, or on the cut-off last line of a file cut short. */
-  const linesTarget = (found: { lines: LineRange; quoteLines: string[]; selection?: FileTarget["selection"] }): { owner: string; target: FileTarget } | null => {
-    const current = scopeRef.current;
-    if (current === null || found.lines[1] > current.loaded) return null;
-    return {
-      owner: current.owner,
-      target: {
-        path: current.path, label: current.label, view: current.view, lines: found.lines,
-        source: current.lines.slice(found.lines[0] - 1, found.lines[1]), quoteLines: found.quoteLines,
-        ...(found.selection === undefined ? {} : { selection: found.selection }),
-      },
-    };
-  };
+  /** The target `found` lines make in the file as it is loaded now (`linesTarget`). */
+  const targetOn = (found: Parameters<typeof linesTarget>[1]): ReturnType<typeof linesTarget> => linesTarget(scopeRef.current, found);
 
   // the new comment being written on this file and view, shown pending by the highlights' watcher (below). One opened on
   // another file or view (the viewer moved on meanwhile) is not on these lines
   const pendingRef = useRef<{ owner: string; target: FileTarget } | null>(null);
-  const watcher = useRef<ReturnType<typeof watchFileCommentHighlights> | null>(null);
+  const watcher = useRef<FileHighlightWatcher | null>(null);
   const applyPending = (): void => {
     const pending = pendingRef.current;
     const current = scopeRef.current;
@@ -206,7 +213,7 @@ export function useFileCommentLayer(scope: FileCommentScope | null, surface: Ref
     targetAtClick: (element) => {
       const root = content.current;
       const found = root === null ? null : clickedLines(root, element);
-      return found === null ? null : linesTarget(found);
+      return found === null ? null : targetOn(found);
     },
     selection: {
       // a selection in the loaded lines of the file; one in a popover, or on the cut-off last line, is none
@@ -215,7 +222,7 @@ export function useFileCommentLayer(scope: FileCommentScope | null, surface: Ref
         const found = root === null ? null : measureFileSelection(selection, root);
         return found !== null && found.lines[1] <= (scopeRef.current?.loaded ?? 0) ? found : null;
       },
-      target: linesTarget,
+      target: targetOn,
     },
     describe: ({ target, commentId }) => ({
       quote: { text: target.quoteLines.join("\n") },
@@ -234,48 +241,60 @@ export function useFileCommentLayer(scope: FileCommentScope | null, surface: Ref
     },
   });
 
-  // the content as drawn now: another one (a view switched, a file reloaded) is watched anew
-  const [root, setRoot] = useState<HTMLElement | null>(null);
-  useLayoutEffect(() => { setRoot(scope === null ? null : content.current); });
-
   // what each comment is on is highlighted, and the lines a new comment is being written on (`showPending` above, in
   // the commit that opens it, before its popover is placed: CommentPins waits for this highlight to put the provisional
   // pin and the popover beside it)
+  const root = useFileCommentHighlights(scope !== null, surface, content, shown, watcher);
+  // a new watcher, or another file or view: the pending comment is shown again where it is on these lines, else not
+  useLayoutEffect(applyPending, [root, owner, path, view]);
+
+  return { overlay, surfaceProps, escape };
+}
+
+/** What `watchFileCommentHighlights` returns: `show` the comments, `setPending` the one being written. */
+export type FileHighlightWatcher = ReturnType<typeof watchFileCommentHighlights>;
+
+/**
+ * Highlights what each of `shown` is on in the file's `content` while the view takes comments (`active`), through
+ * `watchFileCommentHighlights` on `surface` (the viewer's body); `watcher` holds the watcher while there is one, for its
+ * `setPending`. Returns the content root it watches, as drawn now (another one, a view switched or a file reloaded, is
+ * watched anew): a caller shows its pending comment again when it changes. Used by the preview's layer and the code's;
+ * `focusMode` goes on to `SurfaceMarks` (lib/commentHighlight.ts), which says when to turn it off.
+ */
+export function useFileCommentHighlights(active: boolean, surface: RefObject<HTMLDivElement>, content: RefObject<HTMLElement>, shown: readonly PlacedFileComment[], watcher: MutableRefObject<FileHighlightWatcher | null>, focusMode = true): HTMLElement | null {
+  const [root, setRoot] = useState<HTMLElement | null>(null);
+  useLayoutEffect(() => { setRoot(active ? content.current : null); });
   useLayoutEffect(() => {
     const body = surface.current;
     if (root === null || body === null) return;
-    const watching = watchFileCommentHighlights(body, root);
+    const watching = watchFileCommentHighlights(body, root, focusMode);
     watcher.current = watching;
     return () => {
       watching.dispose();
       if (watcher.current === watching) watcher.current = null;
     };
-  }, [root, surface]);
+  }, [root, surface, watcher, focusMode]);
   const marks = useMemo(() => shown.map(({ comment, lines }) => ({ id: comment.id, lines, selection: comment.selection })), [shown]);
-  useLayoutEffect(() => { watcher.current?.show(marks); }, [marks, root]);
-  // a new watcher, or another file or view: the pending comment is shown again where it is on these lines, else not
-  useLayoutEffect(applyPending, [root, owner, path, view]);
-
-  return { overlay, surfaceProps, escape, comments };
+  useLayoutEffect(() => { watcher.current?.show(marks); }, [marks, root, watcher]);
+  return root;
 }
 
-/** How long a stop waits for its pin to be drawn (a view switched, a code block unfolded, the pins placed) before it gives up. */
+/** How long a stop waits for its pin or card to be drawn (a view switched, a code block unfolded, the pins placed) before it gives up. */
 const STOP_WAIT_MS = 1000;
 
 /**
- * The walk through the comments of the viewer's file, one stop per tap of the header's counter, in
- * the order they are sent (`sortFileComments`), from the one after the stop visited last
- * (`lastFileStop`), wrapping. A stop on a comment written in the other view switches the view
- * (`showView`) and goes on once its pin is drawn; a code block of the preview that folds its lines
- * away is unfolded first (`unfoldAt`). A stop opens its pin's popover to edit (`pin.click()`) and marks the
- * pin current, scrolled to (`showWalkStop`); an outdated one opens in a dialog, its field filled, with a note that its
- * part of the file has changed, and one whose pin is not drawn within `STOP_WAIT_MS` without a note. `goTo` is one stop, by comment id; `openInEditor` opens a stored
- * comment in that dialog with another note, where its file cannot be shown to place it (the viewer
- * opened at it on a file it cannot read); `editor` goes into the viewer, and `editorOpen` keeps its
- * Escape for the dialog. The dialog closes as the popover does: with comments turned off, and, while
- * nothing is typed in it, once its comment is no longer stored.
+ * The composer's walk into the viewer's file: `goTo` is one stop, by comment id (the composer's bar walks the comments in
+ * the order they are sent, `sortFileComments`). A stop on a comment written in the other view switches the view
+ * (`showView`) and goes on once it is drawn. In the code view it stands on the comment's card (`codeStop`, CodeComments.tsx);
+ * in the preview a code block that folds its lines away is unfolded first (`unfoldAt`), then the pin's popover opens to edit
+ * (`pin.click()`) and the pin is marked current, scrolled to (`showWalkStop`). An outdated comment opens in a dialog, its
+ * field filled, with a note that its part of the file has changed, and one whose pin or card is not drawn within
+ * `STOP_WAIT_MS` without a note. `openInEditor` opens a stored comment in that dialog with another note, where its file
+ * cannot be shown to place it (the viewer opened at it on a file it cannot read); `editor` goes into the viewer, and
+ * `editorOpen` keeps its Escape for the dialog. The dialog closes as the popover does: with comments turned off, and,
+ * while nothing is typed in it, once its comment is no longer stored.
  */
-export function useFileCommentWalk({ owner, view, comments, surface, content, showView }: {
+export function useFileCommentWalk({ owner, view, comments, surface, content, showView, codeStop }: {
   /** the pane's store owner; null without a pane */
   owner: string | null;
   /** the view shown now; null while it takes no comments */
@@ -287,7 +306,9 @@ export function useFileCommentWalk({ owner, view, comments, surface, content, sh
   content: RefObject<HTMLElement>;
   /** shows the file in `view` */
   showView: (view: FileView) => void;
-}): { next: () => void; goTo: (id: string) => boolean; openInEditor: (comment: FileComment, note: string) => void; editor: ReactNode; editorOpen: boolean } {
+  /** stands on comment `id` in the code view (`useCodeComments().stop`); false while its card is not drawn */
+  codeStop: (id: string) => boolean;
+}): { goTo: (id: string) => boolean; openInEditor: (comment: FileComment, note: string) => void; editor: ReactNode; editorOpen: boolean } {
   const t = useT();
   const { settings } = useSettings();
   // the comment open in the dialog, and why it is there rather than on its lines
@@ -295,7 +316,7 @@ export function useFileCommentWalk({ owner, view, comments, surface, content, sh
   const openings = useRef(0);
   // what its field holds (`onText`): a change typed keeps the dialog when its comment leaves the store
   const modalText = useRef("");
-  // where the focus goes back to as the dialog closes: what had it as the dialog opened (the counter)
+  // where the focus goes back to as the dialog closes: what had it as the dialog opened
   const returnTo = useRef<HTMLElement | null>(null);
   const showModal = useCallback((comment: FileComment, note?: string): void => {
     returnTo.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
@@ -307,12 +328,10 @@ export function useFileCommentWalk({ owner, view, comments, surface, content, sh
     if (modal === null) return;
     if (!settings.comments || popoverOutlived({ commentId: modal.comment.id, initialComment: modal.comment.comment }, stored, modalText.current)) setModal(null);
   }, [modal, settings.comments, stored]);
-  const latest = useRef({ owner, view, comments, showView, content });
-  latest.current = { owner, view, comments, showView, content };
-  // the stop's place in the walk where its id is gone (an edit gives a comment a new id)
-  const position = useRef(-1);
+  const latest = useRef({ owner, view, comments, showView, content, codeStop });
+  latest.current = { owner, view, comments, showView, content, codeStop };
   const frame = useRef(0);
-  /** The pin the walk stands on (`is-current`, set by hand as the composer's walk does), until the next stop or a click. */
+  /** The preview's pin the walk stands on (`is-current`, set by hand), until the next stop or a click. The code view's card is `codeStop`'s. */
   const current = useRef<HTMLElement | null>(null);
   const clearCurrent = useCallback((): void => {
     const note = current.current;
@@ -322,7 +341,7 @@ export function useFileCommentWalk({ owner, view, comments, surface, content, sh
     current.current = null;
   }, [surface]);
   useEffect(() => {
-    // a click, not a press, as in the composer's walk: in the capture phase, so the counter's own click clears the old mark first.
+    // a click, not a press, as in the composer's walk: in the capture phase, so the click that walks on clears the old mark first.
     // A stop still waiting for its pin is given up too: what was clicked meanwhile is not covered by a dialog later. The
     // stop's own clicks (its pin, a Show all) come while it is not waiting
     const onClick = (): void => {
@@ -339,9 +358,10 @@ export function useFileCommentWalk({ owner, view, comments, surface, content, sh
   }, [clearCurrent]);
 
   /**
-   * Stands on the pin of comment `id` once it is drawn in the view shown: its lines unfolded first (`unfoldAt`), then
-   * its popover opened and the pin marked; after `STOP_WAIT_MS` without one, the comment opens in the dialog. The scroll that brings the popover into
-   * view waits for the walk's own (CommentPins.tsx).
+   * Stands on comment `id` once it is drawn in the view shown: in the code view its card (`codeStop`); in the preview its
+   * pin, its lines unfolded first (`unfoldAt`), then its popover opened and the pin marked. Tried each frame; after
+   * `STOP_WAIT_MS` without either, the comment opens in the dialog. The scroll that brings the popover into view waits
+   * for the walk's own (CommentPins.tsx).
    */
   const stopAt = useCallback((id: string): void => {
     window.cancelAnimationFrame(frame.current);
@@ -350,22 +370,26 @@ export function useFileCommentWalk({ owner, view, comments, surface, content, sh
       frame.current = 0;
       const body = surface.current;
       const root = latest.current.content.current;
-      const placed = latest.current.comments.shown.find(({ comment }) => comment.id === id);
-      const pin = body === null || root === null || placed === undefined || !unfoldAt(root, placed.lines[1]) ? null
-        : pinById(body, id);
-      if (body !== null && pin !== null) {
-        clearCurrent();
-        // its popover opens to edit, and its field takes the focus as it mounts. The pin is marked after the click:
-        // the click is one, and the document's click listener above clears the mark
-        pin.click();
-        pin.classList.add("is-current");
-        current.current = pin;
-        showWalkStop(body, pin);
-        return;
+      if (latest.current.view === "code") {
+        if (latest.current.codeStop(id)) return;
+      } else {
+        const placed = latest.current.comments.shown.find(({ comment }) => comment.id === id);
+        const pin = body === null || root === null || placed === undefined || !unfoldAt(root, placed.lines[1]) ? null
+          : pinById(body, id);
+        if (body !== null && pin !== null) {
+          clearCurrent();
+          // its popover opens to edit, and its field takes the focus as it mounts. The pin is marked after the click:
+          // the click is one, and the document's click listener above clears the mark
+          pin.click();
+          pin.classList.add("is-current");
+          current.current = pin;
+          showWalkStop(body, pin);
+          return;
+        }
       }
       if (performance.now() < deadline) { frame.current = window.requestAnimationFrame(attempt); return; }
-      // no pin by then (its text is not drawn: a line the preview has no element for, a view that did not switch):
-      // it opens in the dialog, as a comment without a pin does
+      // no pin or card by then (its text is not drawn: a line the preview has no element for, a view that did not switch,
+      // a file with too many lines for a card): it opens in the dialog, as a comment without a pin does
       const comment = latest.current.comments.all.find((c) => c.id === id);
       if (comment !== undefined) showModal(comment);
     };
@@ -397,24 +421,6 @@ export function useFileCommentWalk({ owner, view, comments, surface, content, sh
     showModal(comment, note);
   }, [clearCurrent, showModal]);
 
-  const next = useCallback((): void => {
-    const { owner, comments } = latest.current;
-    if (owner === null) return;
-    // a comment being written keeps its place: the walk gives the focus back to it, as the composer's does
-    const unsaved = changedField(surface.current);
-    if (unsaved !== null) {
-      revealField(unsaved);
-      return;
-    }
-    const stops = sortFileComments(comments.all);
-    if (stops.length === 0) return;
-    const last = lastFileStop.get(owner);
-    const found = stops.findIndex((c) => c.id === last);
-    const at = ((found >= 0 ? found : position.current) + 1) % stops.length;
-    position.current = at;
-    goTo(stops[at]!.id);
-  }, [goTo, surface]);
-
   const closeEditor = useCallback(() => setModal(null), []);
   const editor = owner !== null && modal !== null && settings.comments && <CommentPopover
     key={modal.opening}
@@ -435,9 +441,9 @@ export function useFileCommentWalk({ owner, view, comments, surface, content, sh
       setModal(null);
     }}
     onClose={closeEditor}
-    // asked after the commit that closes it: what had the focus as it opened (the counter), while it is still there
+    // asked after the commit that closes it: what had the focus as it opened, while it is still there
     opener={() => returnTo.current?.isConnected ? returnTo.current : null}
     fallback={() => null}
   />;
-  return { next, goTo, openInEditor, editor, editorOpen: modal !== null };
+  return { goTo, openInEditor, editor, editorOpen: modal !== null };
 }

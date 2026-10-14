@@ -24,6 +24,7 @@ import { PENDING_PIN_CLASS, PIN_CLASS, PINS_CLASS, pinAttrs } from "../lib/comme
 import { besidePlace, endTip, lastLine, nearestScroller, pinRightMargin, placePins, pointAt, scrollsSideways, visibleAnchor, visiblePoint, type CommentPoint, type PinAnchor, type PinBox, type PinPlace } from "../lib/commentPins.ts";
 import { textBox, textRects } from "../lib/commentSelection.ts";
 import { useMediaQuery } from "../lib/useMediaQuery.ts";
+import type { PopoverPlacement } from "./CommentPopover.tsx";
 
 /** A comment the layer shows a pin for. */
 export interface PinnedComment {
@@ -35,8 +36,8 @@ export interface PinnedComment {
   point?: CommentPoint;
 }
 
-/** Where the open comment's popover is drawn: next to its pin, or as a dialog of its own (centred; a sheet on a phone). */
-export type PopoverPlacement = "popover" | "dialog";
+/** Where the pin layer draws the open comment's popover: next to its pin, or as a dialog of its own (centred; a sheet on a phone). */
+export type PinPlacement = Extract<PopoverPlacement, "popover" | "dialog">;
 
 /** A pin's side (`var(--space-5)` in CommentPins.css). */
 const PIN_SIZE_PX = 20;
@@ -162,7 +163,7 @@ export function CommentPins({ surface, comments, openId, pendingPoint, popover, 
   /** where the pin of the comment being written points (its `CommentPoint`: a block clicked, a selection a mouse dragged); none: after the end of its text */
   pendingPoint?: CommentPoint;
   /** draws the open comment's popover; called with "dialog" when it has no pin or the screen is narrow */
-  popover: ((placement: PopoverPlacement) => ReactNode) | null;
+  popover: ((placement: PinPlacement) => ReactNode) | null;
   onPin: (id: string, pin: HTMLButtonElement) => void;
 }): JSX.Element {
   const narrow = useMediaQuery("(max-width: 640px)");
@@ -299,7 +300,7 @@ export function CommentPins({ surface, comments, openId, pendingPoint, popover, 
   const openPin = pinOfOpen ?? heldOpenPin;
   // a narrow screen draws every popover as a dialog (the sheet): there is no pin to wait for, so it is drawn in the
   // commit that opens it, and its field takes the focus inside the tap that opened it, where iOS raises its keyboard
-  const placement: PopoverPlacement | null = openId === null || popover === null ? null
+  const placement: PinPlacement | null = openId === null || popover === null ? null
     : narrow ? "dialog" : !settled ? null : openPin !== undefined ? "popover" : "dialog";
 
   // the popover beside its pin (`besidePlace`: to its right, top-aligned, else to its left, else below it), placed before

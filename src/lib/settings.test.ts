@@ -561,6 +561,17 @@ it("keeps the Markdown preview's width to readable or full, readable by default"
   for (const bad of ["narrow", "medium", "wide", "", null, 80]) expect(sanitizeSettings({ markdownWidth: bad }).markdownWidth).toBe("readable");
 });
 
+it("keeps the code view's comment settings, off, mouse-only and long press with a sheet by default", () => {
+  expect(DEFAULT_SETTINGS.codeCommentMode).toBe(false);
+  expect(DEFAULT_SETTINGS.codeCommentLineClick).toBe(false);
+  expect(DEFAULT_SETTINGS.mobileCommentGesture).toBe("hold");
+  expect(DEFAULT_SETTINGS.mobileCommentInput).toBe("sheet");
+  expect(sanitizeSettings({ codeCommentMode: true, codeCommentLineClick: true, mobileCommentGesture: "tap", mobileCommentInput: "inline" }))
+    .toMatchObject({ codeCommentMode: true, codeCommentLineClick: true, mobileCommentGesture: "tap", mobileCommentInput: "inline" });
+  expect(sanitizeSettings({ codeCommentMode: "on", codeCommentLineClick: 1, mobileCommentGesture: "press", mobileCommentInput: "modal" }))
+    .toMatchObject({ codeCommentMode: false, codeCommentLineClick: false, mobileCommentGesture: "hold", mobileCommentInput: "sheet" });
+});
+
 describe("comments", () => {
   it("is on by default and keeps a stored choice", () => {
     expect(sanitizeSettings({}).comments).toBe(true);

@@ -70,14 +70,14 @@ class FileHighlights {
  * carrying `data-comment-surface`) until `dispose` runs; `setPending` shows the one being written
  * (null: none) with the stronger tint. The ranges are rebuilt at most once per frame after a call
  * to either or a change in `content`'s DOM (a file reloaded, a preview
- * rendered again). A rewrap needs nothing: a range follows its text.
+ * rendered again). A rewrap needs nothing: a range follows its text. `focusMode` is `SurfaceMarks`'s.
  */
-export function watchFileCommentHighlights(surface: Element, content: Element): {
+export function watchFileCommentHighlights(surface: Element, content: Element, focusMode = true): {
   show(comments: readonly ShownFileComment[]): void;
   setPending(comment: ShownFileComment | null): void;
   dispose(): void;
 } {
-  const marks = new SurfaceMarks(surface);
+  const marks = new SurfaceMarks(surface, focusMode);
   const highlights = new FileHighlights(marks, content);
   // any change in the content can move or end a range: the pins are not in it (they lie in the surface's pin layer)
   const watching = watchSurface(marks, content, () => highlights.rebuild());

@@ -32,7 +32,7 @@ export interface FocusTrapOptions {
 }
 
 /** The tab stops a user can actually land on, in order: rendered, and not disabled or skipped. */
-function tabStops(surface: HTMLElement): HTMLElement[] {
+export function tabStops(surface: HTMLElement): HTMLElement[] {
   return [...surface.querySelectorAll<HTMLElement>(FOCUSABLE)].filter((node) => {
     if (node.hasAttribute("disabled") || node.getAttribute("aria-hidden") === "true") return false;
     if (node.tabIndex < 0) return false;

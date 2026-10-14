@@ -535,7 +535,8 @@ try {
   assert.equal(await slowNote.locator(".visually-hidden").innerText(), "Too long to highlight", "a screen reader still hears it");
   assert.equal(await slow.locator(".hl-note").count(), 0, "the note is not repeated under the code");
   await slow.locator(".file-viewer-text .hl-line").first().waitFor();
-  assert.equal(await slow.locator(".file-viewer-text code span:not(.hl-line)").count(), 0, "the source is plain");
+  // no token spans: only the lines and their chunks (HighlightedCode.tsx `chunked`)
+  assert.equal(await slow.locator(".file-viewer-text code span:not(.hl-line):not(.hl-chunk)").count(), 0, "the source is plain");
   assert.deepEqual(await frozen(), [], "no task held the page for a second");
   console.log("PASS A Markdown file the highlighter is slow on previews, its source stays plain, and the page never freezes");
   await page.getByRole("button", { name: "Close file", exact: true }).click();

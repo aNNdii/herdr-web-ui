@@ -12,6 +12,28 @@
   flex-direction: column;
 }
 
+/* a long file's code (FileViewer.tsx `data-tall`, more lines than one chunk, so taller than any screen): the viewer at its
+   largest height from the start, and the body takes what is left of it, never its content's height. A viewer that
+   grows with its content has Firefox lay out all of the code again on every change of a line's box (a comment's room),
+   to measure the body: about 130 ms at 20 000 lines. A shorter file keeps the viewer as tall as its content */
+.file-viewer[data-tall] {
+  height: min(92vh, 100%);
+}
+
+.file-viewer[data-tall] .file-viewer-body {
+  flex-basis: 0;
+}
+
+/* a desktop (a phone's sheet and a touch screen's full screen are below and in styles.css): the viewer hangs from the top,
+   at the gap a viewer of the largest height has when centred ((100vh - 92vh) / 2), and only grows or shrinks downward, so
+   a comment's row opening, the comment mode or the view switching never moves the text under the pointer */
+@media (min-width: 641px) {
+  .file-viewer-scrim {
+    align-items: flex-start;
+    padding-top: calc((100vh - 92vh) / 2);
+  }
+}
+
 .file-viewer-header {
   /* Only the body may shrink/scroll: large media must not collapse the controls. */
   flex: none;
@@ -114,30 +136,46 @@
 
 .file-viewer-group { gap: var(--space-1); }
 
-/* The counter of this file's comments: an icon button as the header's others, each tap a step of
-   the walk through them (FileComments.tsx `useFileCommentWalk`), with the count as a bubble on the
-   icon's top right, as an app's unread count. The words ("2 comments · 1 outdated") are its name and
-   tooltip. Placed from the button's middle, so the bubble sits on the icon at every button size */
+/* The code view's comment mode (CodeComments.tsx): a toggle as the header's other icon buttons, pressed while the mode
+   is on, with the file's comment count as a badge on its top right corner, ringed in the header's surface, as an app's
+   unread count: the accent while the mode is on, neutral while it is off. The words ("Comment mode, 2 comments · 1
+   outdated") are its name and tooltip */
 .file-viewer-comments {
   position: relative;
 }
 
 .file-viewer-comments-count {
   position: absolute;
-  top: calc(50% - var(--space-4));
-  left: calc(50% + var(--space-1));
-  min-width: var(--space-4);
-  height: var(--space-4);
+  top: calc(-1 * var(--space-1));
+  right: calc(-1 * var(--space-1));
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  min-width: 21px;
+  height: 21px;
   padding: 0 var(--space-1);
+  border: 2px solid var(--bg-panel);
   border-radius: var(--radius-pill);
-  background: var(--primary);
-  color: var(--primary-text);
-  font-size: var(--fs-2xs);
+  background: var(--bg-hover);
+  color: var(--text-strong);
+  font-size: var(--fs-xs);
   font-weight: var(--fw-semibold);
   font-variant-numeric: tabular-nums;
-  line-height: var(--space-4);
-  text-align: center;
+  line-height: 1;
   pointer-events: none;
+}
+
+.file-viewer-comments[aria-pressed="true"] .file-viewer-comments-count {
+  background: var(--primary);
+  color: var(--primary-text);
+}
+
+@media (pointer: coarse) {
+  .file-viewer-comments-count {
+    min-width: 22px;
+    height: 22px;
+  }
 }
 
 /* an "on" toggle (Show source) carries the accent on its glyph */
@@ -146,9 +184,12 @@
   color: var(--accent);
 }
 
-/* positioned: with comments, the pins and the popover beside them are placed in its scrolled content */
+/* positioned: with comments, the pins and the popover beside them are placed in its scrolled content. Isolated: what
+   lies under the code's text (the code view's press tint, CodeComments.css, at a negative z-index) is drawn over the
+   body's own ground, not under it */
 .file-viewer-body {
   position: relative;
+  isolation: isolate;
   flex: 1 1 auto;
   min-width: 0;
   min-height: 0;
@@ -196,12 +237,43 @@
   line-height: var(--lh-base);
 }
 
-/* a click on a line comments on it (FileComments.tsx): with a pointer that hovers, the line under it is marked, while
-   comments are on (`data-comments`) and no popover is open.
-   A code line (the preview's code blocks' too) takes the accent's tint; another element of the preview the frame the
-   chat's blocks take (BlockComments.css), a paragraph whole, as a click takes it. Neither takes room, so nothing moves */
+/*
+ * The code view's gutter and divider (the chat's code blocks keep HighlightedCode.css's gutter). A hairline in --border
+ * stands between the line numbers and the code: a gradient on the `<code>`, so it runs the code's whole height, wrapped
+ * rows included, and adds no element and no text. The numbers stay where they are; the code starts --space-5 right of
+ * the divider, so a 28px ⊕ centred on it (--space-4 right of the digits) never covers code.
+ */
+.file-viewer-text[data-line-numbers] {
+  --hl-gutter: calc(var(--hl-digits, 5) * 1ch + var(--space-4) + var(--space-5));
+}
+
+.file-viewer-text[data-line-numbers] > code {
+  background: linear-gradient(var(--border), var(--border)) no-repeat calc(var(--hl-digits, 5) * 1ch + var(--space-4)) 0 / var(--hairline) 100%;
+}
+
+/*
+ * Room after a line, for the card under it (lib/codeCommentDom.ts sets `data-comment-room` and `--comment-room`). The
+ * line becomes a full-width inline-block with padding below its last row, so the room is the line's own box: it adds no
+ * text node and no element with text, and a copy, a selection and `innerText` stay the file's text (the "\n" after the
+ * line, or the end of its chunk of lines, HighlightedCode.css `.hl-chunk`, still ends the row it sits in). In its chunk,
+ * a room change lays out that chunk only. `vertical-align: top` keeps the row's baseline off the room; the number is the
+ * line's first inline box, so it stays on the first row of a wrapped line, and the room follows the last. Checked by
+ * scripts/file-viewer-comments-regression.ts `code-room`, with Wrap long lines on and off.
+ */
+.file-viewer-text .hl-line[data-comment-room] {
+  display: inline-block;
+  width: 100%;
+  vertical-align: top;
+  padding-bottom: var(--comment-room);
+}
+
+/* in the preview a click on a line comments on it (FileComments.tsx): with a pointer that hovers, the line under it is
+   marked, while comments are on (`data-comments`) and no popover is open.
+   A line of the preview's code blocks takes the accent's tint; another element of the preview the frame the
+   chat's blocks take (BlockComments.css), a paragraph whole, as a click takes it. Neither takes room, so nothing moves.
+   The code view's lines have their own (CodeComments.css), which never tints the room after a line */
 @media (hover: hover) {
-  .file-viewer-body[data-comments]:not(:has(.comment-popover)) .hl-line:hover {
+  .file-viewer-body[data-comments]:not(:has(.comment-popover)) .markdown .hl-line:hover {
     background: var(--accent-tint);
   }
 
@@ -215,8 +287,9 @@
   }
 }
 
-/* Focus mode in the viewer, as in the chat (BlockComments.css): while a pin's comment is up, the
-   other comments' marks go */
+/* Focus mode in the viewer's preview, as in the chat (BlockComments.css): while a pin's comment is up, the
+   other comments' marks go. Not in the code view: the attribute would sit on an ancestor of every line (a long
+   file restyles slowly), so a card there only brings its own text up (block-comment-active) */
 .file-viewer-body[data-comment-focus] ::highlight(block-comment) {
   background-color: transparent;
 }

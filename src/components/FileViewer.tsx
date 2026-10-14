@@ -1,10 +1,11 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type RefObject } from "react";
-import { Check, Code, Copy, Download, ExternalLink, MessageSquare, TriangleAlert, X } from "lucide-react";
+import { Check, Code, Copy, Download, ExternalLink, MessageSquareText, TriangleAlert, X } from "lucide-react";
 
 import "./FileViewer.css";
+import { useCodeComments } from "./CodeComments.tsx";
 import { DirectoryBrowser } from "./DirectoryBrowser.tsx";
-import { useFileCommentLayer, useFileCommentWalk, type FileCommentScope } from "./FileComments.tsx";
-import { useHighlightedLines } from "./HighlightedCode.tsx";
+import { useFileCommentLayer, useFileComments, useFileCommentWalk, type FileCommentScope } from "./FileComments.tsx";
+import { CODE_CHUNK_LINES, useHighlightedLines } from "./HighlightedCode.tsx";
 import { RenderBoundary } from "./RenderBoundary.tsx";
 import { TextFileView } from "./TextFileView.tsx";
 
@@ -20,6 +21,7 @@ import { fileLines, pathLabel, type FileComment, type FileView, type LineRange }
 import { pathParts } from "../lib/filePaths.ts";
 import { languageForPath, LINE_ELEMENT_LIMIT } from "../lib/highlight.ts";
 import { useT } from "../lib/i18n.ts";
+import { useSettings } from "../lib/settings.ts";
 import { nativeModalOver, useFocusTrap } from "../lib/useFocusTrap.ts";
 import { previewHosts, type MarkdownBlock } from "../lib/markdown.ts";
 import { knownPreview, parsePreviewOffThread } from "../lib/markdownPreview.ts";
@@ -115,6 +117,7 @@ function CopyFileButton({ text, sourceRef, onShowSource }: { text: string; sourc
  */
 export function FileViewer({ path: asked, paneId, machineId, paneFolder, onClose, onOpen, commentId = null, keyboardActive = true }: FileViewerProps) {
   const t = useT();
+  const { settings } = useSettings();
   const { fetchFileInfo, fileUrl, fetchDirectories } = useMachineApi();
   // a remote PC's bridge reads a relative folder from the pane's folder only from its next bundle
   // on; until then it would list the bridge's own folder, so only an absolute or ~/ one is listed there
@@ -249,15 +252,28 @@ export function FileViewer({ path: asked, paneId, machineId, paneFolder, onClose
   [owner, commentView, filePath, paneFolder, sourceLines, wholeLines, cutShort]);
   const bodyRef = useRef<HTMLDivElement>(null);
   const contentRef = commentView === "preview" ? previewRef : sourceRef;
-  const comments = useFileCommentLayer(scope, bodyRef, contentRef);
-  // the header's counter walks this file's comments, switching to the view one was written in
-  const walk = useFileCommentWalk({
-    owner, view: commentView, comments: comments.comments, surface: bodyRef, content: contentRef,
-    showView: (next: FileView) => setChosen({ path, mode: next === "code" ? "code" : "preview" }),
+  // the file's comments, placed once for both layers: the preview's pins, and the code view's cards (only with an
+  // element per line to put them under)
+  const fileComments = useFileComments(scope);
+  const lineComments = codeShown && code.lines.length <= LINE_ELEMENT_LIMIT;
+  const comments = useFileCommentLayer(commentView === "preview" ? scope : null, bodyRef, previewRef, fileComments);
+  // the comment mode's toggle: where a Delete that leaves no card puts the focus
+  const modeToggleRef = useRef<HTMLButtonElement>(null);
+  const codeComments = useCodeComments({
+    scope: commentView === "code" && lineComments ? scope : null, comments: fileComments, surface: bodyRef, content: sourceRef,
+    focusFallback: () => modeToggleRef.current,
   });
-  // Escape is the open popover's first, or the walk's dialog's, before it is the viewer's
-  commentEscape.current = comments.escape;
+  // the composer's walk stops at a file comment, switching to the view it was written in
+  const walk = useFileCommentWalk({
+    owner, view: commentView, comments: fileComments, surface: bodyRef, content: contentRef,
+    showView: (next: FileView) => setChosen({ path, mode: next === "code" ? "code" : "preview" }),
+    codeStop: codeComments.stop,
+  });
+  // Escape is the open field's or popover's first, or the walk's dialog's, before it is the viewer's
+  commentEscape.current = commentView === "code" ? codeComments.escape : comments.escape;
   walkDialogOpen.current = walk.editorOpen;
+  // the toggle's press: a keyboard's click (detail 0) is a mouse's, a press says what pressed
+  const togglePress = useRef("mouse");
   // the pane's comments of any kind: the one the viewer was opened at is looked up among them (none while comments are off)
   const paneComments = useBlockComments(owner ?? "");
   // Opened at a comment (the composer's walk): the walk stops at it once the file's comments are
@@ -287,15 +303,17 @@ export function FileViewer({ path: asked, paneId, machineId, paneFolder, onClose
     openInEditor(comment, unshown);
     setPendingStop(null);
   }, [pendingStop, paneComments, scope, error, directory, info, textFile, loaded, previewPending, goTo, openInEditor, t]);
-  const fileComments = comments.comments.all.length;
-  const commentsShown = owner !== null && fileComments > 0;
-  const outdatedCount = comments.comments.outdated.length;
-  const counted = t(fileComments === 1 ? "{count} comment" : "{count} comments", { count: fileComments });
+  const commentCount = fileComments.all.length;
+  const outdatedCount = fileComments.outdated.length;
+  const counted = t(commentCount === 1 ? "{count} comment" : "{count} comments", { count: commentCount });
   const countLabel = outdatedCount > 0 ? `${counted} · ${t("{count} outdated", { count: outdatedCount })}` : counted;
+  // the comment mode's toggle: in the code view of a file of a pane, with comments on and an element per line
+  const toggleShown = owner !== null && settings.comments && lineComments;
+  const toggleLabel = commentCount > 0 ? t("Comment mode, {count}", { count: countLabel }) : t("Comment mode");
   // a phone stacks the actions under the name once there are two or more, and one fits beside it:
   // every file has Download, and all but a binary one a new tab (Raw for text) as well; a binary
   // one has a second action only in its comments
-  const stacked = info?.kind !== "binary" || commentsShown;
+  const stacked = info?.kind !== "binary" || toggleShown;
   /** What the viewer shows below its header: a folder, an error, a choice of files, or the file. */
   const body = (() => {
     if (directory !== null) return <DirectoryBrowser key={directory} start={directory} onOpenFile={onOpen ?? setPath} />;
@@ -336,7 +354,8 @@ export function FileViewer({ path: asked, paneId, machineId, paneFolder, onClose
 
   return (
     <div className="modal-scrim file-viewer-scrim" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
-      <section className="modal file-viewer" role="dialog" aria-modal="true" aria-label={info?.name ?? path} ref={surface} tabIndex={-1}>
+      {/* on a desktop the viewer hangs from a fixed top (FileViewer.css): a comment's row, the mode or the view moves nothing */}
+      <section className="modal file-viewer" role="dialog" aria-modal="true" aria-label={info?.name ?? path} ref={surface} tabIndex={-1} data-tall={codeShown && code.lines.length > CODE_CHUNK_LINES ? "" : undefined}>
         {/* three groups, spaced apart: how the text shows, the file itself, the window */}
         <header className={stacked ? "modal-header file-viewer-header file-viewer-header-stacked" : "modal-header file-viewer-header"}>
           <div className="file-viewer-title">
@@ -359,12 +378,14 @@ export function FileViewer({ path: asked, paneId, machineId, paneFolder, onClose
           <div className="file-viewer-actions">
             {/* how the text shows: Preview or source is one choice of two, so one toggle; wrapping is a
                 setting (Settings → File viewer), not an action here */}
-            {/* the comments: this file's, walked one per tap */}
-            {commentsShown && <div className="file-viewer-group">
-              <button type="button" className="icon-button file-viewer-action file-viewer-comments" aria-label={countLabel} title={`${countLabel}\n${t("Go to the next comment")}`} onClick={walk.next}>
-                <MessageSquare aria-hidden="true" />
-                {/* the count as a bubble on the icon; the full text (with any outdated) is the name and tooltip */}
-                <span className="file-viewer-comments-count" aria-hidden="true">{fileComments > 99 ? "99+" : fileComments}</span>
+            {/* comment mode (the code view's comments, CodeComments.tsx), with the file's comment count */}
+            {toggleShown && <div className="file-viewer-group">
+              <button ref={modeToggleRef} type="button" className="icon-button file-viewer-action file-viewer-comments" aria-pressed={settings.codeCommentMode} aria-label={toggleLabel} title={toggleLabel}
+                onPointerDown={(event) => { togglePress.current = event.pointerType; }}
+                onClick={(event) => { codeComments.toggleMode(event.detail === 0 ? "mouse" : togglePress.current); togglePress.current = "mouse"; }}>
+                <MessageSquareText aria-hidden="true" />
+                {/* the count as a badge on the corner; the full text (with any outdated) is the name and tooltip */}
+                {commentCount > 0 && <span className="file-viewer-comments-count" aria-hidden="true">{commentCount > 99 ? "99+" : commentCount}</span>}
               </button>
             </div>}
             {textFile && previewable && <div className="file-viewer-group">
@@ -380,11 +401,13 @@ export function FileViewer({ path: asked, paneId, machineId, paneFolder, onClose
           </div>
           <button type="button" className="icon-button file-viewer-action file-viewer-close" aria-label={t("Close file")} title={t("Close file")} onClick={onClose}><X aria-hidden="true" /></button>
         </header>
-        {/* with comments the body is their surface (lib/commentHighlight.ts), the place the pins and the popover
-            are positioned in, and a click on a line in it comments on that line, a mouse's drag on what it selected */}
-        <div ref={bodyRef} className="file-viewer-body" {...comments.surfaceProps}>
+        {/* with comments the body is their surface (lib/commentHighlight.ts), the place the preview's pins and popover
+            and the code view's cards and field are positioned in; in the preview a click on an element in it comments on
+            its lines, a mouse's drag on what it selected */}
+        <div ref={bodyRef} className="file-viewer-body" {...comments.surfaceProps} data-comment-surface={comments.surfaceProps["data-comment-surface"] ?? (codeComments.shown ? "" : undefined)}>
           {body}
           {comments.overlay}
+          {codeComments.layer}
           {walk.editor}
         </div>
       </section>
