@@ -1,7 +1,8 @@
 /**
  * The code view's comments under a finger (CodeComments.tsx), while comment mode is on: a long press on a line, or a
- * tap (Settings → File viewer → On mobile, comment with), opens its comment, and turning the mode by touch says so in a
- * hint. A mouse and a pen keep the ⊕ (CodeCommentAdd.tsx): which applies is decided per press by its `pointerType`.
+ * tap (Settings → Comments → On mobile, comment with), opens its comment, and turning the mode by touch says so in a
+ * hint (CommentModeHint.tsx). A mouse and a pen keep the ⊕ (CodeCommentAdd.tsx): which applies is decided per press
+ * by its `pointerType`.
  *
  * - A finger's press, its moves, its lift, a `pointercancel`, a scroll (the viewer's body, or the code sideways) and the
  *   click after it go through `pressStep` (lib/codeCommentPress.ts), which keeps no timers: the press's timer is set
@@ -24,19 +25,16 @@
  * - While a finger's press lasts (pressing or armed) no text selection starts (`selectstart` cancelled): the code keeps
  *   its selection otherwise, since `user-select: none` over a long file costs WebKit every keystroke in a field.
  */
-import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState, type RefObject } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, type RefObject } from "react";
 import { flushSync } from "react-dom";
 
 import { clickFacts, isCommentClick, isDismissingPress } from "../lib/commentClick.ts";
 import { lineAt, lineElement, originOf, textRows } from "../lib/codeCommentDom.ts";
 import { LONG_PRESS_MS, pressStep, type PressEvent, type PressState } from "../lib/codeCommentPress.ts";
-import { useT } from "../lib/i18n.ts";
 import type { MobileCommentGesture } from "../lib/settings.ts";
 
 /** How long after a long press's lift its click may still come; past it, none will. */
 const CLICK_AFTER_LIFT_MS = 500;
-/** How long the hint shows. */
-export const HINT_MS = 2600;
 
 const IDLE: PressState = { kind: "idle" };
 const CANCEL: PressEvent = { type: "cancel" };
@@ -234,42 +232,3 @@ export function useCodeCommentPress({ surface, pre, mode, gesture, held, onOpen 
   const readPointer = useCallback((): string => pointer.current, []);
   return { tint, band, place, pointer: readPointer };
 }
-
-/** What the hint says: how to comment once the mode is on (by the gesture set), or that it is off. */
-export type ModeHint = "hold" | "tap" | "off";
-
-/** The hint shown as the mode is turned by touch, for `HINT_MS`: `show` starts it again with each turn. */
-export function useModeHint(): { hint: ModeHint | null; show: (hint: ModeHint) => void } {
-  const [hint, setHint] = useState<ModeHint | null>(null);
-  const timer = useRef(0);
-  const show = useCallback((next: ModeHint): void => {
-    window.clearTimeout(timer.current);
-    setHint(next);
-    timer.current = window.setTimeout(() => setHint(null), HINT_MS);
-  }, []);
-  useEffect(() => () => window.clearTimeout(timer.current), []);
-  return { hint, show };
-}
-
-/**
- * The hint, beside the layer in the viewer's body: a live region (always there, so a screen reader hears each hint) kept at the top of the
- * body's view, under the viewer's header, as the body scrolls. It takes no tap: the code under it stays pressable.
- */
-export const CodeCommentHint = memo(function CodeCommentHint({ surface, hint }: { surface: RefObject<HTMLDivElement | null>; hint: ModeHint | null }) {
-  const t = useT();
-  const region = useRef<HTMLDivElement>(null);
-  const shown = hint !== null;
-  useLayoutEffect(() => {
-    const body = surface.current;
-    const node = region.current;
-    if (!shown || body === null || node === null) return;
-    const follow = (): void => { node.style.top = `${body.scrollTop}px`; };
-    follow();
-    body.addEventListener("scroll", follow, { passive: true });
-    return () => body.removeEventListener("scroll", follow);
-  }, [shown, surface]);
-  const text = hint === "hold" ? t("Press and hold a line to comment") : hint === "tap" ? t("Tap a line to comment") : hint === "off" ? t("Comment mode off") : null;
-  return <div ref={region} className="code-comment-status" role="status">
-    {text !== null && <p key={hint} className="code-comment-hint">{text}</p>}
-  </div>;
-});

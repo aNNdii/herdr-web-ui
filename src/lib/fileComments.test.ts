@@ -56,19 +56,49 @@ describe("placeFileComment", () => {
 describe("fileQuote", () => {
   it("quotes a line with its header", () => expect(fileQuote({ ...base, lines: [8, 8], quoteLines: ["if (a < b) {"] })).toBe("> src/sync.ts:8\n> if (a < b) {"));
   it("names a range and quotes a blank line as a bare >", () => expect(fileQuote({ ...base, lines: [7, 9], quoteLines: ["a", "", "b"] })).toBe("> src/sync.ts:7-9\n> a\n>\n> b"));
-  it("cuts a long line to a window around the selection", () => {
-    const line = `${"x".repeat(300)}NEEDLE${"y".repeat(300)}`;
-    const quoted = fileQuote({ ...base, lines: [1, 1], quoteLines: [line], selection: { text: "NEEDLE", start: [0, 300], end: [0, 306] } }).split("\n")[1]!.slice(2);
-    expect(Array.from(quoted).length).toBeLessThanOrEqual(QUOTE_LINE_MAX);
-    expect(quoted).toContain("NEEDLE");
-    expect(quoted.startsWith("…") && quoted.endsWith("…")).toBe(true);
-  });
-  it("quotes the start of a selection longer than a line's limit", () => {
-    const line = "z".repeat(500);
-    const quoted = fileQuote({ ...base, lines: [1, 1], quoteLines: [line], selection: { text: line.slice(10, 400), start: [0, 10], end: [0, 400] } }).split("\n")[1]!.slice(2);
-    expect(quoted.startsWith("…z")).toBe(true);
-    expect(quoted.endsWith("…")).toBe(true);
-    expect(Array.from(quoted).length).toBe(QUOTE_LINE_MAX);
+  describe("on a selection", () => {
+    const guide = { path: "/repo/docs/guide.md", label: "docs/guide.md", view: "preview" as const };
+    it("quotes only the selected words under the header", () => {
+      const out = fileQuote({ ...guide, lines: [22, 22], quoteLines: ["Run the browser checks before a release."], selection: { text: "browser checks", start: [0, 8], end: [0, 22] } });
+      expect(out).toBe("> docs/guide.md:22\n> browser checks");
+    });
+    it("keeps the cell separator of a table selection", () => {
+      const out = fileQuote({ ...guide, label: "docs/spec.md", lines: [42, 43], quoteLines: ["Older revision | 409 Conflict with the stored note", "Newer revision | 200 with the merged note"], selection: { text: "409 Conflict | Newer revision", start: [0, 17], end: [1, 14] } });
+      expect(out.split("\n")).toEqual(["> docs/spec.md:42-43", "> 409 Conflict | Newer revision"]);
+    });
+    it("quotes each selected line behind > and a blank one as a bare >", () => {
+      const out = fileQuote({ ...guide, lines: [3, 5], quoteLines: ["alpha beta", "", "gamma delta"], selection: { text: "beta\n\ngamma", start: [0, 6], end: [2, 5] } });
+      expect(out).toBe("> docs/guide.md:3-5\n> beta\n>\n> gamma");
+    });
+    it("cuts a selected line longer than QUOTE_LINE_MAX at its start", () => {
+      const line = `${"x".repeat(300)}NEEDLE${"y".repeat(300)}`;
+      const quoted = fileQuote({ ...guide, lines: [1, 1], quoteLines: [line], selection: { text: line, start: [0, 0], end: [0, line.length] } }).split("\n")[1]!.slice(2);
+      expect(quoted).toBe(`${"x".repeat(QUOTE_LINE_MAX - 1)}…`);
+      expect(Array.from(quoted).length).toBe(QUOTE_LINE_MAX);
+    });
+    it("never halves an emoji when it cuts", () => {
+      const text = "😀".repeat(300);
+      const quoted = fileQuote({ ...guide, lines: [1, 1], quoteLines: [text], selection: { text, start: [0, 0], end: [0, text.length] } }).split("\n")[1]!.slice(2);
+      expect(quoted).toBe(`${"😀".repeat(QUOTE_LINE_MAX - 1)}…`);
+    });
+    it("does not quote the unselected rest of a long line", () => {
+      const line = `${"x".repeat(300)}NEEDLE${"y".repeat(300)}`;
+      expect(fileQuote({ ...guide, lines: [1, 1], quoteLines: [line], selection: { text: "NEEDLE", start: [0, 300], end: [0, 306] } })).toBe("> docs/guide.md:1\n> NEEDLE");
+    });
+    it("keeps 20 selected lines and counts the rest", () => {
+      const lines = Array.from({ length: 54 }, (_, i) => `line ${i + 40}`);
+      const out = fileQuote({ ...guide, lines: [40, 93], quoteLines: lines, selection: { text: lines.join("\n"), start: [0, 0], end: [53, 7] } }).split("\n");
+      expect(out[0]).toBe("> docs/guide.md:40-93");
+      expect(out[1]).toBe("> line 40");
+      expect(out.length).toBe(1 + QUOTE_LINES_MAX + 1);
+      expect(out.at(-1)).toBe("> … (+34 lines)");
+    });
+    it("stays within SELECTION_QUOTE_MAX", () => {
+      const lines = Array.from({ length: 20 }, () => "w".repeat(190));
+      const out = fileQuote({ ...guide, lines: [1, 20], quoteLines: lines, selection: { text: lines.join("\n"), start: [0, 0], end: [19, 190] } });
+      expect(Array.from(out.slice(out.indexOf("\n") + 1)).length).toBeLessThanOrEqual(SELECTION_QUOTE_MAX);
+      expect(out.endsWith("lines)")).toBe(true);
+    });
   });
   it("never halves an emoji", () => {
     const quoted = fileQuote({ ...base, lines: [1, 1], quoteLines: ["😀".repeat(300)] }).split("\n")[1]!.slice(2);
@@ -86,16 +116,6 @@ describe("fileQuote", () => {
     const out = fileQuote({ ...base, lines: [1, 20], quoteLines: lines });
     expect(Array.from(out.slice(out.indexOf("\n") + 1)).length).toBeLessThanOrEqual(SELECTION_QUOTE_MAX);
     expect(out.endsWith("lines)")).toBe(true);
-  });
-  it("windows a long line only where it is selected, else quotes its start", () => {
-    const long = "m".repeat(300);
-    const out = fileQuote({ ...base, lines: [1, 4], quoteLines: [long, long, long, long], selection: { text: "x", start: [1, 290], end: [2, 5] } }).split("\n");
-    expect(out[1]!.endsWith("…")).toBe(true);
-    expect(out[1]!.startsWith("> m")).toBe(true);
-    expect(out[2]!.startsWith("> …")).toBe(true);
-    expect(out[3]!.startsWith("> m")).toBe(true);
-    expect(Array.from(out[3]!.slice(2)).length).toBe(QUOTE_LINE_MAX);
-    expect(out[4]!.startsWith("> m") && out[4]!.endsWith("…")).toBe(true);
   });
 });
 

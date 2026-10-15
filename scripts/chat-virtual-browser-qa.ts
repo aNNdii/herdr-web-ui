@@ -311,6 +311,30 @@ try {
     const work = page.locator("[data-chat-row]").filter({ hasText: "local E1 ROW-497" });
     await work.locator(".work-block-head").click();
     await work.locator(".work-row-head").click();
+    // the row's layout settled (the list places the rows after the expanded work a frame later), then the button brought
+    // into view and settled again: the click below then scrolls nothing of its own, and only opening the output could move
+    // the row. Each wait is polled per frame until the row's top holds still for three frames, within a deadline
+    const settled = await work.evaluate((row) => {
+      const still = (): Promise<boolean> => new Promise((resolve) => {
+        const deadline = performance.now() + 2000;
+        let last = Number.NaN;
+        let frames = 0;
+        const tick = (): void => {
+          const top = row.getBoundingClientRect().top;
+          frames = top === last ? frames + 1 : 0;
+          last = top;
+          if (frames >= 3) resolve(true);
+          else if (performance.now() > deadline) resolve(false);
+          else requestAnimationFrame(tick);
+        };
+        requestAnimationFrame(tick);
+      });
+      return still().then((first) => {
+        row.querySelector(".chat-tool-more")?.scrollIntoView({ block: "center" });
+        return still().then((second) => first && second);
+      });
+    });
+    assert.ok(settled, "the row's place settles before the output opens");
     const beforeOutput = await work.evaluate((row) => row.getBoundingClientRect().top);
     await work.locator(".chat-tool-more").click();
     await work.locator(".chat-tool-io.is-whole").waitFor();

@@ -1,5 +1,5 @@
 /**
- * What the comment popover (CommentPopover.tsx, beside its pin or as a dialog) is written with: a
+ * What the comment popover (CommentPopover.tsx, in place or as a dialog) is written with: a
  * comment's text with its field and its keys, and where the focus goes when the editor closes.
  */
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type RefObject } from "react";
@@ -7,7 +7,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState, type Keyboar
 import "./CommentPopover.css";
 
 import { COMMENT_SURFACE } from "../lib/commentHighlight.ts";
-import { commentCanSave, commentChanged } from "../lib/commentPopover.ts";
+import { commentCanSave, commentChanged, leaveKey, leaveOutcome, submitKey } from "../lib/commentPopover.ts";
 import { restoreFocusTarget } from "../lib/commentSelection.ts";
 import { fieldAnchor } from "../lib/frameField.ts";
 import { useT } from "../lib/i18n.ts";
@@ -36,18 +36,21 @@ export interface CommentDraft {
   value: string;
   /** Save does something (`commentCanSave`): a new comment with only blanks, or a saved one unchanged, has nothing to save */
   canSave: boolean;
-  /** the text is changed (`commentChanged`): the popover is not given up by a key, nor passed over by the composer's Send */
+  /** the text is changed (`commentChanged`): the composer's Send and the walk stop at it, and Settings asks before turning comments off */
   changed: boolean;
   setValue: (value: string) => void;
   /** saves the text, or only closes when it is unchanged */
   save: () => void;
   /**
-   * Gives the editor up where nothing would be lost (✕, a press outside it or on its scrim): closes it while nothing is
-   * typed (true), else keeps it and puts the focus back in its field (false)
+   * Leaves the editor (Escape, ✕, a press outside it or on its scrim), which always ends it (`leaveOutcome`): what was
+   * typed is saved (an emptied edit deletes the comment), and a field left as it opened, or a new one left blank, only
+   * closes
    */
-  leave: () => boolean;
-  /** on the editor's box: Cmd/Ctrl+Enter in the field saves when `canSave`; in a popover beside its pin Escape closes while nothing was typed */
+  leave: () => void;
+  /** on the editor's box: in a popover in place, Escape leaves it (`leave`) */
   onKeyDown: (event: ReactKeyboardEvent<HTMLDivElement>) => void;
+  /** on the field: Enter (and Cmd/Ctrl+Enter) saves when `canSave` (`submitKey`); Shift+Enter breaks the line */
+  onFieldKeyDown: (event: ReactKeyboardEvent<HTMLTextAreaElement>) => void;
   /**
    * The field's first focus, its caret at the end: once, and only where the field takes it as the editor opens
    * (`focusField`). The editor asks as it opens; a field drawn a commit later (in a frame of its own, FrameField.tsx) asks
@@ -62,37 +65,48 @@ export interface CommentDraftOptions {
   /**
    * What gets the focus back on close. An element or null for none; by default what had the focus
    * as the editor opened. A function is asked after the commit that closes the editor, so it can
-   * find an element the same commit drew again (the pin of the comment that was edited): it gets
+   * find an element the same commit drew again (the card of the comment that was edited): it gets
    * the comment surface the editor was in (`scope`: the chat view, the file viewer; null for a
    * dialog, which sits outside it).
    */
   opener?: HTMLElement | null | ((scope: Element | null) => HTMLElement | null);
   /** where the focus goes when its opener is gone (the composer of the pane): asked once, as the editor opens */
   fallback: (scope: Element | null) => HTMLElement | null;
-  /** a popover beside its pin, not a dialog: Escape only from inside it, and the focus is given back only if the editor still had it */
+  /** a popover in place, not a dialog: Escape only from inside it, and the focus is given back only if the editor still had it */
   inline?: boolean;
   /**
    * Whether the field takes the focus as the editor opens (`popoverFocusesField`); else its box (`surface`, which then
    * needs `tabIndex={-1}`) does, so Escape is the editor's and no keyboard rises on a touch screen. Default: the field
    */
   focusField?: boolean;
+  /**
+   * False: nothing takes the focus as the editor opens, neither the field nor the box (the field over a selection,
+   * MarkdownComments.tsx: the page keeps its selection, and a keyboard can go on extending it; the first printable key
+   * moves the focus into the field). Default true
+   */
+  focusOnOpen?: boolean;
   /** the text the field starts with when it is not `initialComment`: a comment that was being written in, drawn again */
   startValue?: string;
   /** told the text as it changes */
   onText?: (value: string) => void;
+  /**
+   * Another value starts the text again, from `startValue` or else `initialComment`: a sheet that pages to another
+   * comment (MarkdownCommentSheet.tsx) keeps its box, its field and the field's focus
+   */
+  resetKey?: string | number;
 }
 
 /**
- * The behaviour of the comment popover's editing, beside its pin or as a dialog. The field grows with the comment, takes the focus with
- * its caret at the end (unless `focusField` is false: then the box takes it), and Escape cancels, only while nothing was typed in it (what was typed is
- * never lost to a key: the key puts the focus back in the field instead): anywhere while a dialog is up; from inside a popover beside its pin (`inline`), which
- * leaves the rest of the page usable. Cmd/Ctrl+Enter saves only what Save would (`canSave`).
- * "Typed" here means changed (`commentChanged`), the one ChatView uses to keep a comment being written from being replaced. On close the focus goes back to
+ * The behaviour of the comment popover's editing, in place or as a dialog. The field grows with the comment, takes the focus with
+ * its caret at the end (unless `focusField` is false: then the box takes it), and Escape leaves it (`leave`, `leaveOutcome`: what was typed is saved, a
+ * field left as it opened or a new one left blank only closes): anywhere while a dialog is up; from inside a popover in place (`inline`), which
+ * leaves the rest of the page usable. Enter saves only what Save would (`canSave`), Shift+Enter breaks the line (`submitKey`).
+ * On close the focus goes back to
  * the `opener` (by default what had it when the editor opened), else to the `fallback` element: a
- * deleted comment takes its own pin, the opener, with it. `fallback()` is asked once, as the
+ * deleted comment takes its own card, the opener, with it. `fallback()` is asked once, as the
  * editor opens (the caller's own composer: its chat may be gone when the editor closes, and
  * another pane's composer is not its). The target is chosen after the commit that closes the
- * editor (`restoreFocusTarget`), when a deleted pin is out of the document too. A popover beside its pin
+ * editor (`restoreFocusTarget`), when a deleted card is out of the document too. A popover in place
  * gives the focus back only when it still has it (or nothing has): the user may be typing
  * elsewhere when it closes or its chat goes. On a touch screen the fallback is not focused (no
  * keyboard unasked): the focus is let go.
@@ -101,13 +115,18 @@ export function useCommentDraft(
   initialComment: string,
   onSave: (comment: string) => void,
   onClose: () => void,
-  { opener: given, fallback, inline = false, focusField = true, startValue, onText }: CommentDraftOptions,
+  { opener: given, fallback, inline = false, focusField = true, focusOnOpen = true, startValue, onText, resetKey }: CommentDraftOptions,
 ): CommentDraft {
   const surface = useRef<HTMLDivElement>(null);
   const field = useRef<HTMLTextAreaElement>(null);
   const [value, setValue] = useState(startValue ?? initialComment);
+  // another `resetKey`: the text starts again, set during this render so no frame shows the one before
+  const [shownKey, setShownKey] = useState(resetKey);
+  if (shownKey !== resetKey) {
+    setShownKey(resetKey);
+    setValue(startValue ?? initialComment);
+  }
   const save = (): void => { if (value.trim() === initialComment.trim()) onClose(); else onSave(value); };
-  const refocus = (): void => field.current?.focus({ preventScroll: true });
   const told = useRef(onText);
   told.current = onText;
   useEffect(() => told.current?.(value), [value]);
@@ -141,7 +160,7 @@ export function useCommentDraft(
         const held = now === null || now === document.body || (surface.current?.contains(fieldAnchor(now)) ?? false);
         if (!held) return;
       }
-      // chosen after the commit: a deleted comment's pin is still in the document here, and
+      // chosen after the commit: a deleted comment's card is still in the document here, and
       // React removes it right after, which would leave the focus on the body
       // (a touch screen lets it go instead of raising the keyboard in the composer, as the bar's X does).
       // Unless something took the focus meanwhile: the field of the editor drawn in its place (a popover
@@ -158,6 +177,7 @@ export function useCommentDraft(
   // Without `focusField` the box takes it instead: the editor holds the focus (its Escape, a dialog's trap) and no
   // keyboard rises; a tap into the field starts editing
   const focusesField = useRef(focusField);
+  const focusesAtAll = useRef(focusOnOpen);
   const started = useRef(false);
   const focusStart = useCallback((): void => {
     if (started.current || !focusesField.current) return;
@@ -168,69 +188,58 @@ export function useCommentDraft(
     node.setSelectionRange(node.value.length, node.value.length);
   }, []);
   useLayoutEffect(() => {
+    if (!focusesAtAll.current) return;
     if (!focusesField.current) {
       surface.current?.focus({ preventScroll: true });
       return;
     }
     focusStart();
   }, [focusStart]);
+  const changed = commentChanged(value, initialComment);
+  const canSave = commentCanSave(value, initialComment);
+  const leave = (): void => {
+    if (leaveOutcome({ initialComment }, value) === "save") save();
+    else onClose();
+  };
   // A dialog's Escape is its own, not the composer's or the chat's underneath: anywhere, from the window in the capture
-  // phase. A popover beside its pin handles it in its surface's `onKeyDown` below, so only from inside it. Either closes only
-  // while nothing was typed, else puts the focus back in the field; a dialog's still keeps the key from what is underneath
-  // (a file viewer would close on it)
-  const changedNow = useRef(false);
-  // a caller may hand a new onClose on every render: read here, the listener stays where it is in the window's order
-  const closeRef = useRef(onClose);
-  closeRef.current = onClose;
+  // phase. A popover in place handles it in its surface's `onKeyDown` below, so only from inside it. Either leaves
+  // the editor (`leave`), and a dialog's keeps the key from what is underneath (a file viewer would close on it).
+  // A caller may hand a new onClose on every render, and the text changes: read here, the listener stays where it is in
+  // the window's order
+  const leaveRef = useRef(leave);
+  leaveRef.current = leave;
   useEffect(() => {
     if (inline) return;
     const onKey = (event: KeyboardEvent): void => {
-      if (event.key !== "Escape" || inAnotherDialog(event.target, surface.current)) return;
+      // an IME's Escape cancels its conversion, not the comment (`leaveKey`)
+      if (!leaveKey(event) || inAnotherDialog(event.target, surface.current)) return;
       event.stopPropagation();
       event.preventDefault();
-      if (changedNow.current) field.current?.focus({ preventScroll: true });
-      else closeRef.current();
+      leaveRef.current();
     };
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
   }, [inline]);
 
-  const changed = commentChanged(value, initialComment);
-  changedNow.current = changed;
-  const canSave = commentCanSave(value, initialComment);
-  const leave = (): boolean => {
-    if (!changed) {
-      onClose();
-      return true;
-    }
-    refocus();
-    return false;
-  };
   const onKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>): void => {
     // React's root dispatches after every document- and window-capture listener, so the walk's Escape (Composer.tsx, on
-    // the document) has already run when a popover gives up here, whatever the order the listeners were added in.
-    // Only an untouched popover gives up: what was typed is not thrown away by a key (the key puts the focus back in the field), and
-    // the event goes on unstopped, to the walk's Escape and whatever else listens above
-    if (inline && event.key === "Escape") {
-      if (changed) {
-        refocus();
-        return;
-      }
+    // the document) has already run when a popover leaves here, whatever the order the listeners were added in. The key
+    // is taken: the file viewer underneath stays. A dialog keeps Tab inside through its focus trap (CommentPopover.tsx,
+    // `useFocusTrap`); a popover is in the page's flow, and Tab goes on from it without leaving it
+    if (inline && leaveKey(event.nativeEvent)) {
       event.stopPropagation();
       event.preventDefault();
-      onClose();
-      return;
-    }
-    // a dialog keeps Tab inside through its focus trap (CommentPopover.tsx, `useFocusTrap`); a popover is in the page's
-    // flow, and Tab goes on from it
-    if (event.key === "Enter" && (event.metaKey || event.ctrlKey) && event.target === field.current) {
-      event.preventDefault();
-      // as a Save button: nothing to save is no save, and the editor stays
-      if (canSave) save();
+      leave();
     }
   };
+  const onFieldKeyDown = (event: ReactKeyboardEvent<HTMLTextAreaElement>): void => {
+    if (!submitKey(event.nativeEvent)) return;
+    event.preventDefault();
+    // as a Save button: nothing to save is no save, and the editor stays
+    if (canSave) save();
+  };
 
-  return { surface, field, value, canSave, changed, setValue, save, leave, onKeyDown, focusStart, fit };
+  return { surface, field, value, canSave, changed, setValue, save, leave, onKeyDown, onFieldKeyDown, focusStart, fit };
 }
 
 /** The comment's field, in its popover. */
@@ -242,8 +251,11 @@ export function CommentField({ draft }: { draft: CommentDraft }) {
     value={draft.value}
     maxLength={COMMENT_MAX_CHARS}
     rows={1}
+    // Enter saves (`submitKey`): a soft keyboard's key says so, not "return"
+    enterKeyHint="done"
     aria-label={t("Comment")}
     placeholder={t("Write a comment…")}
     onChange={(event) => draft.setValue(event.target.value)}
+    onKeyDown={draft.onFieldKeyDown}
   />;
 }

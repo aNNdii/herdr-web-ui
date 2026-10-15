@@ -1,4 +1,4 @@
-import { isCommentPoint, type CommentPoint } from "./commentPins.ts";
+import { isCommentPoint, type CommentPoint } from "./commentPoint.ts";
 import { SELECTION_QUOTE_MAX } from "./compose.ts";
 import type { SourceLines } from "./markdown.ts";
 
@@ -34,9 +34,9 @@ export interface FileTarget {
   /** absent: a whole-line comment */
   selection?: FileSelection;
   /**
-   * Where the comment was made: a line clicked, or a selection a mouse dragged, where the pointer was, as fractions of
-   * its text's box (`CommentPoint`). Its pin's tip goes there; without one, after the end of its text. Not part of its
-   * anchor (`fileAnchor`, `fileCommentAt`): the same line clicked elsewhere opens the same comment, its point unchanged.
+   * Where an older comment was made, as fractions of its text's box (`CommentPoint`, lib/commentPoint.ts). Carried
+   * along only so stored entries round-trip: nothing draws or makes one now, and it is not part of its anchor
+   * (`fileAnchor`, `fileCommentAt`).
    */
   point?: CommentPoint;
   /**
@@ -128,56 +128,28 @@ export function placeFileComment(comment: Pick<FileTarget, "lines" | "source">, 
   return found < 0 ? null : [found + 1, found + count];
 }
 
-/** The code points of `line`, and a UTF-16 offset in it as an index among them. */
-function pointAt(line: string, offset: number): number {
-  return Array.from(line.slice(0, offset)).length;
-}
-
-/** `line` as quoted: whole when it fits, else cut to `QUOTE_LINE_MAX` by code points around `[from, to)` (the selected part), each cut marked with "…". */
-function quoteLine(line: string, selected: [from: number, to: number] | null): string {
+/** `line` as quoted: whole when it fits, else its first `QUOTE_LINE_MAX - 1` code points and a "…". */
+function quoteLine(line: string): string {
   const chars = Array.from(line);
-  const size = chars.length;
-  if (size <= QUOTE_LINE_MAX) return line;
-  const room = QUOTE_LINE_MAX - 2;
-  let start = 0;
-  let end = QUOTE_LINE_MAX - 1;
-  if (selected !== null) {
-    const [from, to] = selected;
-    start = from;
-    if (to - from <= room) {
-      // centre the selection in a window that has room for a mark at each end
-      start = Math.max(0, Math.min(from - Math.floor((room - (to - from)) / 2), size - room));
-      end = start + room;
-      if (start === 0) end = QUOTE_LINE_MAX - 1;
-      else if (end >= size) {
-        end = size;
-        start = Math.max(0, size - (QUOTE_LINE_MAX - 1));
-      }
-    } else end = start + (start > 0 ? room : QUOTE_LINE_MAX - 1);
-  }
-  return `${start > 0 ? "…" : ""}${chars.slice(start, end).join("")}${end < size ? "…" : ""}`;
+  return chars.length <= QUOTE_LINE_MAX ? line : `${chars.slice(0, QUOTE_LINE_MAX - 1).join("")}…`;
 }
 
 /**
- * The comment's lines as a quote: a header naming the file and range, then the lines behind `> `,
- * a blank one as a bare `>`. Limits: `QUOTE_LINE_MAX` per line (a selected line is cut around
- * the selection, any other at its start), `QUOTE_LINES_MAX` lines and `SELECTION_QUOTE_MAX`
- * characters after the header; the lines dropped are counted in a last `> … (+N lines)`.
+ * The comment as a quote: a header naming the file and range, then the lines behind `> `, a blank
+ * one as a bare `>`. With a `selection` the lines are the selected words (its text, a table's cells
+ * already joined by " | "), else the whole lines the comment is on. Limits: `QUOTE_LINE_MAX` per
+ * line (cut at its start), `QUOTE_LINES_MAX` lines and `SELECTION_QUOTE_MAX` characters after the
+ * header; the lines dropped are counted in a last `> … (+N lines)`.
  */
 export function fileQuote(comment: Pick<FileTarget, "label" | "lines" | "quoteLines" | "selection">): string {
-  const { quoteLines, selection } = comment;
-  const quoted = quoteLines.map((line, i) => {
-    let selected: [number, number] | null = null;
-    if (selection !== undefined && i >= selection.start[0] && i <= selection.end[0]) {
-      const size = Array.from(line).length;
-      const to = i === selection.end[0] ? Math.min(pointAt(line, selection.end[1]), size) : size;
-      selected = [Math.min(i === selection.start[0] ? pointAt(line, selection.start[1]) : 0, to), to];
-    }
-    const text = quoteLine(line, selected);
+  const { selection } = comment;
+  const lines = selection === undefined ? comment.quoteLines : selection.text.split("\n");
+  const quoted = lines.map((line) => {
+    const text = quoteLine(line);
     return text === "" ? ">" : `> ${text}`;
   });
   const body = (kept: number): string => {
-    const dropped = quoteLines.length - kept;
+    const dropped = lines.length - kept;
     return [...quoted.slice(0, kept), ...(dropped > 0 ? [`> … (+${dropped} lines)`] : [])].join("\n");
   };
   let kept = Math.min(quoted.length, QUOTE_LINES_MAX);
@@ -223,7 +195,7 @@ function isSelection(value: unknown, lines: number): value is FileSelection {
 
 /**
  * Whether a stored value is a file comment this module can place and quote (storage may hold anything). A `point` that
- * is not one (`isCommentPoint`) is removed from the entry, which is kept: its pin goes after the end of its text.
+ * is not one (`isCommentPoint`) is removed from the entry, which is kept.
  */
 export function isFileComment(value: unknown): value is FileComment {
   if (typeof value !== "object" || value === null) return false;

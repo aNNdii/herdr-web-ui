@@ -1,7 +1,7 @@
 import { createContext, useSyncExternalStore } from "react";
 import { isSlashCommand, MAX_COMPOSER_CHARS, SELECTION_QUOTE_MAX } from "./compose.ts";
 import { fileAnchor, fileCommentAt, fileQuote, isFileComment, sortFileComments, type FileComment, type FileTarget, type LineRange } from "./fileComments.ts";
-import { isCommentPoint, type CommentPoint } from "./commentPins.ts";
+import { isCommentPoint, type CommentPoint } from "./commentPoint.ts";
 import type { InlineNode, ListBlock, MarkdownBlock } from "./markdown.ts";
 
 /**
@@ -52,9 +52,8 @@ export interface CommentTarget {
    */
   quote?: { text: string; start: number; end: number; until?: SelectionEnd };
   /**
-   * Where the comment was made: a block clicked, or a selection a mouse dragged, where the pointer was, as fractions of
-   * its text's box. Its pin's tip goes there; without one, after the end of its text. Not part of what names the
-   * comment: the same block clicked elsewhere opens the same comment, its point unchanged.
+   * Where an older comment was made, as fractions of its text's box (lib/commentPoint.ts). Carried along only so
+   * stored entries round-trip: nothing draws or makes one now, and it is not part of what names the comment.
    */
   point?: CommentPoint;
 }
@@ -88,7 +87,7 @@ export interface BlockComment {
   range?: [number, number];
   /** a selection comment over several parts: the part it ends in (`CommentTarget.quote.until`) */
   until?: SelectionEnd;
-  /** where its pin points (`CommentTarget.point`); absent: after the end of its text */
+  /** where an older comment was made (`CommentTarget.point`): carried along only so stored entries round-trip */
   point?: CommentPoint;
 }
 
@@ -119,6 +118,16 @@ export function blockTarget(reply: ReplyPart, path: number[], block: MarkdownBlo
 /** The anchor of the part at `path` in `reply`: `${turnKey}:${part}:${path}`, the path dotted. */
 export function partAnchor(reply: ReplyPart, path: readonly number[]): string {
   return `${reply.turnKey}:${reply.part}:${path.join(".")}`;
+}
+
+/**
+ * The turn (its `turnKey`) a reply comment's anchor is on, whatever follows its part's anchor: a selection's
+ * `@${start}-${end}` (or `-${path}:${end}` when it runs on into a later part, one colon more) and a moved one's `~${id}`.
+ * A turn key (an ISO time with colons, or a turn's index) holds neither `@` nor `~`.
+ */
+export function anchorTurn(anchor: string): string {
+  const cut = anchor.search(/[@~]/);
+  return (cut < 0 ? anchor : anchor.slice(0, cut)).split(":").slice(0, -2).join(":");
 }
 
 /** A reply's commentable parts by anchor, each with its target and its place in document order. */
@@ -412,7 +421,7 @@ const newId = () => globalThis.crypto?.randomUUID?.() ?? `${Date.now().toString(
 
 /**
  * An entry from storage that renders and quotes without throwing: hand-edited or older data is dropped. A `point` that
- * is not one (`isCommentPoint`) is removed from the entry, which is kept: its pin goes after the end of its text.
+ * is not one (`isCommentPoint`) is removed from the entry, which is kept.
  */
 export function isBlockComment(value: unknown): value is BlockComment {
   if (typeof value !== "object" || value === null) return false;
@@ -454,10 +463,12 @@ const NONE: readonly never[] = [];
  * their identity until their own data changes, so `useSyncExternalStore` readers re-render only
  * for the comments they show.
  *
- * The store owns the Comments setting's effect on what is read (`setEnabled`): while it is off, every pane has no
- * comments to show, walk or send (`list`, `get`, `useBlockComments`, `usePartTouched`), whatever is stored. Settings do
- * not follow another tab, which may still have comments on and store new ones after this one turned them off: those
- * stay stored, untouched, and `countAll` and `clearAll` still see them.
+ * The store owns the Comments setting's effect (`setEnabled`): while it is off, every pane has no comments to show, walk
+ * or send (`list`, `get`, `useBlockComments`, `usePartTouched`), whatever is stored, and nothing written here is kept
+ * (`save`, `saveFile`, `moveFile`, `remove` change nothing): a comment field left then, by whichever opener and however,
+ * keeps nothing, so turning comments off (which deletes every comment, SettingsDialog.tsx) never brings one back.
+ * Settings do not follow another tab, which may still have comments on and store new ones after this one turned them
+ * off: those stay stored, untouched, and `countAll` and `clearAll` still see them.
  */
 export class BlockCommentStore {
   private lists = new Map<string, readonly PaneComment[]>();
@@ -479,8 +490,9 @@ export class BlockCommentStore {
   isUnsaved(owner: string): boolean { return this.unsaved.has(owner); }
 
   /**
-   * Applies the Comments setting (on by default): off, `list` and `get` find none; storage and the write paths are
-   * unaffected. A change tells subscribers once.
+   * Applies the Comments setting (on by default): off, `list` and `get` find none, and the writes (`save`, `saveFile`,
+   * `moveFile`, `remove`) keep nothing: no storage, no subscriber told, nothing marked unsaved. What is stored stays as it
+   * is (`countAll`, `clearAll` still see it). A change tells subscribers once.
    */
   setEnabled(on: boolean): void {
     if (on === this.enabled) return;
@@ -530,9 +542,10 @@ export class BlockCommentStore {
    * One comment per anchor; a blank comment removes it. A changed text gets a new id: a send on
    * its way carries the old text, and its acknowledgement must not take the edit with it. A
    * comment on another block that used to sit at this anchor (or, over several parts, that ended
-   * on another block) is kept, moved off the anchor.
+   * on another block) is kept, moved off the anchor. Nothing while comments are off (`setEnabled`).
    */
   save(owner: string, target: CommentTarget, comment: string): void {
+    if (!this.enabled) return;
     // a selection with nothing to quote is no selection: not even a blank save changes a comment
     if (target.quote && target.quote.text.trim() === "") return;
     this.refresh(owner);
@@ -550,7 +563,7 @@ export class BlockCommentStore {
       return;
     }
     if (existing?.comment === text) return;
-    // an edit keeps its place: a turn without a time placed it by when it was first written. And its pin's point, or
+    // an edit keeps its place: a turn without a time placed it by when it was first written. And its point, or
     // having none: the block clicked again elsewhere is the same comment
     const point = existing === undefined ? target.point : existing.point;
     const next = commentOn({ ...target, point }, newId(), existing?.order ?? [target.turnTime ?? this.now(), ...target.position], text);
@@ -564,9 +577,11 @@ export class BlockCommentStore {
    * an anchor another comment kept that way takes `~id` after it, as the chat's moved comments do:
    * stored anchors stay unique. A changed text gets a new id, for the reason `save` gives. A new
    * comment is stamped with the time it is written, an edit keeps it: it decides which file's
-   * comments are sent first. Returns the id of the comment now kept there, null when there is none.
+   * comments are sent first. Returns the id of the comment now kept there, null when there is none: deleted, or
+   * nothing kept while comments are off (`setEnabled`).
    */
   saveFile(owner: string, target: FileTarget, comment: string): string | null {
+    if (!this.enabled) return null;
     this.refresh(owner);
     const text = comment.trim();
     const comments = this.stored(owner);
@@ -579,7 +594,7 @@ export class BlockCommentStore {
     const id = newId();
     const wanted = existing?.anchor ?? target.anchor ?? fileAnchor(target);
     const anchor = existing === undefined && comments.some((c) => c.anchor === wanted) ? `${wanted}~${id}` : wanted;
-    // an edit keeps its pin's point, or having none, as `save` does
+    // an edit keeps its point, or having none, as `save` does
     const { point: _point, ...rest } = target;
     const point = existing === undefined ? target.point : existing.point;
     const next: FileComment = { ...rest, kind: "file", id, anchor, created: existing?.created ?? this.now(), comment: text, ...(point === undefined ? {} : { point }) };
@@ -589,9 +604,11 @@ export class BlockCommentStore {
 
   /**
    * Moves a file comment to `lines`, where its text was found again. It keeps its old anchor when
-   * another comment already holds the new one. An unknown id, or the lines it already has, is no change.
+   * another comment already holds the new one. An unknown id, or the lines it already has, is no change; nor is any
+   * move while comments are off (`setEnabled`).
    */
   moveFile(owner: string, id: string, lines: LineRange): void {
+    if (!this.enabled) return;
     this.refresh(owner);
     const comments = this.stored(owner);
     const moved = comments.find((c): c is FileComment => !isReplyComment(c) && c.id === id);
@@ -602,8 +619,12 @@ export class BlockCommentStore {
     this.write(owner, comments.map((c) => c === moved ? next : c));
   }
 
-  /** Removes the comments with these ids, as a send acknowledges them; an id already gone is no change. */
+  /**
+   * Removes the comments with these ids, as a send acknowledges them; an id already gone is no change. Nothing while
+   * comments are off (`setEnabled`).
+   */
   remove(owner: string, ids: readonly string[]): void {
+    if (!this.enabled) return;
     this.refresh(owner);
     const comments = this.stored(owner);
     const kept = comments.filter((c) => !ids.includes(c.id));

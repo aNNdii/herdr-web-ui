@@ -40,7 +40,7 @@ export interface TextFileViewProps {
  * The text of a file: Markdown rendered, or its code with line numbers. Each code line drawn as an element carries its
  * number (`data-source-line`), and the preview's elements carry the source lines they come from (its blocks are parsed
  * with their lines): a file comment is on those lines. Nothing of the comments is drawn here: their text is
- * highlighted and their pins and cards lie in the viewer's comment layers.
+ * highlighted and their cards and counts lie in the viewer's comment layers.
  */
 export function TextFileView({ path, blocks, lines, virtual, selectable, onOpen, sourceRef, previewRef, markedLine }: TextFileViewProps) {
   const t = useT();

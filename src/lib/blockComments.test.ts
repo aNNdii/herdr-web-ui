@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import { parseMarkdown, type ListBlock, type MarkdownBlock } from "./markdown.ts";
-import { BLOCK_COMMENTS_PREFIX, BlockCommentStore, blockContent, blockTarget, commentTarget, composeWithComments, draftComment, hasQuotedLine, isBlockComment, isMarkdownBlock, isPaneComment, isReplyComment, outgoingMessage, partSegments, quoteExcerpt, quoteFor, replyPart, replyParts, SELECTION_QUOTE_MAX, selectionTarget, textRange, type BlockComment, type CommentTarget } from "./blockComments.ts";
+import { anchorTurn, BLOCK_COMMENTS_PREFIX, BlockCommentStore, blockContent, blockTarget, commentTarget, composeWithComments, draftComment, hasQuotedLine, isBlockComment, isMarkdownBlock, isPaneComment, isReplyComment, outgoingMessage, partSegments, quoteExcerpt, quoteFor, replyPart, replyParts, SELECTION_QUOTE_MAX, selectionTarget, textRange, type BlockComment, type CommentTarget } from "./blockComments.ts";
 import { fileAnchor, type FileComment, type FileTarget } from "./fileComments.ts";
 
 const TS = "2026-10-03T10:12:00Z";
@@ -42,6 +42,32 @@ describe("blockTarget", () => {
   it("gives an unordered list item no start", () => {
     const list = first("- a\n- b") as ListBlock;
     expect(blockTarget(reply, [0, 0], list, 0).block).toEqual({ type: "list", ordered: false, items: [{ content: list.items[0]!.content }] });
+  });
+});
+
+describe("anchorTurn", () => {
+  const part = blockTarget(reply, [3, 1], first("text"));
+  const later = blockTarget(replyPart("o", TS, 7, 0), [5], first("later"));
+
+  it("is the turn of a block's anchor, whose ISO time holds colons", () => {
+    expect(part.anchor).toBe(`${TS}:0:3.1`);
+    expect(anchorTurn(part.anchor)).toBe(TS);
+    expect(anchorTurn("2026-10-04T10:01:05.000Z:2:0")).toBe("2026-10-04T10:01:05.000Z");
+  });
+  it("is the turn of a selection's anchor, within one block or running on into a later one", () => {
+    const within = selectionTarget(part, "text", 0, 4);
+    expect(within.anchor).toBe(`${TS}:0:3.1@0-4`);
+    expect(anchorTurn(within.anchor)).toBe(TS);
+    const across = selectionTarget(part, "text later", 0, 4, { target: later, end: 3 });
+    expect(across.anchor).toBe(`${TS}:0:3.1@0-5:3`);
+    expect(anchorTurn(across.anchor)).toBe(TS);
+  });
+  it("is the turn of an anchor moved off its place by a replaced part (`~id`)", () => {
+    expect(anchorTurn(`${TS}:0:3.1~c-1:x`)).toBe(TS);
+    expect(anchorTurn(`${TS}:0:3.1@0-5:3~c-2`)).toBe(TS);
+  });
+  it("is the turn of a reply without a time, keyed by its index", () => {
+    expect(anchorTurn(blockTarget(replyPart("o", null, 7, 1), [0], first("text")).anchor)).toBe("7");
   });
 });
 
@@ -234,7 +260,7 @@ describe("BlockCommentStore.setEnabled (the Comments setting)", () => {
     store.setEnabled(true);
     expect(store.list("o")).toEqual([]);
   });
-  it("keeps what another tab writes while off, and the write paths work on what is stored", () => {
+  it("keeps what another tab writes while off, and keeps nothing written here meanwhile", () => {
     const { store, storage } = fixture();
     store.save("o", at([0], "first"), "one");
     store.setEnabled(false);
@@ -245,7 +271,33 @@ describe("BlockCommentStore.setEnabled (the Comments setting)", () => {
     expect(store.countAll()).toBe(2);
     store.save("o", at([2], "third"), "three");
     store.setEnabled(true);
-    expect(store.list("o").map((c) => c.comment).sort()).toEqual(["one", "three", "two"]);
+    expect(store.list("o").map((c) => c.comment).sort()).toEqual(["one", "two"]);
+  });
+  it("keeps nothing while off: save, saveFile, moveFile and remove change nothing, tell no one and mark nothing unsaved", () => {
+    const { store, data, storage } = fixture();
+    const file = { path: "/repo/a.ts", label: "a.ts", view: "code" as const, lines: [1, 1] as [number, number], source: ["x"], quoteLines: ["x"] };
+    store.save("o", at([0], "first"), "one");
+    const fileId = store.saveFile("o", file, "two")!;
+    const reply = store.list("o").find(isReplyComment)!;
+    const raw = data.get(KEY);
+    // a storage that fails every write: a write that reached it would mark the pane unsaved
+    storage.setItem = () => { throw new Error("quota"); };
+    storage.removeItem = () => { throw new Error("quota"); };
+    store.setEnabled(false);
+    let told = 0;
+    store.subscribe(() => { told++; });
+    store.save("o", at([1], "second"), "three");
+    store.save("o", at([0], "first"), "");
+    expect(store.saveFile("o", { ...file, lines: [2, 2] }, "four")).toBeNull();
+    expect(store.saveFile("o", file, "")).toBeNull();
+    store.moveFile("o", fileId, [3, 3]);
+    store.remove("o", [reply.id, fileId]);
+    expect(told).toBe(0);
+    expect(store.isUnsaved("o")).toBe(false);
+    expect(data.get(KEY)).toBe(raw);
+    store.setEnabled(true);
+    expect(store.list("o").map((c) => c.comment).sort()).toEqual(["one", "two"]);
+    expect((store.list("o").find((c) => c.id === fileId) as FileComment | undefined)?.lines).toEqual([1, 1]);
   });
   it("tells subscribers once per change, and not for the value it already has", () => {
     const { store } = fixture();

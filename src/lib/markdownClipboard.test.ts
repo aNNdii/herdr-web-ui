@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { MARKDOWN_COMMENTS_CLASS } from "./commentDom.ts";
 import { renderedMarkdownPayload, type ClipboardNode } from "./markdownClipboard.ts";
 
 const text = (value: string): ClipboardNode => ({ tag: "", text: value });
@@ -76,5 +77,16 @@ describe("renderedMarkdownPayload", () => {
       ]),
     ];
     expect(renderedMarkdownPayload(nodes).text).toBe("> Quote\n\n| Name |\n| --- |\n| a\\|b |");
+  });
+
+  test("leaves out the comment layer's cards and counts between two replies", () => {
+    const nodes = [
+      element("P", [text("End of reply A.")]),
+      element("DIV", [element("DIV", [element("P", [text("Private comment text")], { class: "markdown-comment-text" })], { class: "markdown-comment-card" })], { class: `${MARKDOWN_COMMENTS_CLASS} comment-margin` }),
+      element("P", [text("Start of reply B.")]),
+    ];
+    const payload = renderedMarkdownPayload(nodes);
+    expect(payload.text).toBe("End of reply A.\n\nStart of reply B.");
+    expect(payload.html).not.toContain("Private comment text");
   });
 });

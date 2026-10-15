@@ -1,6 +1,6 @@
 /**
- * The code view's comments, as in Claude's code preview (FileViewer uses it instead of the pin layer while the code
- * shows). Commenting is a mode the viewer's header turns on (`codeCommentMode`); off, the code reads and selects as a
+ * The code view's comments, as in Claude's code preview (FileViewer uses it instead of the Markdown comment layer while the code
+ * shows). Commenting is a mode the viewer's header turns on (`commentMode`); off, the code reads and selects as a
  * plain viewer and the cards are read-only.
  *
  * - A saved comment is a card under the last line it is on (`codeCommentRows`), in a row of the layer over the content.
@@ -12,13 +12,13 @@
  * - With a mouse or a pen, the ⊕ shows on the hovered line, centred on the divider (CodeCommentAdd.tsx); it opens the
  *   field under the line, on a new comment or the one there (`fileCommentAt`). With the mode on it is also one Tab stop:
  *   the arrow keys move it, and Enter opens the line's field in a row (never the sheet), which gives the focus back to
- *   the ⊕ as it closes. With Settings → File viewer → Click a
+ *   the ⊕ as it closes. With Settings → Comments → Click a
  *   line to comment, a plain click on a line (`isCommentClick`) opens it too, and a double click still selects a word.
  * - With a finger, a long press on a line or a tap (Settings → On mobile, comment with) opens it
- *   (CodeCommentTouch.tsx), and turning the mode by touch shows a hint under the header. Which applies is decided per
+ *   (CodeCommentTouch.tsx), and turning the mode by touch shows a hint under the header (FileViewer.tsx). Which applies is decided per
  *   press by its `pointerType`, not by the screen.
  * - The field is `CommentPopover` in place of the card (`row`), its rules those of every comment popover
- *   (`useCommentPopover`): one at a time, nothing typed lost. One a finger opened is the bottom sheet (`sheet`, with
+ *   (`useCommentPopover`): one at a time, and leaving one saves what was typed in it (`leaveEdit`). One a finger opened is the bottom sheet (`sheet`, with
  *   the line quoted) unless Settings → On mobile, write comments in says Below the line; there the row's text is at
  *   least `--fs-input`, so iOS does not zoom.
  * - What each comment is on is highlighted (`useFileCommentHighlights`), the line of a new one as pending.
@@ -34,15 +34,15 @@ import { COMMENT_ROOM_ATTR, lineAt, lineElement, lineElementIndex, originOf, set
 import { codeCommentRows } from "../lib/codeCommentRows.ts";
 import { CODE_COMMENTS_CLASS, FIELD_SLOT_CLASS, focusOpenField } from "../lib/commentDom.ts";
 import { FRAMED_CODE_FIELD } from "../lib/frameField.ts";
-import { activateComment, PENDING_COMMENT_ID } from "../lib/commentHighlight.ts";
-import { focusAfter } from "../lib/commentPins.ts";
-import { popoverEscape } from "../lib/commentPopover.ts";
-import { fileCommentAt, type FileComment, type FileTarget, type LineRange } from "../lib/fileComments.ts";
+import { activateComment, markCommentSurface, PENDING_COMMENT_ID } from "../lib/commentHighlight.ts";
+import { focusAfter } from "../lib/commentMargin.ts";
+import { lineQuote } from "../lib/commentPopover.ts";
+import { fileAnchor, fileCommentAt, type FileComment, type FileTarget, type LineRange } from "../lib/fileComments.ts";
 import { useT } from "../lib/i18n.ts";
 import { useSettings } from "../lib/settings.ts";
 import { useMediaQuery } from "../lib/useMediaQuery.ts";
 import { CodeCommentAdd, type AddPress } from "./CodeCommentAdd.tsx";
-import { CodeCommentHint, useCodeCommentPress, useModeHint } from "./CodeCommentTouch.tsx";
+import { useCodeCommentPress } from "./CodeCommentTouch.tsx";
 import { CommentPopover, type PopoverPlacement } from "./CommentPopover.tsx";
 import { FieldFrameContext, FRAME_HOST_CLASS, slotSized, useFieldFrame } from "./FrameField.tsx";
 import { linesTarget, targetOf, useFileCommentHighlights, type FileCommentScope, type FileComments, type FileHighlightWatcher } from "./FileComments.tsx";
@@ -62,10 +62,12 @@ export interface CodeCommentsOptions {
 
 /** Bound once: a class method handed on loses its `this`. */
 const persistFile = blockComments.saveFile.bind(blockComments);
+/** Two targets are one place: the anchor a stored comment keeps, else the one its lines make (`fileAnchor`). */
+const sameFilePlace = (a: FileTarget, b: FileTarget): boolean => (a.anchor ?? fileAnchor(a)) === (b.anchor ?? fileAnchor(b));
 const NO_ROOMS: ReadonlyMap<number, number> = new Map();
 
-// a card the pointer is over, or whose text button the keyboard's focus is on, brings its comment's text up, as a pin does
-// in the preview (CommentPins.tsx): the same `activateComment`, so no second highlight. Not a finger: a touch enters a card on
+// a card the pointer is over, or whose text button the keyboard's focus is on, brings its comment's text up, as a card does
+// in the preview (CommentMargin.tsx): the same `activateComment`, so no second highlight. Not a finger: a touch enters a card on
 // every tap and every scroll that starts on it
 const pointerOn = (event: ReactPointerEvent<HTMLElement>): void => {
   if (event.pointerType !== "touch") activateComment(event.currentTarget, "pointer", true);
@@ -384,24 +386,20 @@ const CodeCommentLayer = memo(function CodeCommentLayer({ surface, pre, rows, mo
 /**
  * The code view's comment layer (see the module comment) for `scope`'s file.
  * - `layer` goes into the viewer's body after its content.
- * - `escape` is the viewer's Escape asked first (`popoverEscape`): it closes an open field with its text unchanged and
- *   gives a changed one the focus back, true either way.
+ * - `escape` is the viewer's Escape asked first: it leaves an open field (`leaveEdit`: a change saved, else closed),
+ *   true while one was open.
  * - `stop` is the composer's walk at comment `id`: its card (or the row of its open field) scrolled to and marked
  *   current until the next click, and opened while the mode is on, as a finger opens it on a touch screen (the sheet
  *   or the row); false while it has no card.
- * - `toggleMode` is the header toggle's press, with the `pointerType` that pressed it (a finger's shows the hint).
  */
 export function useCodeComments({ scope, comments, surface, content, focusFallback }: CodeCommentsOptions): {
   layer: ReactNode;
-  /** the code's comments are shown: the viewer's body is a comment surface (`data-comment-surface`), so a card brings its text up as a pin does */
-  shown: boolean;
   escape: () => boolean;
   stop: (id: string) => boolean;
-  toggleMode: (pointerType: string) => void;
 } {
   const t = useT();
-  const { settings, update } = useSettings();
-  const mode = settings.codeCommentMode;
+  const { settings } = useSettings();
+  const mode = settings.commentMode;
   // a walk's stop has no pointer event: a touch screen's is a finger's opening (the sheet, or the row at --fs-input)
   const coarse = useMediaQuery("(pointer: coarse)");
   const coarseRef = useRef(coarse);
@@ -412,12 +410,11 @@ export function useCodeComments({ scope, comments, surface, content, focusFallba
   // the id the open comment's save gave it: an edit with a changed text is stored under a new id, and its card is where the
   // focus goes back to
   const savedId = useRef<string | null>(null);
-  const persist = useCallback((owner: string, target: FileTarget, comment: string): void => { savedId.current = persistFile(owner, target, comment); }, []);
-  const { open, show, save, remove, close, text } = useCommentPopover<FileTarget>({ persist, enabled: settings.comments });
+  const { open, show, save, leave, remove, close, text } = useCommentPopover<FileTarget>({ enabled: settings.comments, samePlace: sameFilePlace });
   const layerRef = useRef<HTMLDivElement>(null);
   // read by the handlers, which outlive the render that made them
-  const latest = useRef({ scope, comments, mode, lineClick: settings.codeCommentLineClick, gesture: settings.mobileCommentGesture, open, focusFallback });
-  latest.current = { scope, comments, mode, lineClick: settings.codeCommentLineClick, gesture: settings.mobileCommentGesture, open, focusFallback };
+  const latest = useRef({ scope, comments, mode, lineClick: settings.codeCommentLineClick, open, focusFallback });
+  latest.current = { scope, comments, mode, lineClick: settings.codeCommentLineClick, open, focusFallback };
 
   // an open comment of this file and view is drawn in the layer; one opened before the view moved on (another file, the
   // preview) as a dialog, with what was typed
@@ -440,17 +437,29 @@ export function useCodeComments({ scope, comments, surface, content, focusFallba
   // highlights, and the line a new comment is being written on as pending
   const watcher = useRef<FileHighlightWatcher | null>(null);
   // no focus mode here: a card's hover or focus must not toggle an attribute on the body, which restyles every line of a long file
-  const pre = useFileCommentHighlights(scope !== null, surface, content, comments.shown, watcher, false);
+  const pre = useFileCommentHighlights(scope !== null, surface, content, comments.shown, watcher);
   const layerShown = settings.comments && scope !== null && pre !== null;
   const pending: LineRange | null = here && open.commentId === null ? open.target.lines : null;
   const pendingKey = pending === null ? "" : `${pending[0]}-${pending[1]}`;
   useLayoutEffect(() => {
     watcher.current?.setPending(pending === null ? null : { id: PENDING_COMMENT_ID, lines: pending });
   }, [pendingKey, pre]);
+  // while the code's comments are shown, the viewer's body is their surface (lib/commentHighlight.ts
+  // `markCommentSurface`), so a card brings its text up as the preview's does: marked here, as the preview's source marks it
+  useLayoutEffect(() => {
+    const body = surface.current;
+    if (!layerShown || body === null) return;
+    return markCommentSurface(body);
+  }, [layerShown, surface]);
 
-  /** Opens the field on `target` (`touch`: a finger opened it; `keyboard`: the ⊕ with a key), else (one with text typed keeps its place) gives that field the focus back. */
+  /**
+   * Opens the field on `target` (`touch`: a finger opened it; `keyboard`: the ⊕ with a key), the open one saved first
+   * (`show`); the open one's own place, with text typed, keeps it and gives its field the focus back.
+   */
   const showOn = useCallback((owner: string, target: FileTarget, existing: { id: string; comment: string } | null, touch: boolean, keyboard = false): void => {
-    if (show(owner, target, existing)) {
+    // the open comment's own target, as the popover hands it on (`CommentEdit.keep`): the `target` it opened on
+    const keep = (target: FileTarget, comment: string): string | null => (savedId.current = persistFile(owner, target, comment));
+    if (show({ owner, target, existing, keep })) {
       savedId.current = null;
       setTouchOpened(touch);
       setKeyOpened(keyboard);
@@ -512,11 +521,10 @@ export function useCodeComments({ scope, comments, surface, content, focusFallba
     return () => body.removeAttribute("data-code-comments");
   }, [layerShown, mode, surface]);
 
-  // the mode turned off: an unchanged field closes, one with text typed stays until it is saved or emptied
+  // the mode turned off leaves the open field, which saves what was typed in it
   useEffect(() => {
-    if (mode) return;
-    if (popoverEscape(latest.current.open, text.read()) === "close") close();
-  }, [mode, text, close]);
+    if (!mode) leave();
+  }, [mode, leave]);
 
   // Click a line to comment: a mouse's or a pen's plain click on a line opens it (`isCommentClick`), and a double click
   // closes the new, unchanged field its first click opened, so it still selects a word. A press that dismissed an open
@@ -568,20 +576,7 @@ export function useCodeComments({ scope, comments, surface, content, focusFallba
     return true;
   }, [openComment]);
 
-  // turned by a finger, the hint says how to comment now, or that the mode is off; a mouse has the ⊕ to show the way
-  const { hint, show: showHint } = useModeHint();
-  const toggleMode = useCallback((pointerType: string): void => {
-    const on = !latest.current.mode;
-    update({ codeCommentMode: on });
-    if (pointerType === "touch") showHint(on ? latest.current.gesture : "off");
-  }, [update, showHint]);
-
-  const escape = (): boolean => {
-    const outcome = popoverEscape(open, text.read());
-    if (outcome === "close") close();
-    else if (outcome === "keep") focusOpenField(surface.current);
-    return outcome !== "none";
-  };
+  const escape = leave;
 
   // the rows: the cards under the last line each comment is on, and the open field's line (none for the sheet)
   const cardRows = useMemo(() => codeCommentRows(comments.shown), [comments.shown]);
@@ -605,13 +600,13 @@ export function useCodeComments({ scope, comments, surface, content, focusFallba
     // a stored comment is named by the lines it is on now
     const lines: LineRange = open.commentId === null ? open.target.lines
       : comments.shown.find(({ comment }) => comment.id === open.commentId)?.lines ?? open.target.lines;
-    // the sheet lies over the code: it quotes the line as the viewer shows it (its number, its coloured text: the line
-    // element's own spans), and is named for assistive tech only
+    // the sheet lies over the code: it quotes the commented lines' text (no number), and is named for assistive tech only
     const onSheet = placement === "sheet" && scope !== null;
     return <CommentPopover
       key={open.id}
       placement={placement}
-      quote={onSheet ? { code: { line, text: scope.lines[line - 1] ?? "", source: pre === null ? null : lineElement(pre, line) } } : { text: open.target.quoteLines.join("\n") }}
+      quote={{ text: open.target.quoteLines.join("\n") }}
+      sheetQuote={onSheet ? lineQuote(scope.lines, lines) : undefined}
       label={onSheet ? t("Comment on line {line}", { line }) : undefined}
       reference={{ path: open.target.path, lines }}
       comment={open.initialComment}
@@ -633,7 +628,7 @@ export function useCodeComments({ scope, comments, surface, content, focusFallba
       // the row and the sheet: the field in a frame of its own (FrameField.tsx); the dialog of another file's comment is not the code view's
       framed={FRAMED_CODE_FIELD && placement !== "dialog"}
     />;
-  }, [open, openLineNumber, comments.shown, scope, pre, t, text, save, remove, close, keyOpened]);
+  }, [open, openLineNumber, comments.shown, scope, t, text, save, remove, close, keyOpened]);
 
   // kept while the opening and its line are: the layer is not drawn again for every render of the viewer
   const field = useMemo(() => here && !sheet ? { commentId: open.commentId, touch: touchOpened, node: popover("row") } : null, [here, sheet, open, touchOpened, popover]);
@@ -662,12 +657,9 @@ export function useCodeComments({ scope, comments, surface, content, focusFallba
         onPlaced={press.place}
         layerRef={layerRef}
       />
-      {/* beside the layer, not in it: the hint coming and going draws the layer again for nothing; it lies at the
-          body's top left as the layer does (CodeComments.css `.code-comment-status`) */}
-      <CodeCommentHint surface={surface} hint={hint} />
       {sheet && popover("sheet")}
       {away}
     </>;
   }
-  return { layer, shown: layerShown, escape, stop, toggleMode };
+  return { layer, escape, stop };
 }
