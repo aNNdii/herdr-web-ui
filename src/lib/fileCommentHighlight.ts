@@ -1,10 +1,10 @@
 /**
  * The comments on a file shown in the file viewer, highlighted with the same CSS Custom Highlight
  * API highlights the chat uses (`commentHighlight.ts`): a selection's text, a comment on whole lines
- * all of their text; over them the comment whose pin the pointer or the focus is on, or whose popover is open, and over that
- * the one the composer's walk stands on. A comment on whole lines also marks each of its `.hl-line`s
+ * all of their text; each comment on a layer of its own, so overlapping comments' fills add up, and the comment in focus
+ * (its card under the pointer or the focus, its field open) in the strong fill. A comment on whole lines also marks each of its `.hl-line`s
  * `is-commented`, for the code view's own line styling. The viewer is a comment surface of its own
- * (`SurfaceMarks`, `watchSurface`), so the pins bring their text up as in the chat. Needs a DOM.
+ * (`SurfaceMarks`, `watchSurface`), so the cards bring their text up as in the chat. Needs a DOM.
  */
 import { SurfaceMarks, watchSurface } from "./commentHighlight.ts";
 import { lineElementIndex, lineRanges } from "./fileCommentDom.ts";
@@ -68,18 +68,18 @@ class FileHighlights {
 /**
  * Shows the comments `show` is given in `content` (the file's lines, inside `surface`, the element
  * carrying `data-comment-surface`) until `dispose` runs; `setPending` shows the one being written
- * (null: none) with the stronger tint. The ranges are rebuilt at most once per frame after a call
+ * (null: none) with the pending fill. The ranges are rebuilt at most once per frame after a call
  * to either or a change in `content`'s DOM (a file reloaded, a preview
- * rendered again). A rewrap needs nothing: a range follows its text. `focusMode` is `SurfaceMarks`'s.
+ * rendered again). A rewrap needs nothing: a range follows its text.
  */
-export function watchFileCommentHighlights(surface: Element, content: Element, focusMode = true): {
+export function watchFileCommentHighlights(surface: Element, content: Element): {
   show(comments: readonly ShownFileComment[]): void;
   setPending(comment: ShownFileComment | null): void;
   dispose(): void;
 } {
-  const marks = new SurfaceMarks(surface, focusMode);
+  const marks = new SurfaceMarks(surface);
   const highlights = new FileHighlights(marks, content);
-  // any change in the content can move or end a range: the pins are not in it (they lie in the surface's pin layer)
+  // any change in the content can move or end a range: the cards are not in it (they lie in the surface's comment layer)
   const watching = watchSurface(marks, content, () => highlights.rebuild());
   return {
     show(comments) {

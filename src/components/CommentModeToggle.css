@@ -1,0 +1,41 @@
+/* The comment mode's toggle (CommentModeToggle.tsx), in the file viewer's header and in the chat beside Find; where it
+   sits is its host's (FileViewer.css, ChatFind.css), which also makes it the badge's positioned ancestor. On, the glyph
+   carries the accent; the count is a badge on its corner. */
+.comment-mode-toggle[aria-pressed="true"] {
+  background: var(--bg-hover);
+  color: var(--accent);
+}
+
+.comment-mode-count {
+  position: absolute;
+  top: calc(-1 * var(--space-1));
+  right: calc(-1 * var(--space-1));
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  min-width: 21px;
+  height: 21px;
+  padding: 0 var(--space-1);
+  border: 2px solid var(--bg-panel);
+  border-radius: var(--radius-pill);
+  background: var(--bg-hover);
+  color: var(--text-strong);
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-semibold);
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+  pointer-events: none;
+}
+
+.comment-mode-toggle[aria-pressed="true"] .comment-mode-count {
+  background: var(--primary);
+  color: var(--primary-text);
+}
+
+@media (pointer: coarse) {
+  .comment-mode-count {
+    min-width: 22px;
+    height: 22px;
+  }
+}

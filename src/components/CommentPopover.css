@@ -1,6 +1,6 @@
-/* The open comment (CommentPopover.tsx): beside its pin, a small card over the text, placed by
-   CommentPins.tsx inside `.comment-popover-place`; as a dialog, the shared modal primitive, which is
-   a bottom sheet at phone width. The card is the input box: beside its pin, the field alone (a file
+/* The open comment (CommentPopover.tsx): in place (`.is-row`), a small card by the text, laid out by its caller (the
+   code view's layer, the Markdown comment layer); as a dialog, the shared modal primitive, which is
+   a bottom sheet at phone width. The card is the input box: in place, the field alone (a file
    comment's file and lines only for assistive tech), then a saved comment's Delete at the left and ↑ at the right. A dialog and a
    sheet first quote what the comment is on, with ✕ at the right. A sheet (and the dialog at phone width) is the app's
    modal sheet (styles.css `.modal`: panel, no border, `--radius-xl`) with its field drawn as an input of its own; only
@@ -15,7 +15,7 @@
   box-shadow: var(--shadow-pop);
   color: var(--text);
   /* the chat's face (Settings → Chat font, ChatView.css `.chat-transcript`), at the transcript's size and
-     scaled with it (Settings → Chat font size): the popover lies beside the text it is on, in a pin layer outside the
+     scaled with it (Settings → Chat font size): the popover lies beside the text it is on, in a comment layer outside the
      transcript, or in a portal, so it says both itself */
   font-family: var(--font-chat, var(--font-ui));
   font-size: calc(var(--fs-chat) * var(--chat-scale, 1));
@@ -48,7 +48,7 @@
 
 /* as a dialog (`.modal`): the bottom sheet, with its grip, full width, top radii and the room for the home indicator. It
    is that at any width for a `sheet` placement (`.is-sheet`) and at phone width for a `dialog`, which is centred and as
-   narrow as beside a pin above it (the media query below): the sheet is declared once, the wide dialog is the exception */
+   narrow as the card in place above it (the media query below): the sheet is declared once, the wide dialog is the exception */
 .modal.comment-popover {
   width: 100%;
   /* nothing in it scrolls sideways or resizes: with both, a browser draws a corner (a resize grip) at the box's bottom right */
@@ -108,6 +108,13 @@
 
 /* in place under a code line (the code view): as wide as its container, a card without the popover's shadow, the field
    and the actions side by side, the actions at the bottom as the field grows */
+/* the row's height at most, its hairline and padding included: the field then scrolls. Also on a framed field's body
+   (FrameField.tsx, `.comment-frame.is-row`), whose document holds the field without the card around it */
+.comment-popover.is-row,
+.comment-frame.is-row {
+  --comment-row-max: 160px;
+}
+
 .comment-popover.is-row {
   width: 100%;
   box-shadow: none;
@@ -125,6 +132,8 @@
   flex: 1 1 auto;
   min-width: 0;
   padding: var(--space-1) 0;
+  /* the row ends at `--comment-row-max`: its hairline and padding are the rest */
+  max-height: calc(var(--comment-row-max) - 2 * var(--space-2) - 2 * var(--hairline));
 }
 
 /* the row's field in a frame of its own (FrameField.tsx): its slot takes the field's place, the frame lies over it */
@@ -230,24 +239,20 @@ pre.comment-popover-plain {
   font-size: calc(var(--fs-sm) * var(--chat-scale, 1));
 }
 
-/* a line of the code view, as the viewer shows it: its text in the viewer's own colours (cloned spans, `.hl-*` in
-   HighlightedCode.css), at the code view's size (FileViewer.css `.file-viewer-text`), and its number as the gutter draws
-   it (HighlightedCode.css `.hl-line::before`): the line-number colour, no weight, a gap. Not quiet text like the other
-   quotes: the code view's colours are not dimmed */
-.comment-popover-quote.is-code {
-  overflow-x: hidden;
-  color: var(--text);
-}
-
-.comment-popover-quote pre.comment-popover-code {
-  font-size: var(--fs-xs);
+/* a sheet's quote of the commented text: as a Markdown blockquote is (ChatView.css `.markdown blockquote`), a rail and dim
+   text in the popover's own (the chat's) face and size, no box, no fill, no accent; three lines, then "…" */
+.comment-sheet-quote {
+  display: -webkit-box;
+  margin: 0;
+  padding-left: var(--space-3);
+  border-left: var(--rail-w) solid var(--border-strong);
+  color: var(--text-dim);
   line-height: var(--lh-base);
-}
-
-.comment-popover-code-number {
-  margin-right: var(--space-3);
-  color: var(--line-number);
-  user-select: none;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  line-clamp: 3;
 }
 
 /* the form: the card itself is the input box, as the inline form before it was. The field bare in it, then a row with a
@@ -258,19 +263,23 @@ pre.comment-popover-plain {
   gap: var(--space-3);
 }
 
-/* a comment's field (CommentDraft.tsx `CommentField`), bare in the card: two lines tall at first, grows with the
-   comment (CommentDraft.tsx) up to six lines, then scrolls. The code view's row holds the room for it at this cap once it
-   outgrows its first height (CodeComments.tsx `fieldRoom`) */
+/* a comment's field (CommentDraft.tsx `CommentField`), bare in the card: one line tall at first (beside ↑ the card is about
+   52 px; a sheet's input starts four lines tall, `.is-sheet` below), grows with the comment (CommentDraft.tsx) up to the
+   cap, then scrolls: six lines, in a row about 160 px in all (`.is-row` below). The code view's row holds the room for it at this cap once it outgrows its first height
+   (CodeComments.tsx `fieldRoom`) */
 .comment-editor-field {
   display: block;
   width: 100%;
-  min-height: 2lh;
+  min-height: 1lh;
   max-height: 6lh;
   padding: 0;
   background: transparent;
   border: 0;
   color: var(--text-strong);
   font: inherit;
+  /* the chat's face, text and placeholder, whatever the field inherits: the code view's field is drawn in a frame of its
+     own (FrameField.tsx), whose body takes its face from a copy and never the code's */
+  font-family: var(--font-chat, var(--font-ui));
   /* never under --fs-input on a touch screen, the smallest size iOS does not zoom the page for (Composer.css) */
   font-size: max(var(--fs-input), calc(var(--fs-chat) * var(--chat-scale, 1)));
   line-height: var(--lh-base);
@@ -286,20 +295,31 @@ pre.comment-popover-plain {
   }
 }
 
+.comment-editor-field::placeholder {
+  font-family: var(--font-chat, var(--font-ui));
+}
+
 .comment-editor-field:focus {
   outline: none;
 }
 
 /* in a sheet (and the dialog at phone width, which the wide dialog's rule above takes back) the field is an input of its
    own, as the app's inputs are (styles.css `.input`): it is the place to type, and it takes the accent edge itself. Only
-   in the popover's own modal: a card in the file viewer (a row under a code line, a popover beside a pin) lies inside
+   in the popover's own modal: a card in the file viewer (a row under a code line or by a selection) lies inside
    the viewer's `.modal` too, and there the card is the input box, so its field stays bare */
 .modal.comment-popover .comment-editor-field,
 .comment-frame.is-sheet .comment-editor-field {
+  min-height: 2lh;
   padding: var(--space-2) var(--space-3);
   background: var(--bg-input);
-  border: var(--hairline) solid var(--border);
+  border: var(--hairline) solid var(--border-strong);
   border-radius: var(--radius-md);
+}
+
+/* the sheet's input is about four lines high, growing to the cap: the dialog's keeps its two */
+.modal.comment-popover.is-sheet .comment-editor-field,
+.comment-frame.is-sheet .comment-editor-field {
+  min-height: 4lh;
 }
 
 .modal.comment-popover .comment-editor-field:focus,
@@ -389,20 +409,40 @@ pre.comment-popover-plain {
   }
 }
 
-/* a sheet is always for fingers, at any width and whatever the pointer: ✕, Delete and Save at 44 px at least (as the
-   pin does, CommentPins.css), and Save says so, its label beside ↑ */
-.is-sheet .comment-popover-action,
-.is-sheet .comment-popover-delete {
+/* a sheet is always for fingers, at any width and whatever the pointer: ✕, Delete and Save at 44 px at least (the
+   margin's touch targets, CommentMargin.css). Its actions are the app's text buttons (styles.css `.btn`), no icon: Delete (`.btn-ghost`)
+   pushed to the left, Save (`.btn-primary`) at the right */
+.is-sheet .comment-popover-action {
   width: max(44px, var(--touch-target));
   height: max(44px, var(--touch-target));
 }
 
-.is-sheet .comment-popover-save {
-  gap: var(--space-2);
-  width: auto;
+.is-sheet .comment-popover-edit-footer .btn {
   min-width: max(44px, var(--touch-target));
   height: max(44px, var(--touch-target));
   padding: 0 var(--space-4);
-  font: inherit;
-  font-weight: var(--fw-semibold);
+}
+
+.comment-sheet-delete {
+  margin-right: auto;
+}
+
+/* a sheet paging through a count's comments (MarkdownCommentSheet.tsx): "1 of 2" between ‹ and ›, left of ✕, quiet */
+.comment-sheet-page {
+  align-self: center;
+  color: var(--text-dim);
+  font-size: var(--fs-sm);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* a read-only sheet (the comment mode off): the comment as text where the input would be */
+.comment-sheet-text {
+  margin: 0;
+  color: var(--text-strong);
+  font-family: var(--font-chat, var(--font-ui));
+  font-size: max(var(--fs-input), calc(var(--fs-chat) * var(--chat-scale, 1)));
+  line-height: var(--lh-base);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }

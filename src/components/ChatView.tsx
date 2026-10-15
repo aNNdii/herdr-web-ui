@@ -16,7 +16,10 @@ import { ChatDiffContext, TurnChangedFiles } from "./TurnChangedFiles.tsx";
 import type { RepoDiffTarget } from "../lib/repoDiff.ts";
 import { Markdown, ReservedImage } from "./Markdown.tsx";
 import { ImageLightbox } from "./ImageLightbox.tsx";
-import { useCommentSurface, type SurfaceComment } from "./useCommentSurface.tsx";
+import { chatCommentRoots, ReplyMargin, useChatCommentSource, useChatMargin } from "./ChatComments.tsx";
+import { CommentModeHint, useModeHint } from "./CommentModeHint.tsx";
+import { CommentModeToggle } from "./CommentModeToggle.tsx";
+import { MarkdownCommentLayer, type MarkdownCommentLayerHandle } from "./MarkdownComments.tsx";
 import { PromptCard } from "./PromptCard.tsx";
 import { RenderBoundary } from "./RenderBoundary.tsx";
 import { loadChatTimeline, loadedChatTimeline, useChatTimeline } from "./chatTimelineLoader.ts";
@@ -54,9 +57,8 @@ import { patchText } from "../../shared/patch.ts";
 import { workRowLabel } from "../lib/workRowLabel.ts";
 import { machinePath, paneStorageId } from "../../shared/machines.ts";
 import { chatRestoreIndex, chatTurnAnchor, readChatPosition, rememberChatPosition, type ChatPosition } from "../lib/chatScrollMemory.ts";
-import { BlockCommentContext, blockComments, blockContent, commentTarget, isReplyComment, quoteExcerpt, replyPart, selectionTarget, useBlockComments, type CommentTarget, type ReplyPart } from "../lib/blockComments.ts";
-import { commentPartOf, paneComposer, pointOnText, selectionComment, type SelectionComment } from "../lib/commentSelection.ts";
-import { draftRanges, showPendingComment, watchCommentHighlights } from "../lib/commentHighlight.ts";
+import { BlockCommentContext, isReplyComment, replyPart, useBlockComments, type ReplyPart } from "../lib/blockComments.ts";
+import { paneComposer } from "../lib/commentSelection.ts";
 import { fileUrl } from "../lib/api.ts";
 import { useMachineId } from "../lib/machineContext.tsx";
 import { useSkillMatcher } from "../lib/useSkillMatcher.ts";
@@ -70,8 +72,6 @@ import { shouldFoldUserMessage } from "../lib/userMessageFold.ts";
 /** The pane this chat shows, for what its rows fetch on request (a tool call's whole output). */
 const ChatPaneContext = createContext<string | null>(null);
 const ChatHistoryContext = createContext("");
-/** Bound once: a class method handed on loses its `this`. */
-const persistReplyComment = blockComments.save.bind(blockComments);
 /**
  * Opens the image viewer for a message's pictures. The viewer is held by ChatView, not by the row:
  * a virtualized row unmounts once it scrolls out of the render window (the transcript follows new
@@ -628,7 +628,8 @@ function noticeLabel(t: ReturnType<typeof useT>, notice: Extract<ConversationPar
 
 /**
  * One turn of the conversation. A turn that did not change keeps its object across polls, so the
- * memo skips re-rendering it. The final-answer parts of a turn that is not live are commentable.
+ * memo skips re-rendering it. The final-answer parts of a turn that is not live are commentable, and their comments' cards
+ * or counts sit beside the turn, in its row (ChatComments.tsx `ReplyMargin`).
  */
 const Turn = memo(function Turn({ paneId, turn, live, waiting, showThinking, skills = null, matched = false, index, commentable = true }: TurnProps) {
   const t = useT();
@@ -638,6 +639,10 @@ const Turn = memo(function Turn({ paneId, turn, live, waiting, showThinking, ski
   // blocks keep theirs; none while the answer is still being written
   const replies = useMemo((): (ReplyPart | null)[] => Array.from({ length: answer.length }, (_, part) =>
     live || !commentable ? null : replyPart(paneStorageId(machineId, paneId), turn.ts, index, part)), [machineId, paneId, turn.ts, index, live, commentable, answer.length]);
+  // the reply's text, which its comments' margin is beside: a ref, which the margin takes only when the turn has
+  // comments, so mounting a turn renders it once
+  const article = useRef<HTMLElement>(null);
+  const turnKey = replies.find((reply) => reply !== null)?.turnKey ?? null;
   // under the turn, not in its meta row: that row fades out once the pointer and focus leave
   const [copyFailed, setCopyFailed] = useChatRowToggle("copy-failed", false);
   const copyError = copyFailed && <p className="chat-copy-error" role="alert">{t("Couldn't copy. Select the text and copy it manually.")}</p>;
@@ -683,7 +688,7 @@ const Turn = memo(function Turn({ paneId, turn, live, waiting, showThinking, ski
   }
   const answerText = answer.map((part) => part.text).join("\n\n");
   const goal = turnGoal(turn.parts);
-  return <article className="chat-turn chat-turn-agent">
+  return <><article ref={article} className="chat-turn chat-turn-agent">
     <SkillActivityList parts={turn.parts} />
     {goal !== null && <GoalActivity goal={goal} />}
     {work.length > 0 && <WorkBlockView paneId={paneId} parts={work} duration={formatWorkDuration(turn.ts, turn.end_ts ?? null)} live={live} waiting={waiting} defaultOpen={workStartsOpen(live, turn.parts)} showThinking={showThinking} />}
@@ -695,7 +700,8 @@ const Turn = memo(function Turn({ paneId, turn, live, waiting, showThinking, ski
       {time}
     </div>}
     {copyError}
-  </article>;
+  </article>
+  {turnKey !== null && <ReplyMargin turnKey={turnKey} textRef={article} />}</>;
 });
 
 /** A scrollback message drawn as a turn when no agent runs in the pane: shown, but not commentable. */
@@ -773,6 +779,10 @@ export const ChatView = memo(function ChatView({ paneId, cwd = null, onOpenDiff,
   const closeViewer = useCallback(() => setViewer(null), []);
   const [matchKey, setMatchKey] = useState<string | null>(null);
   const findButton = useRef<HTMLButtonElement>(null);
+  /** the comment layer: its Escape is asked before Find's (`MarkdownCommentLayerHandle.escape`) */
+  const commentLayer = useRef<MarkdownCommentLayerHandle>(null);
+  /** the chat's frame body: its scroller, the comment layer's field in it, the toggle and Find */
+  const frameBody = useRef<HTMLDivElement>(null);
   const wasFinding = useRef(false);
   const [outputVersion, setOutputVersion] = useState(0);
   const outputChanged = useCallback(() => setOutputVersion((version) => version + 1), []);
@@ -801,6 +811,12 @@ export const ChatView = memo(function ChatView({ paneId, cwd = null, onOpenDiff,
   sentKeyRef.current = sentKey;
   const [promptPollKey, setPromptPollKey] = useState(0);
   const scroller = useRef<HTMLDivElement>(null);
+  // the scroller's element as a state, the comment layer's surface: the list (or the fallback) below sets the ref before
+  // this effect runs, so the layer has it in the commit that mounts or replaces it
+  const [scrollerNode, setScrollerNode] = useState<HTMLDivElement | null>(null);
+  useLayoutEffect(() => {
+    if (scroller.current !== scrollerNode) setScrollerNode(scroller.current);
+  });
   const timeline = useRef<LegendListRef>(null);
   const ChatTimeline = useChatTimeline();
   const stickToBottom = useRef(true);
@@ -874,6 +890,15 @@ export const ChatView = memo(function ChatView({ paneId, cwd = null, onOpenDiff,
     const onKey = (event: KeyboardEvent) => {
       if (event.defaultPrevented || event.isComposing) return;
       if (!scroller.current?.getClientRects().length || (event.target instanceof Element && event.target.closest('[role="dialog"]'))) return;
+      // an open comment field (or a count's fields) of this chat is left first, what was typed kept: from a key in this
+      // chat (its field included), from its pane around it (a press on the text focuses the pane's frame), or with the
+      // focus nowhere (as a field opens over a selection); never from another pane
+      const target = event.target instanceof Node ? event.target : null;
+      const chat = frameBody.current;
+      const here = target === null || target === document.body || target === document.documentElement || (chat !== null && (chat.contains(target) || target.contains(chat)));
+      if (event.key === "Escape" && here && (commentLayer.current?.escape() ?? false)) {
+        event.preventDefault(); return;
+      }
       if (event.key === "Escape" && findOpen) {
         event.preventDefault(); closeFind(); return;
       }
@@ -1210,16 +1235,6 @@ export const ChatView = memo(function ChatView({ paneId, cwd = null, onOpenDiff,
       else node.scrollTo({ top: node.scrollHeight, behavior: "instant" });
     }
   }, [faces]);
-  // the text of each selection comment shown here is highlighted, this view's ranges only (lib/commentHighlight.ts); with
-  // comments turned off none is, even one another tab that still has them on stores meanwhile. The transcript is the
-  // scroller's first child: the list's content container (ChatTimeline), whose rows mount and unmount as they scroll,
-  // or the scrollback's own; the scroller changes with the source and once the list's chunk arrives
-  const commentsOn = settings.comments;
-  useEffect(() => {
-    const node = scroller.current;
-    const transcript = node?.firstElementChild;
-    return !commentsOn || node === null || transcript === null || transcript === undefined ? undefined : watchCommentHighlights(node, transcript);
-  }, [commentsOn, state.source, ChatTimeline]);
   // a tap or a drag down the transcript puts a phone's keyboard away to read (lib/keyboard.ts)
   useEffect(() => {
     const node = scroller.current;
@@ -1323,63 +1338,24 @@ export const ChatView = memo(function ChatView({ paneId, cwd = null, onOpenDiff,
   // the chat left the screen (another lens): nothing is known of it until it is read again
   useLayoutEffect(() => () => onRead?.(paneId, null), [onRead, paneId]);
 
-  // The chat's comments (`useCommentSurface`): a pin opens its comment to edit, its field filled with it, a block clicked
-  // or tapped or a mouse's drag over text a new one to write, or the block's or selection's comment where it has one.
-  // The popover is drawn beside its pin, or as a dialog where it has none and on a phone. The agent may start again
-  // while a comment is written, and the reply turn live: the popover and what is typed in it stay until it is saved or
-  // closed. A pin for each of this pane's reply comments whose text is drawn, named as the comment; none while comments
-  // are off. The surface is the list's scroller (ChatTimeline takes its props and draws the pin layer in it); a row that
-  // scrolled out of the list's window has no text drawn, so its comment has no pin until it is back, and the composer's
-  // walk opens it as a dialog meanwhile
+  // The chat's comments: the Markdown comment layer (MarkdownComments.tsx) on the list's scroller, as the file viewer's
+  // preview has it, with the chat's source (ChatComments.tsx: the final answer parts of finished replies, their
+  // highlights, the store). In the comment mode (Settings `commentMode`, the toggle beside Find) a mouse's selection in a
+  // reply opens the field over it, portalled into the scroller (so growing upward it is never cut by a row); each reply's
+  // cards or counts are its own row's (`ReplyMargin`, through the layer's `MarginRowsContext`), so a row that scrolled
+  // out of the list's window shows none until it is back, and the composer's walk opens its comments in a dialog meanwhile
   const owner = paneStorageId(machineId, paneId);
   const stored = useBlockComments(owner);
-  const surfaceComments = useMemo<SurfaceComment<CommentTarget>[]>(() => stored.filter(isReplyComment).map((comment) => ({
-    id: comment.id,
-    anchor: comment.anchor,
-    label: t("Comment on “{quote}”: {comment}", { quote: quoteExcerpt(comment.quote ?? blockContent(comment.block)), comment: comment.comment }),
-    ...(comment.point === undefined ? {} : { point: comment.point }),
-    target: commentTarget(comment),
-    comment: comment.comment,
-  })), [stored, t]);
-  const commentSurface = useCommentSurface<CommentTarget, SelectionComment>({
-    surface: scroller,
-    enabled: settings.comments,
-    persist: persistReplyComment,
-    owner,
-    comments: surfaceComments,
-    anchorOf: (target) => target.anchor,
-    // the block's or selection's comment where it has one: it keeps its pin where it was
-    existing: (targetOwner, target) => {
-      const found = blockComments.get(targetOwner, target);
-      return found === undefined ? null : { id: found.id, comment: found.comment, target };
-    },
-    // a new comment's pin goes where the block was clicked or the drag let go, on the text its highlight will cover (`draftRanges`)
-    pointed: (targetOwner, target, at) => {
-      const node = scroller.current;
-      const point = node === null ? undefined : pointOnText(draftRanges(node, targetOwner, target), at);
-      return point === undefined ? target : { ...target, point };
-    },
-    // a click on a reply block comments on all of it, or on the part of it that was clicked
-    targetAtClick: (element) => {
-      const part = element.closest(".is-commentable");
-      const found = part === null ? undefined : commentPartOf(part);
-      return found === undefined ? null : { owner: found.owner, target: found.target };
-    },
-    selection: {
-      measure: selectionComment,
-      target: (found) => ({ owner: found.owner, target: selectionTarget(found.target, found.text, found.start, found.end, found.until) }),
-    },
-    describe: ({ target }) => ({ quote: target.quote ? { text: target.quote.text } : { block: target.block } }),
-    // a Delete with no pin left, or a comment whose pin is gone, gives the focus to the composer
-    focusFallback: paneComposer,
-    // its text shows as the comment's will, a selection's (the field took the browser's selection away) or a whole block's
-    showPending: (targetOwner, target) => {
-      const node = scroller.current;
-      if (node === null) return () => {};
-      showPendingComment(node, { owner: targetOwner, target });
-      return () => showPendingComment(node, null);
-    },
-  });
+  const replyCount = useMemo(() => stored.filter(isReplyComment).length, [stored]);
+  const conversation = state.source === "conversation" && ChatTimeline !== null;
+  const chatSource = useChatCommentSource(owner, scroller, conversation);
+  const chatLayout = useChatMargin(scroller, chatSource !== null, settings.commentLayout);
+  // the comment mode's toggle: where a Delete that leaves no card puts the focus
+  const commentToggle = useRef<HTMLButtonElement>(null);
+  // the toggle: shown where Find shows while comments are on, with this pane's reply comments' count; turned by a finger it
+  // says how to comment now, or that the mode is off
+  const toggleShown = state.source === "conversation" && !findOpen && settings.comments;
+  const { hint, show: showHint } = useModeHint();
 
   const rowSlots = slots.current.rows;
   const timelineScope = JSON.stringify(slots.current.scope);
@@ -1493,7 +1469,12 @@ export const ChatView = memo(function ChatView({ paneId, cwd = null, onOpenDiff,
   return <ChatDiffContext.Provider value={diffContext}><ChatPaneContext.Provider value={paneId}><ChatHistoryContext.Provider value={historyId ?? ""}><ImageViewerContext.Provider value={openViewer}>
     <div className="chat-frame">
     {state.source === "conversation" && findOpen && <ChatFind key={timelineScope} rows={searchRows} older={typeof olderCursor === "string"} olderState={olderState} onOlder={loadOlder} onMatch={showMatch} onClose={closeFind} />}
-    <div className="chat-frame-body">
+    <div ref={frameBody} className="chat-frame-body">
+    {/* the comment layer around the list, which is its surface: each reply's margin is drawn in its row through the layer's
+        context; the field over a selection is portalled into the scroller, and the layer's sheet, touch selection and
+        live region are drawn after the list, outside its role="log" */}
+    <MarkdownCommentLayer ref={commentLayer} source={chatSource} surface={scrollerNode} roots={() => chatCommentRoots(scroller.current)} mode={settings.commentMode}
+      margin={chatLayout === null ? null : { text: null, layout: chatLayout }} focusFallback={() => commentToggle.current ?? paneComposer(scroller.current)}>
     {state.source === "conversation" ? ChatTimeline === null
       // its chunk is still loading: no turn is read until it arrives, so this is the loading state
       ? <div className="chat-view chat-view-virtual" role="log" aria-live="polite" aria-label={t("conversation of {pane}", { pane: paneId })}>
@@ -1519,8 +1500,6 @@ export const ChatView = memo(function ChatView({ paneId, cwd = null, onOpenDiff,
       finding={findOpen}
       onScroll={onScroll}
       renderRow={renderTurn}
-      surfaceProps={commentSurface.surfaceProps}
-      overlay={commentSurface.overlay}
     /> : <div className="chat-view" ref={scroller} onScroll={onScroll} role="log" aria-live="polite" aria-label={t("conversation of {pane}", { pane: paneId })}>
       <div className="chat-transcript" data-conversation-source={state.conversationSource}>
         {agent !== null ? <TerminalFallback key={paneId} paneId={paneId} />
@@ -1528,9 +1507,14 @@ export const ChatView = memo(function ChatView({ paneId, cwd = null, onOpenDiff,
         {footer}
       </div>
     </div>}
+    </MarkdownCommentLayer>
     {state.source === "conversation" && <ChatMinimap turns={minimap} rowKeys={rowKeys} scroller={scroller} onJump={jumpToTurn} />}
     {jump}
+    {/* the comment mode, left of Find, with this pane's reply comments' count (the full text is its name and tooltip) */}
+    {toggleShown && <CommentModeToggle buttonRef={commentToggle} className="chat-comments-toggle" count={replyCount} hintOn="select" showHint={showHint} />}
     {state.source === "conversation" && !findOpen && <button ref={findButton} type="button" className="icon-button chat-find-open" aria-label={t("Find in messages")} title={t("Find in messages")} onClick={() => setFindOpen(true)}><Search aria-hidden="true" /></button>}
+    {/* the mode's hint, at the top of the chat (CommentModeHint.css `.code-comment-status`) */}
+    {toggleShown && <CommentModeHint surface={frameBody} hint={hint} />}
     </div>
     </div>
   {/* The prompt card is not part of the transcript: it is drawn on the composer's column, over the

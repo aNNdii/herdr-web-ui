@@ -19,6 +19,7 @@ import { lazyChunk } from "../lib/lazyChunk.ts";
 import type { SkillMatcher } from "../lib/skillMentions.ts";
 import { previewChunks } from "../lib/textPreview.ts";
 import { BlockCommentContext, partAnchor, replyParts, usePartTouched, type PartLookup } from "../lib/blockComments.ts";
+import { commentRootAttrs } from "../lib/commentDom.ts";
 import { forgetCommentPart, rememberCommentPart } from "../lib/commentSelection.ts";
 
 /** The pane's skill names: a name in an answer's plain text, in its trigger form, reads as a chip. */
@@ -362,7 +363,7 @@ function Blocks({ blocks, path = NO_PATH, commentable = true, start = 0 }: { blo
  * A block of the file viewer's preview (one with `source`) writes its source lines on the elements
  * a selection maps to lines: a heading, each line of a paragraph, each table row, each code line, a
  * formula, a diagram. The viewer draws nothing in it of the comments: their text is highlighted and
- * their pins lie in its pin layer (FileComments.tsx).
+ * their cards and counts lie in its comment layer (FileComments.tsx).
  */
 function BlockView({ block, path, commentable }: { block: MarkdownBlock; path: number[]; commentable: boolean }): ReactNode {
   const comment = useCommentable(path, commentable && block.type !== "hr" && block.type !== "list");
@@ -422,8 +423,8 @@ interface Commentable {
  * list item's path ends in its index). A comment is made by selecting text in the block or by
  * clicking it (ChatView), which finds the block's target through the element `ref` registers. The
  * block draws nothing of its comments: their text is highlighted (lib/commentHighlight.ts), which
- * looks for the parts some comment covers (`is-commented`), and their pins lie in the chat's pin
- * layer (CommentPins.tsx). With comments turned off no part is commented, whatever is stored (`BlockCommentStore.setEnabled`).
+ * looks for the parts some comment covers (`is-commented`), and their cards and counts lie in the chat's comment
+ * layer (ChatComments.tsx). With comments turned off no part is commented, whatever is stored (`BlockCommentStore.setEnabled`).
  */
 function useCommentable(path: number[], enabled: boolean): Commentable {
   const reply = useContext(BlockCommentContext);
@@ -475,12 +476,13 @@ export const Markdown = memo(function Markdown({ children, className, html = fal
  * stays as it was. The ref is the `.markdown` root.
  */
 export const ParsedMarkdown = memo(forwardRef<HTMLDivElement, { blocks: MarkdownBlock[]; className?: string }>(function ParsedMarkdown({ blocks, className }, ref) {
-  // a final reply part: a selection that comments stays inside one (lib/commentSelection.ts)
+  // a final reply part: a selection that comments stays inside one (lib/commentSelection.ts); its turn names it
+  // (lib/commentDom.ts `commentRootAttrs`), so the chat's comment layer finds a comment's text in its own turn only (ChatComments.tsx)
   const reply = useContext(BlockCommentContext);
   // the same targets across renders while the reply and its text stay: a part re-renders only for its own comments
   const parts = useMemo(() => reply === null ? null : replyParts(reply, blocks), [reply, blocks]);
   return <ReplyPartsContext.Provider value={parts}>
-    <div ref={ref} className={className === undefined ? "markdown" : `markdown ${className}`} data-comment-root={reply === null ? undefined : ""}><Blocks blocks={blocks} /></div>
+    <div ref={ref} className={className === undefined ? "markdown" : `markdown ${className}`} {...commentRootAttrs(reply === null ? null : reply.turnKey)}><Blocks blocks={blocks} /></div>
   </ReplyPartsContext.Provider>;
 }));
 

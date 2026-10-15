@@ -1,0 +1,144 @@
+/* The comment layer for rendered Markdown (MarkdownComments.tsx). The field over a selection is the code view's row card
+   (CommentPopover.css `.is-row`), `--float-w` wide at most, placed in the scrolling surface's content by script
+   (SelectionField.tsx, lib/selectionField.ts): over the selection's first line, its bottom edge there (`data-above`), so it grows upward;
+   else its top edge under the last line. It is never moved by a transition. */
+.markdown-comments-field {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: var(--z-popover);
+  width: min(var(--float-w), 100% - 2 * var(--space-2));
+}
+
+.markdown-comments-field[data-above] {
+  transform: translateY(-100%);
+}
+
+/* it floats over the text, so it casts the popover's shadow (a card's field, in the margin, sits on the page and has none) */
+.markdown-comments-field .comment-popover.is-row {
+  box-shadow: var(--shadow-pop);
+}
+
+/* a count's fields (useMarginFields.tsx), stacked 8 px apart and placed as one, so the stack grows upward too */
+.markdown-comments-stack {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+/* The app's own selection on a touch screen in the comment mode (TouchSelection.tsx, the attribute on the surface).
+   The roots take no system selection and no callout while it is theirs: the system's Copy / Share menu would cover the
+   text. These are the chat's reply parts, mounted or not yet (lib/commentDom.ts `COMMENT_ROOT_ATTR`, a literal here);
+   the preview's root is FileViewer.css's */
+[data-touch-select] [data-comment-root] {
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+}
+
+/* the handles and Comment, placed by script in the surface's content, which they scroll with; no transition */
+.markdown-touch-layer {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: var(--z-popover);
+  width: 0;
+  height: 0;
+}
+
+/* a handle: a 2 px accent bar along the line, a 12 px knob over the start or under the end, in a 44 px target a finger
+   drags (no scroll, no zoom) */
+.markdown-touch-handle {
+  position: absolute;
+  width: 44px;
+  height: max(44px, calc(var(--line-h, 20px) + 22px));
+  touch-action: none;
+  transform: translateX(-50%);
+}
+
+.markdown-touch-handle[data-edge="start"] {
+  transform: translate(-50%, -100%);
+}
+
+.markdown-touch-handle::before {
+  content: "";
+  position: absolute;
+  left: calc(50% - 1px);
+  width: 2px;
+  height: var(--line-h, 20px);
+  background: var(--accent);
+}
+
+.markdown-touch-handle[data-edge="start"]::before {
+  bottom: 0;
+}
+
+.markdown-touch-handle[data-edge="end"]::before {
+  top: 0;
+}
+
+.markdown-touch-knob {
+  position: absolute;
+  left: calc(50% - 6px);
+  width: 12px;
+  height: 12px;
+  border-radius: var(--radius-pill);
+  background: var(--accent);
+}
+
+.markdown-touch-handle[data-edge="start"] .markdown-touch-knob {
+  bottom: var(--line-h, 20px);
+}
+
+.markdown-touch-handle[data-edge="end"] .markdown-touch-knob {
+  top: var(--line-h, 20px);
+}
+
+/* Comment on a selection, a pill floating over the text, placed by script in the surface's content (no transition):
+   a finger's (TouchSelection.tsx), the selection's one action where the system's menu would be, and a pointer's or a
+   keyboard's (SelectionButton.tsx), the Comment button, the same look at a pointer's size */
+.markdown-comment-pill {
+  position: absolute;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  background: var(--bg-elevated);
+  border: var(--hairline) solid var(--border-strong);
+  border-radius: var(--radius-pill);
+  box-shadow: var(--shadow-pop);
+  color: var(--text-strong);
+  font-family: var(--font-ui);
+  font-size: var(--fs-md);
+  font-weight: var(--fw-medium);
+  white-space: nowrap;
+  cursor: pointer;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+.markdown-comment-pill svg {
+  width: var(--icon-size);
+  height: var(--icon-size);
+}
+
+/* a finger's: 40 px high */
+.markdown-touch-comment {
+  height: 40px;
+  padding: 0 var(--space-4);
+}
+
+/* a pointer's: a control's height, above the field and the margin's fields it never shows with */
+.markdown-select-comment {
+  z-index: var(--z-popover);
+  height: var(--control-h);
+  padding: 0 var(--space-3);
+  font-size: var(--fs-sm);
+  transition: background-color var(--dur-fast) var(--ease-out);
+}
+
+/* hover as a text button's (.btn), only where a pointer can hover */
+@media (hover: hover) {
+  .markdown-select-comment:hover {
+    background: var(--bg-hover);
+  }
+}

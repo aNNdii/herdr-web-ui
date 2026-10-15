@@ -1,10 +1,13 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type RefObject } from "react";
-import { Braces, Check, Code, Copy, Download, ExternalLink, MessageSquareText, TriangleAlert, X } from "lucide-react";
+import { Braces, Check, Code, Copy, Download, ExternalLink, TriangleAlert, X } from "lucide-react";
 
 import "./FileViewer.css";
 import { useCodeComments } from "./CodeComments.tsx";
+import { CommentModeHint, useModeHint } from "./CommentModeHint.tsx";
+import { CommentModeToggle } from "./CommentModeToggle.tsx";
 import { DirectoryBrowser } from "./DirectoryBrowser.tsx";
-import { useFileCommentLayer, useFileComments, useFileCommentWalk, type FileCommentScope } from "./FileComments.tsx";
+import { useFileComments, useFileCommentWalk, usePreviewCommentSource, usePreviewMargin, type FileCommentScope } from "./FileComments.tsx";
+import { MarkdownCommentLayer, type MarkdownCommentLayerHandle } from "./MarkdownComments.tsx";
 import { CODE_CHUNK_LINES, useHighlightedLines } from "./HighlightedCode.tsx";
 import { RenderBoundary } from "./RenderBoundary.tsx";
 import { TextFileView } from "./TextFileView.tsx";
@@ -13,6 +16,7 @@ import { MarkdownImageContext } from "./Markdown.tsx";
 import type { FileInfo } from "../../shared/protocol.ts";
 import { ApiError } from "../lib/api.ts";
 import { blockComments, isReplyComment, useBlockComments } from "../lib/blockComments.ts";
+import { leaveKey } from "../lib/commentPopover.ts";
 import { formatBytes } from "../lib/bridgeProgress.ts";
 import { LOCAL_MACHINE, paneStorageId } from "../../shared/machines.ts";
 import { useOpeningPaneLane } from "../lib/chatLane.ts";
@@ -220,9 +224,9 @@ export function FileViewer({ path: asked, paneId, machineId: machineProp, paneFo
     return () => { cancelled = true; clearTimeout(deadline); abort.abort(); };
   }, [target.path, paneId, fetchFileInfo, fileUrl, fetchDirectories, remote]);
 
-  // A comment popover is open: Escape is its own first, wherever the focus is. It closes one with nothing typed in it
-  // and keeps one with text typed (`popoverEscape`), and the viewer stays either way, so no typed text is lost; the
-  // walk's dialog takes its own Escape. With none open, Escape closes the viewer
+  // A comment popover is open: Escape is its own first, wherever the focus is. It leaves it (`leaveOutcome`: what was
+  // typed is saved, else it closes), and the viewer stays either way; the walk's dialog takes its own Escape. With none
+  // open, Escape closes the viewer. An IME's Escape (`leaveKey`) cancels its conversion and does neither
   const commentEscape = useRef<() => boolean>(() => false);
   const walkDialogOpen = useRef(false);
   useEffect(() => {
@@ -231,7 +235,7 @@ export function FileViewer({ path: asked, paneId, machineId: machineProp, paneFo
     // one is the topmost overlay, so it takes the key, unless a native modal (Add PC) is over it
     /** Escape closes the open comment popover, else the viewer, from anywhere in it, unless something in it took the key. */
     const onKey = (event: KeyboardEvent): void => {
-      if (event.key !== "Escape" || event.defaultPrevented || walkDialogOpen.current || nativeModalOver(surface.current)) return;
+      if (!leaveKey(event) || event.defaultPrevented || walkDialogOpen.current || nativeModalOver(surface.current)) return;
       if (commentEscape.current()) return;
       onClose();
     };
@@ -320,13 +324,24 @@ export function FileViewer({ path: asked, paneId, machineId: machineProp, paneFo
     : { owner, path: filePath, label: pathLabel(filePath, paneFolder), view: commentView, lines: commentLines, loaded: wholeLines, truncated: cutShort },
   [owner, commentView, filePath, paneFolder, commentLines, wholeLines, cutShort]);
   const bodyRef = useRef<HTMLDivElement>(null);
+  // the body's element as a state too, the preview's comment layer's surface: set by the body's callback ref in the commit
+  // that mounts it (the layer is inside the body, so a layout effect of its own would run before the ref is set)
+  const [bodyNode, setBodyNode] = useState<HTMLDivElement | null>(null);
+  const attachBody = useCallback((node: HTMLDivElement | null): void => {
+    bodyRef.current = node;
+    setBodyNode(node);
+  }, []);
   const codeRef = sourceRef as RefObject<HTMLPreElement>;
   const contentRef = commentView === "preview" ? previewRef : codeRef;
-  // the file's comments, placed once for both layers: the preview's pins, and the code view's cards
+  // the file's comments, placed once for both layers: the preview's (the Markdown comment layer), and the code view's cards
   const fileComments = useFileComments(scope);
-  const comments = useFileCommentLayer(commentView === "preview" ? scope : null, bodyRef, previewRef, fileComments);
-  // the comment mode's toggle: where a Delete that leaves no card puts the focus
+  const previewSource = usePreviewCommentSource(commentView === "preview" ? scope : null, bodyRef, previewRef, fileComments);
+  // the comments' margin in the free space right of the text, which it never moves, while the preview takes comments
+  const previewMargin = usePreviewMargin(previewSource !== null, previewRef, bodyRef, settings.commentLayout);
+  // the comment mode's toggle: where a Delete that leaves no card puts the focus (the preview's and the code view's)
   const modeToggleRef = useRef<HTMLButtonElement>(null);
+  // the preview's comment layer, beside its body (`MarkdownCommentLayer`, rendered below)
+  const markdownLayer = useRef<MarkdownCommentLayerHandle>(null);
   const codeComments = useCodeComments({
     scope: commentView === "code" ? scope : null, comments: fileComments, surface: bodyRef, content: codeRef,
     focusFallback: () => modeToggleRef.current,
@@ -338,10 +353,8 @@ export function FileViewer({ path: asked, paneId, machineId: machineProp, paneFo
     codeStop: codeComments.stop,
   });
   // Escape is the open field's or popover's first, or the walk's dialog's, before it is the viewer's
-  commentEscape.current = commentView === "code" ? codeComments.escape : comments.escape;
+  commentEscape.current = commentView === "code" ? codeComments.escape : () => markdownLayer.current?.escape() ?? false;
   walkDialogOpen.current = walk.editorOpen;
-  // the toggle's press: a keyboard's click (detail 0) is a mouse's, a press says what pressed
-  const togglePress = useRef("mouse");
   // the pane's comments of any kind: the one the viewer was opened at is looked up among them (none while comments are off)
   const paneComments = useBlockComments(owner ?? "");
   // Opened at a comment (the composer's walk): the walk stops at it once the file's comments are
@@ -373,11 +386,12 @@ export function FileViewer({ path: asked, paneId, machineId: machineProp, paneFo
   }, [pendingStop, paneComments, scope, error, directory, info, textFile, loaded, previewPending, goTo, openInEditor, t]);
   const commentCount = fileComments.all.length;
   const outdatedCount = fileComments.outdated.length;
-  const counted = t(commentCount === 1 ? "{count} comment" : "{count} comments", { count: commentCount });
-  const countLabel = outdatedCount > 0 ? `${counted} · ${t("{count} outdated", { count: outdatedCount })}` : counted;
-  // the comment mode's toggle: in the code view of a file of a pane, with comments on and an element per line
-  const toggleShown = owner !== null && settings.comments && lineComments;
-  const toggleLabel = commentCount > 0 ? t("Comment mode, {count}", { count: countLabel }) : t("Comment mode");
+  // the comment mode's toggle: in a view that takes comments (the code view with an element per line, or the preview)
+  // of a file of a pane, with comments on
+  const toggleShown = owner !== null && settings.comments && commentView !== null;
+  // turned by a finger, the hint says how to comment now (the code view's gesture, or selecting text in the preview), or
+  // that the mode is off; a mouse has the ⊕ or the text to show the way
+  const { hint, show: showHint } = useModeHint();
   const markdown = info?.kind === "text" && /\.(?:md|markdown)$/i.test(info.name);
   // a page of just the document, not the app over it (FileReader)
   const previewUrl = readerHref(machineId, shownPath + (target.line === null ? "" : `#L${target.line}`));
@@ -451,15 +465,10 @@ export function FileViewer({ path: asked, paneId, machineId: machineProp, paneFo
       </p>
     </div>
     <div className="file-viewer-actions">
-      {/* comment mode (the code view's comments, CodeComments.tsx), with the file's comment count */}
+      {/* comment mode (the code view's comments, CodeComments.tsx; the preview's, MarkdownComments.tsx), with the file's comment count */}
       {toggleShown && <div className="file-viewer-group">
-        <button ref={modeToggleRef} type="button" className="icon-button file-viewer-action file-viewer-comments" aria-pressed={settings.codeCommentMode} aria-label={toggleLabel} title={toggleLabel}
-          onPointerDown={(event) => { togglePress.current = event.pointerType; }}
-          onClick={(event) => { codeComments.toggleMode(event.detail === 0 ? "mouse" : togglePress.current); togglePress.current = "mouse"; }}>
-          <MessageSquareText aria-hidden="true" />
-          {/* the count as a badge on the corner; the full text (with any outdated) is the name and tooltip */}
-          {commentCount > 0 && <span className="file-viewer-comments-count" aria-hidden="true">{commentCount > 99 ? "99+" : commentCount}</span>}
-        </button>
+        <CommentModeToggle buttonRef={modeToggleRef} className="file-viewer-action file-viewer-comments" count={commentCount} outdated={outdatedCount}
+          hintOn={commentView === "code" ? settings.mobileCommentGesture : "select"} showHint={showHint} />
       </div>}
       {/* how the text shows: Preview or source is one choice of two, so one toggle; wrapping is a
           setting (Settings → File viewer), not an action here */}
@@ -492,13 +501,16 @@ export function FileViewer({ path: asked, paneId, machineId: machineProp, paneFo
       <section className={virtual !== null && view === "code" ? "modal file-viewer file-viewer-virtual" : "modal file-viewer"} role="dialog" aria-modal="true" aria-label={info?.name ?? path} ref={surface} tabIndex={-1}
         data-tall={lineComments && code.lines.length > CODE_CHUNK_LINES ? "" : undefined}>
         {header}
-        {/* with comments the body is their surface (lib/commentHighlight.ts), the place the preview's pins and popover
-            and the code view's cards and field are positioned in; in the preview a click on an element in it comments on
-            its lines, a mouse's drag on what it selected */}
-        <div ref={bodyRef} className={bodyClass} {...comments.surfaceProps} data-comment-surface={comments.surfaceProps["data-comment-surface"] ?? (codeComments.shown ? "" : undefined)}>
+        {/* with comments the body is their surface (lib/commentHighlight.ts `COMMENT_SURFACE`: the preview's source and the
+            code view's layer mark it), the place the preview's margin and field over a selection and the code view's
+            cards and field are positioned in */}
+        <div ref={attachBody} className={bodyClass}>
           {body}
-          {comments.overlay}
+          <MarkdownCommentLayer ref={markdownLayer} source={previewSource} surface={bodyNode} roots={() => previewRef.current === null ? [] : [previewRef.current]}
+            mode={settings.commentMode} margin={previewMargin} focusFallback={() => modeToggleRef.current} />
           {codeComments.layer}
+          {/* the mode's hint, at the body's top under the header (CommentModeHint.css `.code-comment-status`) */}
+          {toggleShown && <CommentModeHint surface={bodyRef} hint={hint} />}
           {walk.editor}
         </div>
       </section>

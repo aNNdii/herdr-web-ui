@@ -136,46 +136,9 @@
 
 .file-viewer-group { gap: var(--space-1); }
 
-/* The code view's comment mode (CodeComments.tsx): a toggle as the header's other icon buttons, pressed while the mode
-   is on, with the file's comment count as a badge on its top right corner, ringed in the header's surface, as an app's
-   unread count: the accent while the mode is on, neutral while it is off. The words ("Comment mode, 2 comments · 1
-   outdated") are its name and tooltip */
+/* the comment mode's toggle (CommentModeToggle.tsx): its badge is placed on it */
 .file-viewer-comments {
   position: relative;
-}
-
-.file-viewer-comments-count {
-  position: absolute;
-  top: calc(-1 * var(--space-1));
-  right: calc(-1 * var(--space-1));
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  box-sizing: border-box;
-  min-width: 21px;
-  height: 21px;
-  padding: 0 var(--space-1);
-  border: 2px solid var(--bg-panel);
-  border-radius: var(--radius-pill);
-  background: var(--bg-hover);
-  color: var(--text-strong);
-  font-size: var(--fs-xs);
-  font-weight: var(--fw-semibold);
-  font-variant-numeric: tabular-nums;
-  line-height: 1;
-  pointer-events: none;
-}
-
-.file-viewer-comments[aria-pressed="true"] .file-viewer-comments-count {
-  background: var(--primary);
-  color: var(--primary-text);
-}
-
-@media (pointer: coarse) {
-  .file-viewer-comments-count {
-    min-width: 22px;
-    height: 22px;
-  }
 }
 
 /* an "on" toggle (Show source) carries the accent on its glyph */
@@ -184,7 +147,7 @@
   color: var(--accent);
 }
 
-/* positioned: with comments, the pins and the popover beside them are placed in its scrolled content. Isolated: what
+/* positioned: with comments, the code view's rows and the Markdown field are placed in its scrolled content. Isolated: what
    lies under the code's text (the code view's press tint, CodeComments.css, at a negative z-index) is drawn over the
    body's own ground, not under it */
 .file-viewer-body {
@@ -283,36 +246,6 @@
   padding-bottom: var(--comment-room);
 }
 
-/* in the preview a click on a line comments on it (FileComments.tsx): with a pointer that hovers, the line under it is
-   marked, while comments are on (`data-comments`) and no popover is open.
-   A line of the preview's code blocks takes the accent's tint; another element of the preview the frame the
-   chat's blocks take (BlockComments.css), a paragraph whole, as a click takes it. Neither takes room, so nothing moves.
-   The code view's lines have their own (CodeComments.css), which never tints the room after a line */
-@media (hover: hover) {
-  .file-viewer-body[data-comments]:not(:has(.comment-popover)) .markdown .hl-line:hover {
-    background: var(--accent-tint);
-  }
-
-  .file-viewer-body[data-comments]:not(:has(.comment-popover)) .markdown [data-source-line]:not(.hl-line):not(p > [data-source-line]):hover,
-  .file-viewer-body[data-comments]:not(:has(.comment-popover)) .markdown p:has(> [data-source-line]):hover {
-    border-radius: calc(var(--radius-sm) / 3);
-    background-color: color-mix(in srgb, var(--accent) 5%, transparent);
-    box-shadow: 0 0 0 calc(var(--space-1) / 2) color-mix(in srgb, var(--accent) 5%, transparent);
-    outline: var(--hairline) solid color-mix(in srgb, var(--accent) 55%, transparent);
-    outline-offset: calc(var(--space-1) / 2);
-  }
-}
-
-/* Focus mode in the viewer's preview, as in the chat (BlockComments.css): while a pin's comment is up, the
-   other comments' marks go. Not in the code view: the attribute would sit on an ancestor of every line (a long
-   file restyles slowly), so a card there only brings its own text up (block-comment-active) */
-.file-viewer-body[data-comment-focus] ::highlight(block-comment) {
-  background-color: transparent;
-}
-
-.file-viewer-body[data-comment-focus] ::highlight(block-comment-pending) {
-  background-color: color-mix(in srgb, var(--accent) 30%, transparent);
-}
 
 /* wrapping follows the Wrap setting (data-wrap in HighlightedCode.css); the gutter sits in the code's own padding, inside this one */
 .file-viewer-content {
@@ -373,6 +306,14 @@
 }
 
 .file-viewer-markdown-readable { max-width: var(--chat-w); }
+
+/* the comment mode on a touch screen: the app's own selection is the preview's (TouchSelection.tsx, on the body), so it
+   takes no system selection and no callout, whose Copy / Share menu would cover the text */
+[data-touch-select] .file-viewer-content > .file-viewer-markdown {
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+}
 
 /*
  * On a narrow screen two or more actions leave the name and its notes no room. The name and Close

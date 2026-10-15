@@ -1,65 +1,71 @@
 /**
- * The text of every comment shown in the chat, highlighted with the CSS Custom Highlight API
- * (`::highlight(block-comment)` in BlockComments.css): a selection's text part by part, a comment
- * on a whole part all of that part's text. Over them the comment whose pin the pointer or
- * the focus is on, or whose popover is open (`block-comment-active`), and over that the one the composer's walk stands on
- * (`block-comment-current`). While either is shown the view carries `data-comment-focus`, and the
- * stylesheet fades the other comments' marks so the active one stands out. The text a new comment is
- * being written on in its popover (`block-comment-pending`) looks the same: a selection's, which the
- * field took the browser's selection away from, or a whole block clicked. Where the
- * browser lacks the API there is no highlight. Needs a DOM.
+ * The text of every comment shown in the chat, highlighted with the CSS Custom Highlight API (BlockComments.css): a
+ * selection's text part by part, a comment on a whole part all of that part's text. Each comment is painted on one of
+ * `LAYER_COUNT` layer highlights (`comment-layer-0` … `-3`, lib/commentLayers.ts): comments that overlap get different
+ * layers, so their translucent fills add up and the overlap reads darker (ranges inside one highlight never stack).
+ * The comment in focus (its card or count under the pointer or the focus, its field open) leaves
+ * its layer for the strong fill (`comment-strong`), painted over the other comments' layers. The text a new comment is
+ * being written on (`comment-pending`) has the strong fill too. A touch screen's own selection is drawn as
+ * `comment-touch-selection` (components/TouchSelection.tsx). Where the browser lacks the API there is no highlight.
+ * Needs a DOM.
  *
  * The chat is one comment surface; the file viewer is another. An element carrying
- * `data-comment-surface` (`COMMENT_SURFACE`) registers how its pins bring their text up
- * (`registerCommentSurface`): a pin's pointer and focus (`activateComment`), the open popover
- * (`showOpenComment`) and the composer's walk (`markCurrentComment`, `showWalkStop`) reach the surface
- * the pin is in, whichever it is. Every surface shows its comments through a `SurfaceMarks`; only which
- * text a comment covers is the surface's own.
- * A surface also publishes its ranges after each rebuild (`watchSurfaceRanges`): the pin layer
- * (CommentPins.tsx) places its pins from them. That layer is a sibling of the transcript (of the
- * file's content root), never inside it, so a pin drawn or moved is no mutation the highlights
+ * `data-comment-surface` (`COMMENT_SURFACE`) registers how its cards bring their text up
+ * (`registerCommentSurface`): a card's pointer and focus (`activateComment`) and the open fields
+ * (`showOpenComment`) reach the surface the card is in, whichever it is. Every surface shows its comments through a
+ * `SurfaceMarks`; only which text a comment covers is the surface's own.
+ * A surface also publishes its ranges after each rebuild (`watchSurfaceRanges`): the comment layer
+ * (CommentMargin.tsx) places its cards from them. That layer is a sibling of the transcript (of the
+ * file's content root), never inside it, so a card drawn or moved is no mutation the highlights
  * watch, and a rebuild never follows from one.
  */
 import { blockComments, draftComment, partSegments, textRange, type BlockComment, type CommentTarget, type PartSegment } from "./blockComments.ts";
-import { unionBox } from "./commentPins.ts";
+import { assignLayers, LAYER_COUNT } from "./commentLayers.ts";
 import { commentPartOf, outsideMath, partTextNodes } from "./commentSelection.ts";
 
-export const COMMENT_HIGHLIGHT = "block-comment";
-export const ACTIVE_COMMENT_HIGHLIGHT = "block-comment-active";
-export const CURRENT_COMMENT_HIGHLIGHT = "block-comment-current";
-export const PENDING_COMMENT_HIGHLIGHT = "block-comment-pending";
-/** Set on a comment surface while a pin's comment is up (pointer, keyboard focus, its open popover or the walk): the stylesheet fades the others. */
-export const FOCUS_ATTRIBUTE = "data-comment-focus";
-/** Marks an element whose comment pins bring their text up through a registered `CommentSurface`. */
+/** The layers every comment's text is painted on, one highlight each, by layer (`assignLayers`). */
+export const COMMENT_LAYER_HIGHLIGHTS: readonly string[] = Array.from({ length: LAYER_COUNT }, (_, layer) => `comment-layer-${layer}`);
+/** The comment in focus: its card or count under the pointer or the focus, or its field open. */
+export const STRONG_COMMENT_HIGHLIGHT = "comment-strong";
+/** The text a new comment is being written on. */
+export const PENDING_COMMENT_HIGHLIGHT = "comment-pending";
+/** A touch screen's selection in the comment mode, drawn in the app's selection colour. */
+export const TOUCH_SELECTION_HIGHLIGHT = "comment-touch-selection";
+/**
+ * Marks an element whose comment cards bring their text up through a registered `CommentSurface`: set only through
+ * `markCommentSurface`, by the surface's comment source (components/ChatComments.tsx, components/FileComments.tsx) or,
+ * for the code view, by its layer (components/CodeComments.tsx). Literals elsewhere that a rename changes too:
+ * scripts/file-viewer-comments-regression.ts.
+ */
 export const COMMENT_SURFACE = "data-comment-surface";
 /** the id the comment being written (pending) has in a surface's ranges */
 export const PENDING_COMMENT_ID = "";
 
 /**
- * How a comment surface shows a comment's text: what the walk, the pointer and the focus ask of it.
- * A `pin` (`.comment-pin`, CommentPins.tsx) names its comment in `data-comment-id`.
+ * How a comment surface shows a comment's text: what the pointer, the focus and the open fields ask of it.
+ * A `marker` (a card or a count of the Markdown comment layer's margin, CommentMargin.tsx; a card of the code view's
+ * layer) names its comment in `data-comment-id`, or several in `data-comment-ids` (a count), space-separated.
  */
 export interface CommentSurface {
-  /** the walk stands on `pin`, or on nothing */
-  mark(pin: HTMLElement | null): void;
-  /** the pointer is over `pin`, or the focus on or in it (`on`), or no longer */
-  activate(pin: HTMLElement, by: "pointer" | "focus", on: boolean): void;
-  /** the popover of the saved comment `id` is open, or none is (null) */
-  open(id: string | null): void;
-  /** the box around the text of the comment `pin` shows, if it has some */
-  boxOf(pin: HTMLElement): DOMRect | null;
+  /** the pointer is over `marker`, or the focus on or in it (`on`), or no longer */
+  activate(marker: HTMLElement, by: "pointer" | "focus", on: boolean): void;
+  /** the field of the saved comment `id` is open (several: a count's fields), or none is (null) */
+  open(id: OpenComments): void;
   /**
    * each comment's ranges as of the last rebuild, by id, in document order; the one being written
-   * under `PENDING_COMMENT_ID`. The pin layer (CommentPins.tsx) places its pins from them
+   * under `PENDING_COMMENT_ID`. The comment layer (CommentMargin.tsx) places its cards from them
    */
   ranges(): ReadonlyMap<string, readonly Range[]>;
 }
 
+/** The saved comments whose fields are open on a surface: one id, several, or none (null). */
+export type OpenComments = string | readonly string[] | null;
+
 type RangesListener = (ranges: ReadonlyMap<string, readonly Range[]>) => void;
 
 const surfaces = new WeakMap<Element, CommentSurface>();
-/** the saved comment whose popover is open on each view (`showOpenComment`), whether a surface is registered on it yet or not */
-const openComments = new WeakMap<Element, string>();
+/** the saved comments whose fields are open on each view (`showOpenComment`), whether a surface is registered on it yet or not */
+const openComments = new WeakMap<Element, Exclude<OpenComments, null>>();
 /** who follows each view's ranges (`watchSurfaceRanges`), whether a surface is registered on it yet or not */
 const rangeListeners = new WeakMap<Element, Set<RangesListener>>();
 const NO_RANGE_MAP: ReadonlyMap<string, readonly Range[]> = new Map();
@@ -76,7 +82,7 @@ export function notifyRanges(view: Element): void {
 }
 
 /**
- * `view` (which carries `COMMENT_SURFACE`) shows its pins' text through `surface` until the
+ * `view` (which carries `COMMENT_SURFACE`) shows its cards' text through `surface` until the
  * returned cleanup runs. A later registration for the same view takes over; an earlier cleanup then
  * leaves it alone. Whoever follows the view's ranges hears of either.
  */
@@ -110,14 +116,28 @@ export function watchSurfaceRanges(view: Element, listener: (ranges: ReadonlyMap
   return () => { rangeListeners.get(view)?.delete(own); };
 }
 
+/** Marks `view` as a comment surface (`COMMENT_SURFACE`) until the returned cleanup runs. */
+export function markCommentSurface(view: Element): () => void {
+  view.setAttribute(COMMENT_SURFACE, "");
+  return () => view.removeAttribute(COMMENT_SURFACE);
+}
+
 /** The surface `element` lies in (itself included); undefined outside one. */
 function surfaceOf(element: Element): CommentSurface | undefined {
   const view = element.closest(`[${COMMENT_SURFACE}]`);
   return view === null ? undefined : surfaces.get(view);
 }
 
-/** Which highlight paints over which where they overlap: the walk's over a pin's or the one being written over the rest. */
-const PRIORITY: Record<string, number> = { [COMMENT_HIGHLIGHT]: 0, [ACTIVE_COMMENT_HIGHLIGHT]: 1, [PENDING_COMMENT_HIGHLIGHT]: 1, [CURRENT_COMMENT_HIGHLIGHT]: 2 };
+/**
+ * Which highlight paints over which where they overlap: the layers at the bottom (equal, so their fills add up), the
+ * strong and the pending fill over them, a touch selection over everything.
+ */
+const PRIORITY: Record<string, number> = {
+  ...Object.fromEntries(COMMENT_LAYER_HIGHLIGHTS.map((name) => [name, 0])),
+  [STRONG_COMMENT_HIGHLIGHT]: 1,
+  [PENDING_COMMENT_HIGHLIGHT]: 1,
+  [TOUCH_SELECTION_HIGHLIGHT]: 2,
+};
 
 const supported = (): boolean => typeof CSS !== "undefined" && "highlights" in CSS && typeof Highlight !== "undefined";
 
@@ -137,6 +157,7 @@ function shared(name: string): Highlight | null {
 }
 
 const NO_RANGES: readonly Range[] = [];
+const NO_IDS: readonly string[] = [];
 
 /**
  * A view's ranges in one shared highlight (`name`, made on first use with its `PRIORITY`): a change
@@ -159,15 +180,31 @@ export class SharedRanges {
   }
 }
 
+type Edge = { range: Range; end: boolean };
+
+/** Where two range boundaries stand to each other (`compareBoundaryPoints`); 0 for ranges in different trees. */
+function compareEdges(a: Edge, b: Edge): number {
+  // the constant names which boundary of `b` (the source) is compared with which of `a`: START_TO_END is a's end, b's start
+  const how = a.end ? (b.end ? Range.END_TO_END : Range.START_TO_END) : (b.end ? Range.END_TO_START : Range.START_TO_START);
+  try {
+    return a.range.compareBoundaryPoints(how, b.range);
+  } catch {
+    return 0;
+  }
+}
+
 /**
- * How far the chat view (`view`, its top and height on screen) scrolls for the walk to show a
- * comment's text and its pin: both in the middle when they fit, else the pin's
- * bottom at the view's bottom, so the pin the walk focuses is on screen.
+ * Each comment's layer, by id, from its ranges (in document order: it spans from the first's start to the last's end).
+ * A comment without ranges gets none.
  */
-export function walkScroll(text: { top: number; bottom: number }, pin: { top: number; bottom: number }, view: { top: number; height: number }): number {
-  const top = Math.min(text.top, pin.top);
-  const bottom = Math.max(text.bottom, pin.bottom);
-  return bottom - top > view.height ? pin.bottom - (view.top + view.height) : (top + bottom) / 2 - (view.top + view.height / 2);
+function layersOfRanges(comments: ReadonlyMap<string, readonly Range[]>): Map<string, number> {
+  const spans: { id: string; start: Edge; end: Edge }[] = [];
+  for (const [id, ranges] of comments) {
+    const first = ranges[0];
+    const last = ranges[ranges.length - 1];
+    if (first !== undefined && last !== undefined) spans.push({ id, start: { range: first, end: false }, end: { range: last, end: true } });
+  }
+  return assignLayers(spans, compareEdges);
 }
 
 /**
@@ -219,9 +256,9 @@ function addDraftRanges(root: Element, owner: string, comment: BlockComment, hel
 }
 
 /**
- * The ranges a comment on `target` of `owner`'s pane gets in `root` (a chat view), as its highlight builds them while it
- * is being written and once it is saved: a block's whole text, or a selection's part by part. What its `CommentPoint` is
- * measured on as it is made. Needs a DOM.
+ * The ranges a comment on `target` of `owner`'s pane gets in `root` (a chat view, a reply), as its highlight builds them
+ * once it is saved: a block's whole text, or a selection's part by part. The chat's comment layer reads a comment's text
+ * here while the highlights have not been rebuilt for it yet (just saved: an edit is a comment of a new id). Needs a DOM.
  */
 export function draftRanges(root: Element, owner: string, target: CommentTarget): Range[] {
   const next = new Map<string, Range[]>();
@@ -231,29 +268,26 @@ export function draftRanges(root: Element, owner: string, target: CommentTarget)
 
 /**
  * How strongly a surface shows each comment's text, whatever text that is (the chat's `ViewHighlights`, the file
- * viewer's `FileHighlights` decide it and `publish` it here): every comment the common tint; over it the comment whose
- * pin the pointer or the focus is on, or whose popover is open (active); over that the one the walk stands on
- * (current); the one being written the pending tint. Registered as the surface on `view` (`watchSurface`).
+ * viewer's `FileHighlights` decide it and `publish` it here): every comment the rest fill on its layer
+ * (`layersOfRanges`); the comment in focus, whose card the pointer or the focus is on, or whose field is open, the
+ * strong fill instead; the one being written the pending fill.
+ * Registered as the surface on `view` (`watchSurface`).
  */
 export class SurfaceMarks implements CommentSurface {
-  private all = new SharedRanges(COMMENT_HIGHLIGHT);
-  private active = new SharedRanges(ACTIVE_COMMENT_HIGHLIGHT);
-  private currentShown = new SharedRanges(CURRENT_COMMENT_HIGHLIGHT);
+  private layers = COMMENT_LAYER_HIGHLIGHTS.map((name) => new SharedRanges(name));
+  private strong = new SharedRanges(STRONG_COMMENT_HIGHLIGHT);
   private pendingShown = new SharedRanges(PENDING_COMMENT_HIGHLIGHT);
   private commentRanges: ReadonlyMap<string, readonly Range[]> = NO_RANGE_MAP;
+  /** each comment's layer as of the last `publish` */
+  private layerOf: ReadonlyMap<string, number> = new Map();
   private pendingRanges: readonly Range[] | null = null;
-  private current: HTMLElement | null = null;
   private pointed: HTMLElement | null = null;
   private focused: HTMLElement | null = null;
-  /** the saved comment whose popover is open */
-  private opened: string | null = null;
+  /** the saved comments whose fields are open */
+  private opened: readonly string[] = [];
 
-  /**
-   * `view` carries `COMMENT_SURFACE`. With `focusMode` it takes `FOCUS_ATTRIBUTE` while a comment's text is up; a surface
-   * whose view holds a very long document (the file viewer's code view) turns it off, as an attribute on an ancestor
-   * restyles every line in it
-   */
-  constructor(readonly view: Element, private readonly focusMode = true) {}
+  /** `view` carries `COMMENT_SURFACE`. */
+  constructor(readonly view: Element) {}
 
   /** Each saved comment's ranges as last published: a rebuild keeps those whose boundaries did not move. */
   get comments(): ReadonlyMap<string, readonly Range[]> { return this.commentRanges; }
@@ -263,20 +297,17 @@ export class SurfaceMarks implements CommentSurface {
 
   /**
    * A rebuild's result: each saved comment's ranges by id, in document order, and those of the one being written (null:
-   * none is). The shared highlights change only by the ranges that came or went; whoever follows the surface's ranges
-   * hears of them (`notifyRanges`).
+   * none is). Each comment gets its layer anew. The shared highlights change only by the ranges that came or went;
+   * whoever follows the surface's ranges hears of them (`notifyRanges`).
    */
   publish(commentRanges: ReadonlyMap<string, readonly Range[]>, pending: readonly Range[] | null): void {
-    // a pin that left without its pointerleave or blur (re-rendered, deleted) is no longer pointed at, focused or walked to
+    // a card that left without its pointerleave or blur (re-rendered, deleted) is no longer pointed at or focused
     if (this.pointed?.isConnected === false) this.pointed = null;
     if (this.focused?.isConnected === false) this.focused = null;
-    if (this.current?.isConnected === false) this.current = null;
     this.commentRanges = commentRanges;
+    this.layerOf = layersOfRanges(commentRanges);
     this.pendingRanges = pending;
-    const pendingRanges = pending ?? NO_RANGES;
-    // the text being written on takes the tint every comment has, and the stronger tint over it
-    this.all.set([...[...commentRanges.values()].flat(), ...pendingRanges]);
-    this.pendingShown.set(pendingRanges);
+    this.pendingShown.set(pending ?? NO_RANGES);
     this.showMarks();
     notifyRanges(this.view);
   }
@@ -288,59 +319,54 @@ export class SurfaceMarks implements CommentSurface {
     return all;
   }
 
-  /** The walk stands on `pin`, or on nothing. Its ranges are the current highlight while the pin is in the view. */
-  mark(pin: HTMLElement | null): void {
-    this.current = pin;
+  /** The pointer is over `marker`, or the focus on it (`on`), or no longer: its comment takes the strong fill while either holds. */
+  activate(marker: HTMLElement, by: "pointer" | "focus", on: boolean): void {
+    if (by === "pointer") this.pointed = on ? marker : this.pointed === marker ? null : this.pointed;
+    else this.focused = on ? marker : this.focused === marker ? null : this.focused;
     this.showMarks();
   }
 
-  /** The pointer is over `pin`, or the focus on it (`on`), or no longer: its comment's text comes up while either holds. */
-  activate(pin: HTMLElement, by: "pointer" | "focus", on: boolean): void {
-    if (by === "pointer") this.pointed = on ? pin : this.pointed === pin ? null : this.pointed;
-    else this.focused = on ? pin : this.focused === pin ? null : this.focused;
+  /** The field of the saved comment `id` is open (several, or none: null): its text comes up while it is, wherever the focus or the pointer goes. */
+  open(id: OpenComments): void {
+    this.opened = id === null ? [] : typeof id === "string" ? [id] : id;
     this.showMarks();
   }
 
-  /** The popover of the saved comment `id` is open (null: none is): its text comes up while it is, wherever the focus or the pointer goes. */
-  open(id: string | null): void {
-    this.opened = id;
-    this.showMarks();
-  }
-
-  /** The box around the text of the comment `pin` shows, if it has some. */
-  boxOf(pin: HTMLElement): DOMRect | null {
-    const rects = this.rangesOf(pin).map((range) => range.getBoundingClientRect()).filter((rect) => rect.width !== 0 || rect.height !== 0);
-    const box = unionBox(rects);
-    return box === undefined ? null : new DOMRect(box.left, box.top, box.right - box.left, box.bottom - box.top);
-  }
-
-  /** The ranges of the comment `pin` shows, by its current id: an edit gives the comment a new id but keeps the pin's element. */
-  private rangesOf(pin: HTMLElement | null): readonly Range[] {
-    const id = pin?.isConnected ? pin.dataset.commentId : undefined;
-    return id === undefined ? NO_RANGES : this.commentRanges.get(id) ?? NO_RANGES;
+  /** The comments `marker` stands for: a count's several (`data-comment-ids`), else its one. */
+  private idsOf(marker: HTMLElement | null): readonly string[] {
+    if (!marker?.isConnected) return NO_IDS;
+    const several = marker.dataset.commentIds;
+    if (several !== undefined) return several.split(" ").filter((id) => id !== "");
+    const id = marker.dataset.commentId;
+    return id === undefined ? NO_IDS : [id];
   }
 
   private showMarks(): void {
-    const current = this.rangesOf(this.current);
-    const opened = this.opened === null ? NO_RANGES : this.commentRanges.get(this.opened) ?? NO_RANGES;
-    const active = [...new Set([...this.rangesOf(this.pointed), ...this.rangesOf(this.focused), ...opened])];
-    this.currentShown.set(current);
-    this.active.set(active);
-    // focus mode, per surface (two panes are independent): the stylesheet fades every other comment's marks while a pin's
-    // text is up. Only when there is such text: a pin whose text is gone would fade the rest for nothing
-    if (this.focusMode) this.view.toggleAttribute(FOCUS_ATTRIBUTE, current.length + active.length > 0);
+    // the comments in focus leave their layers for the strong fill, which is then their own (about 34 %), not added to
+    // the rest fill; another comment's layer under them still adds up
+    const focused = new Set<string>();
+    for (const id of [...this.idsOf(this.pointed), ...this.idsOf(this.focused), ...this.opened]) {
+      if (this.commentRanges.has(id)) focused.add(id);
+    }
+    const layers: Range[][] = this.layers.map(() => []);
+    const strong: Range[] = [];
+    for (const [id, ranges] of this.commentRanges) {
+      if (focused.has(id)) strong.push(...ranges);
+      else layers[this.layerOf.get(id) ?? 0]!.push(...ranges);
+    }
+    this.layers.forEach((layer, index) => layer.set(layers[index]!));
+    this.strong.set(strong);
   }
 
   dispose(): void {
-    this.all.set(NO_RANGES);
-    this.active.set(NO_RANGES);
-    this.currentShown.set(NO_RANGES);
+    for (const layer of this.layers) layer.set(NO_RANGES);
+    this.strong.set(NO_RANGES);
     this.pendingShown.set(NO_RANGES);
+    this.layerOf = new Map();
     this.commentRanges = NO_RANGE_MAP;
     this.pendingRanges = null;
-    this.current = this.pointed = this.focused = null;
-    this.opened = null;
-    if (this.focusMode) this.view.removeAttribute(FOCUS_ATTRIBUTE);
+    this.pointed = this.focused = null;
+    this.opened = [];
   }
 }
 
@@ -371,21 +397,20 @@ export function watchSurface(marks: SurfaceMarks, observed: Element, rebuild: ()
   };
 }
 
-/** Which text of one chat view's transcript each comment covers, published to the view's `SurfaceMarks`. */
+/**
+ * Which text of one chat view's transcript each comment covers, published to the view's `SurfaceMarks`. The text a new
+ * comment is being written on is the comment layer's own (MarkdownComments.tsx, the strong fill), not drawn here.
+ */
 class ViewHighlights {
   /** the parts the ranges lie in: a change in one of them, or its removal, can move or end a range */
   private parts = new Set<Element>();
-  /** the comment being written in the popover, not saved yet (ChatView) */
-  private pending: { owner: string; comment: BlockComment } | null = null;
-  /** its ranges by its draft id, as `addDraftRanges` keeps the unmoved ones */
-  private pendingRanges = new Map<string, Range[]>();
 
   constructor(private marks: SurfaceMarks, private transcript: Element) {}
 
   /**
    * Whether these transcript mutations can touch a highlight: a change inside a commented part or
    * one holding a range, a commented part added, or a part holding a range removed. Another turn
-   * streaming touches none, and nor does a pin: the pin layer is outside the transcript.
+   * streaming touches none, and nor does a card: the comment layer is outside the transcript.
    */
   touches(records: readonly MutationRecord[]): boolean {
     for (const record of records) {
@@ -406,8 +431,7 @@ class ViewHighlights {
    * Every comment shown in the transcript gets a range per part it covers (`partSegments`), never
    * one across parts: what lies between them would be painted too. A segment whose offsets no
    * longer fit the part's text gets none. A range whose boundaries did not move is kept, and the
-   * shared highlights are touched only for the ranges that came or went. The comment being written
-   * gets its ranges the same way (`draftComment`).
+   * shared highlights are touched only for the ranges that came or went.
    */
   rebuild(): void {
     const next = new Map<string, Range[]>();
@@ -418,24 +442,10 @@ class ViewHighlights {
       const segments = partSegments(blockComments.list(found.owner), found.target, found.parts);
       if (addRanges(part, segments, this.marks.comments, next)) parts.add(part);
     }
-    // the selection a comment is being written on: every part of its reply may hold some of it
-    const pending = new Map<string, Range[]>();
-    if (this.pending !== null) {
-      for (const part of addDraftRanges(this.transcript, this.pending.owner, this.pending.comment, this.pendingRanges, pending)) parts.add(part);
-    }
-    this.pendingRanges = pending;
     this.parts = parts;
-    this.marks.publish(next, this.pending === null ? null : [...pending.values()].flat());
-  }
-
-  /** A comment is being written on `target` of `owner`'s pane (null: none any more): its text shows as the comment's will. */
-  setPending(pending: { owner: string; target: CommentTarget } | null): void {
-    this.pending = pending === null ? null : { owner: pending.owner, comment: draftComment(pending.target) };
-    this.rebuild();
+    this.marks.publish(next, null);
   }
 }
-
-const views = new WeakMap<Element, ViewHighlights>();
 
 /**
  * Highlights the comments in `view`'s `transcript` until the returned cleanup runs: the ranges
@@ -446,72 +456,28 @@ const views = new WeakMap<Element, ViewHighlights>();
 export function watchCommentHighlights(view: Element, transcript: Element): () => void {
   const marks = new SurfaceMarks(view);
   const highlights = new ViewHighlights(marks, transcript);
-  views.set(view, highlights);
   const watching = watchSurface(marks, transcript, () => highlights.rebuild(), (records) => highlights.touches(records));
   const unsubscribe = blockComments.subscribe(watching.schedule);
   watching.schedule();
   return () => {
     unsubscribe();
     watching.dispose();
-    if (views.get(view) === highlights) views.delete(view);
   };
 }
 
 /**
- * The composer's walk stands on `pin` in `view` (null: on nothing), whose surface is the one
- * `view` lies in: its comment's text takes the current highlight. Returns the box around that text,
- * for scrolling to it; null without one.
+ * The field of the saved comment `id` is open on the surface `view` (the element carrying `COMMENT_SURFACE`; several:
+ * a count's fields; null: none is): its text takes the strong fill until the field closes, wherever the
+ * focus or the pointer goes meanwhile (into the field, out of the card). Kept for the view, so a surface
+ * that registers later (its highlights watched anew) shows it too. A new comment has the pending fill instead.
  */
-export function markCurrentComment(view: Element, pin: HTMLElement | null): DOMRect | null {
-  const surface = surfaceOf(view);
-  if (surface === undefined) return null;
-  surface.mark(pin);
-  return pin === null ? null : surface.boxOf(pin);
-}
-
-/**
- * The walk's stop on `pin` (`.comment-pin`: the composer's walk in the chat, the file viewer's) in the
- * scrolling `view`, once the caller has marked it as its own: its text takes the current highlight,
- * and the view scrolls the text and its pin into the middle, or, taller than the view, the text's
- * end and the pin at its bottom: the focused pin is always on screen (`walkScroll`). The pin
- * alone where its text could not be found. Then the focus goes to the pin: a pin the walk opened
- * gives it to its popover as that mounts (CommentPins.tsx), which brings itself into view only once
- * this scroll has ended.
- */
-export function showWalkStop(view: Element, pin: HTMLElement): void {
-  const marked = markCurrentComment(view, pin);
-  const behavior = window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth";
-  if (marked === null || marked.height === 0) pin.scrollIntoView({ block: "center", behavior });
-  else {
-    const top = view.getBoundingClientRect().top + view.clientTop;
-    view.scrollBy({ top: walkScroll(marked, pin.getBoundingClientRect(), { top, height: view.clientHeight }), behavior });
-  }
-  // a pin is a button named after its comment: with the focus on it a screen reader reads the comment
-  pin.focus({ preventScroll: true });
-}
-
-/**
- * A comment is being written on `target` in `view` (a selection, or a block clicked), of the pane `owner` (null:
- * no longer): its text is highlighted as a comment's, with the stronger tint, until it is saved or
- * given up. Focusing the comment's field took the browser's own selection away.
- */
-export function showPendingComment(view: Element, pending: { owner: string; target: CommentTarget } | null): void {
-  views.get(view)?.setPending(pending);
-}
-
-/**
- * The popover of the saved comment `id` is open on the surface `view` (the element carrying `COMMENT_SURFACE`; null:
- * none is): its text takes the active highlight, and the surface focus mode, until the popover closes, wherever the
- * focus or the pointer goes meanwhile (into the popover's field, out of the pin). Kept for the view, so a surface
- * that registers later (its highlights watched anew) shows it too. A new comment has its pending highlight instead.
- */
-export function showOpenComment(view: Element, id: string | null): void {
+export function showOpenComment(view: Element, id: OpenComments): void {
   if (id === null) openComments.delete(view);
   else openComments.set(view, id);
   surfaces.get(view)?.open(id);
 }
 
-/** The pointer entered or left `pin`, or the focus came onto or left it (`on`): its comment's text comes up meanwhile. */
-export function activateComment(pin: HTMLElement, by: "pointer" | "focus", on: boolean): void {
-  surfaceOf(pin)?.activate(pin, by, on);
+/** The pointer entered or left `marker` (a card or a count), or the focus came onto or left it (`on`): its comment's text comes up meanwhile. */
+export function activateComment(marker: HTMLElement, by: "pointer" | "focus", on: boolean): void {
+  surfaceOf(marker)?.activate(marker, by, on);
 }

@@ -1,18 +1,15 @@
 /**
- * Measuring a comment surface's text, and where the focus goes around a comment. A comment in the chat starts from a
- * block of an agent's final reply that was clicked, or from text a mouse dragged over in it: the commentable parts on
- * screen (`rememberCommentPart`, `commentPartOf`), and a selection measured in a part's own text (`selectionComment`,
- * the offsets `selectionTarget` keeps and the highlight maps back to text nodes with `textRange`). For either surface
- * (the chat, the file viewer) the text a comment covers on screen (`textRects`, `textBox`) and the point on it its pin
- * keeps (`pointOnText`). Then the focus: the pane's composer (`paneComposer`) and what a closing popover gives the
- * focus back to (`restoreFocusTarget`). Everything but `sliceText`, `spanText` and `restoreFocusTarget` needs a DOM.
+ * Measuring a comment surface's text, and where the focus goes around a comment. A comment in the chat starts from
+ * text selected in an agent's final reply: the commentable parts on screen (`rememberCommentPart`, `commentPartOf`), and
+ * a selection measured in a part's own text (`rangeComment`, the offsets `selectionTarget` keeps and the highlight
+ * maps back to text nodes with `textRange`). Then the focus: the pane's composer (`paneComposer`) and what a closing
+ * popover gives the focus back to (`restoreFocusTarget`). Everything but `sliceText`, `spanText` and
+ * `restoreFocusTarget` needs a DOM.
  *
- * The comment UI's own markup (popover, pins) is queried through lib/commentDom.ts, and the pins' and the popover's
- * geometry is lib/commentPins.ts.
+ * The comment UI's own markup (popover, comment layers) is queried through lib/commentDom.ts.
  */
 import type { CommentTarget, PartLookup } from "./blockComments.ts";
-import { PINS_SELECTOR } from "./commentDom.ts";
-import { pointIn, unionBox, type CommentPoint, type PinBox } from "./commentPins.ts";
+import { COMMENT_LAYER_SELECTOR, commentRootOf } from "./commentDom.ts";
 
 /** A rendered part that can carry comments: its pane, its target, and the parts of its reply (`replyParts`). */
 export interface CommentPart {
@@ -28,11 +25,11 @@ export function rememberCommentPart(element: Element, part: CommentPart): void {
 export function forgetCommentPart(element: Element): void { parts.delete(element); }
 export function commentPartOf(element: Element): CommentPart | undefined { return parts.get(element); }
 
-/** Never text of a reply, neither counted nor seen as selected: the pin layer, controls, a code block's header. */
-const NOT_TEXT = `${PINS_SELECTOR}, .markdown-code-header, button:not(.markdown-file)`;
+/** Never text of a reply, neither counted nor seen as selected: the comment layer, controls, a code block's header. */
+const NOT_TEXT = `${COMMENT_LAYER_SELECTOR}, .markdown-code-header, button:not(.markdown-file)`;
 
 /**
- * Not a part's own text (`NOT_TEXT`): its pins, its controls (a file path is a button but reads as the
+ * Not a part's own text (`NOT_TEXT`): the comment layer, its controls (a file path is a button but reads as the
  * text it replaced), a code block's header, anything hidden from assistive technology. KaTeX draws
  * its formula twice, as MathML and as glyphs (aria-hidden): of a formula only its TeX source counts.
  */
@@ -168,24 +165,20 @@ export interface SelectionComment extends CommentPart {
 }
 
 /**
- * The comment the current selection makes in `view`, or null. It qualifies when it is not
- * collapsed, both ends lie in one reply part's root (`[data-comment-root]`, a final answer), and
- * it selects text that is not blank in a commentable part. It starts in the first such part and,
- * when it runs on over later ones, ends in the last (`until`): an end on a rule, or at the very
- * start of a part (a triple click), belongs to the part before. An end just past the root with
- * nothing selected out there (a triple click on a reply's last paragraph ends at the start of
- * what follows) counts as the root's end.
+ * The comment `range` makes in `view`, or null: what the chat's comment layer measures once it has cut a selection to
+ * one answer part (lib/markdownSelection.ts `clampSelection`). It qualifies when it is not collapsed, both ends lie in
+ * one reply part's root (lib/commentDom.ts `commentRootOf`, a final answer), and it selects text that is not blank in a commentable
+ * part. It starts in the first such part and, when it runs on over later ones, ends in the last (`until`): an end on a
+ * rule, or at the very start of a part (a triple click), belongs to the part before. An end just past the root with
+ * nothing selected out there (a triple click on a reply's last paragraph ends at the start of what follows) counts as
+ * the root's end. `range` is not changed.
  */
-export function selectionComment(selection: Selection | null, view: Element): SelectionComment | null {
-  if (selection === null || selection.rangeCount === 0 || selection.isCollapsed) return null;
-  const first = selection.getRangeAt(0);
-  const last = selection.getRangeAt(selection.rangeCount - 1);
-  const range = document.createRange();
-  range.setStart(first.startContainer, first.startOffset);
-  range.setEnd(last.endContainer, last.endOffset);
-  const root = elementOf(range.startContainer)?.closest("[data-comment-root]");
+export function rangeComment(given: Range, view: Element): SelectionComment | null {
+  if (given.collapsed) return null;
+  const range = given.cloneRange();
+  const root = commentRootOf(range.startContainer);
   if (!root || !view.contains(root)) return null;
-  if (elementOf(range.endContainer)?.closest("[data-comment-root]") !== root) {
+  if (commentRootOf(range.endContainer) !== root) {
     const outside = document.createRange();
     outside.setStart(root, root.childNodes.length);
     outside.setEnd(range.endContainer, range.endOffset);
@@ -218,61 +211,6 @@ export function selectionComment(selection: Selection | null, view: Element): Se
   return { ...parts[span.first]!, text: span.text, start, end, ...until };
 }
 
-/**
- * Not where a selection shows: as `SKIPPED`, but a formula counts by the glyphs on screen
- * (aria-hidden), not by its MathML, which is there only for assistive technology.
- */
-const UNSEEN = `${NOT_TEXT}, .katex-mathml`;
-
-/**
- * The lines of text `range` selects on screen, in document order: the client rects of each text
- * node in it, clipped to its ends, without pins, controls and a code block's header. Not a whole
- * element's box: a part selected whole would be one tall rect around its lines, and the gap
- * between two parts no line.
- */
-export function textRects(range: Range): DOMRect[] {
-  const container = range.commonAncestorContainer;
-  const nodes: Text[] = [];
-  if (container instanceof Text) nodes.push(container);
-  else {
-    const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT);
-    for (let node = walker.nextNode(); node !== null; node = walker.nextNode()) {
-      if (node instanceof Text && range.intersectsNode(node)) nodes.push(node);
-    }
-  }
-  const rects: DOMRect[] = [];
-  for (const node of nodes) {
-    if (node.parentElement?.closest(UNSEEN)) continue;
-    const piece = document.createRange();
-    piece.selectNodeContents(node);
-    if (node === range.startContainer) piece.setStart(node, range.startOffset);
-    if (node === range.endContainer) piece.setEnd(node, range.endOffset);
-    for (const rect of piece.getClientRects()) if (rect.width > 0 && rect.height > 0) rects.push(rect);
-  }
-  return rects;
-}
-
-/**
- * The box around the text `ranges` show on screen (`textRects` of each, `unionBox`), in client pixels: what a comment's
- * `CommentPoint` is a fraction of. Undefined where none of it is drawn.
- */
-export function textBox(ranges: readonly Range[]): PinBox | undefined {
-  return unionBox(ranges.flatMap(textRects));
-}
-
-/**
- * Where the client point `at` lies on the text `ranges` show (`textBox`, `pointIn`): the point a comment made there keeps
- * for its pin. Undefined where none of that text is drawn.
- */
-export function pointOnText(ranges: readonly Range[], at: { x: number; y: number }): CommentPoint | undefined {
-  const box = textBox(ranges);
-  return box === undefined ? undefined : pointIn(box, at);
-}
-
-function elementOf(node: Node): Element | null {
-  return node instanceof Element ? node : node.parentElement;
-}
-
 /** The composer's field of the pane a chat view is in; null without one. */
 export function paneComposer(view: Element | null): HTMLElement | null {
   return view?.closest(".terminal-stack")?.querySelector<HTMLElement>(".composer-text") ?? null;
@@ -280,8 +218,8 @@ export function paneComposer(view: Element | null): HTMLElement | null {
 
 /**
  * What a closing comment popover gives the focus back to: its opener while that is still in the
- * document, else `fallback` (a deleted comment takes its own pin, the opener, with it). A dialog
- * focuses whatever that is; a popover beside its pin (`inline`) only an element that is in the
+ * document, else `fallback` (a deleted comment takes its own card, the opener, with it). A dialog
+ * focuses whatever that is; a field in place (`inline`) only an element that is in the
  * document, so it leaves the focus where it is otherwise. On a touch screen (`coarse`) the fallback is a composer's
  * field, and focusing it raises the keyboard unasked: the focus is only let go (null).
  */

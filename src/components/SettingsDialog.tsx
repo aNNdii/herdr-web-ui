@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode, type RefObject } from "react";
-import { ArrowLeft, Bell, Check, ChevronDown, ChevronRight, ChevronUp, Eye, EyeOff, FileText, Gauge, Info, Keyboard, MessageSquare, Mic, Monitor, Palette, Plug, Plus, RotateCcw, Search, Smartphone, SquareTerminal, Star, X, type LucideIcon } from "lucide-react";
+import { ArrowLeft, Bell, Check, ChevronDown, ChevronRight, ChevronUp, Eye, EyeOff, FileText, Gauge, Info, Keyboard, MessageSquare, MessageSquareText, Mic, Monitor, Palette, Plug, Plus, RotateCcw, Search, Smartphone, SquareTerminal, Star, X, type LucideIcon } from "lucide-react";
 
 import "./SettingsDialog.css";
 
@@ -196,13 +196,14 @@ function FontFamilyInput({ value, label, onCommit, fixedWidthFor = null, placeho
 }
 
 
-/** The palette's pages (lib/paletteSettings.ts), and File viewer, which the palette does not list yet. */
-type SettingsPage = SettingsPageId | "files";
+/** The palette's pages (lib/paletteSettings.ts), and File viewer and Comments, which the palette does not list yet. */
+type SettingsPage = SettingsPageId | "files" | "comments";
 
 /** The pages in the order the list shows them: what is looked at first, then what is set once. */
 export const PAGES: readonly { id: SettingsPage; icon: LucideIcon }[] = [
   { id: "appearance", icon: Palette },
   { id: "chat", icon: MessageSquare },
+  { id: "comments", icon: MessageSquareText },
   { id: "terminal", icon: SquareTerminal },
   { id: "files", icon: FileText },
   { id: "alerts", icon: Bell },
@@ -332,26 +333,6 @@ function AppearancePage() {
 function ChatPage() {
   const { settings, update } = useSettings();
   const t = useT();
-  // how many comments turning the setting off would delete; null while no question is open
-  const [deleting, setDeleting] = useState<number | null>(null);
-  const commentsToggle = useRef<HTMLButtonElement>(null);
-  // the question answered yes: ConfirmDialog leaves the focus to its owner then, and it goes back to the switch, once
-  // the dialog is gone (its trap would take it back while it is up)
-  const refocusToggle = useRef(false);
-  useEffect(() => {
-    if (deleting !== null || !refocusToggle.current) return;
-    refocusToggle.current = false;
-    commentsToggle.current?.focus({ preventScroll: true });
-  }, [deleting]);
-  const setComments = (on: boolean): void => {
-    if (on) { update({ comments: true }); return; }
-    // counted here, in the handler: counting refreshes the store, which notifies its subscribers. A comment being
-    // written, with text typed and not saved yet, goes too: with none stored it is the one comment asked about
-    const stored = blockComments.countAll();
-    const count = stored > 0 ? stored : hasChangedComment(document) ? 1 : 0;
-    if (count === 0) update({ comments: false });
-    else setDeleting(count);
-  };
   return (
     <>
       <SettingsGroup>
@@ -365,9 +346,6 @@ function ChatPage() {
         </SettingsRow>
         <SettingsRow label={t("Show thinking")} description={t("Include the agent's reasoning blocks")}>
           <Toggle label={t("Show thinking")} checked={settings.showThinking} onChange={(showThinking) => update({ showThinking })} />
-        </SettingsRow>
-        <SettingsRow label={t("Comments")} description={t("Comment on an agent's reply and on files by selecting text or clicking a block. Turning this off deletes every comment on this device.")}>
-          <Toggle label={t("Comments")} checked={settings.comments} onChange={setComments} buttonRef={commentsToggle} />
         </SettingsRow>
         <SettingsRow label={t("Chat width")} description={t("How wide the conversation and the message box run on a large screen")} wide>
           <Segmented label={t("Chat width")} value={settings.chatWidth} onChange={(chatWidth) => update({ chatWidth })} options={CHAT_WIDTHS.map((chatWidth) => ({ value: chatWidth, label: t(chatWidth === "narrow" ? "Narrow" : chatWidth === "wide" ? "Wide" : chatWidth === "full" ? "Full" : "Default") }))} />
@@ -435,6 +413,70 @@ function ChatPage() {
         </div>
       </SettingsGroup>
 
+    </>
+  );
+}
+
+/**
+ * Comments: the switch for the whole feature (turned off, every comment on the device goes, after a question), then how
+ * a selection is commented on and where comments show beside rendered Markdown (the preview and the chat), then the
+ * code view's own settings. Every row below the switch is disabled while comments are off.
+ */
+function CommentsPage() {
+  const { settings, update } = useSettings();
+  const t = useT();
+  // how many comments turning the setting off would delete; null while no question is open
+  const [deleting, setDeleting] = useState<number | null>(null);
+  const commentsToggle = useRef<HTMLButtonElement>(null);
+  // the question answered yes: ConfirmDialog leaves the focus to its owner then, and it goes back to the switch, once
+  // the dialog is gone (its trap would take it back while it is up)
+  const refocusToggle = useRef(false);
+  useEffect(() => {
+    if (deleting !== null || !refocusToggle.current) return;
+    refocusToggle.current = false;
+    commentsToggle.current?.focus({ preventScroll: true });
+  }, [deleting]);
+  const setComments = (on: boolean): void => {
+    if (on) { update({ comments: true }); return; }
+    // counted here, in the handler: counting refreshes the store, which notifies its subscribers. A comment being
+    // written, with text typed and not saved yet, goes too: with none stored it is the one comment asked about
+    const stored = blockComments.countAll();
+    const count = stored > 0 ? stored : hasChangedComment(document) ? 1 : 0;
+    if (count === 0) update({ comments: false });
+    else setDeleting(count);
+  };
+  const off = !settings.comments;
+  return (
+    <>
+      {/* the page's title names the first group */}
+      <SettingsGroup>
+        <SettingsRow label={t("Comments")} description={t("Comment on an agent's reply and on files by selecting text in comment mode. Turning this off deletes every comment on this device.")}>
+          <Toggle label={t("Comments")} checked={settings.comments} onChange={setComments} buttonRef={commentsToggle} />
+        </SettingsRow>
+      </SettingsGroup>
+
+      <SettingsGroup title={t("Selected text")} note={t("In the Markdown preview and the chat")} section="selected-text">
+        <SettingsRow label={t("When you select text")} description={t("In comment mode, with a mouse, a pen or the keyboard. On a touch screen, Comment always shows.")} wide>
+          <Segmented label={t("When you select text")} value={settings.commentOnSelect} disabled={off} onChange={(commentOnSelect) => update({ commentOnSelect })} options={[{ value: "button", label: t("Show a Comment button") }, { value: "field", label: t("Open the comment field") }]} />
+        </SettingsRow>
+        {/* where the margin fits beside a Markdown text (the preview, a reply); without room counts show either way */}
+        <SettingsRow label={t("Comments beside the text")} wide>
+          <Segmented label={t("Comments beside the text")} value={settings.commentLayout} disabled={off} onChange={(commentLayout) => update({ commentLayout })} options={[{ value: "cards", label: t("Cards in the margin") }, { value: "counts", label: t("Counts beside the lines") }]} />
+        </SettingsRow>
+      </SettingsGroup>
+
+      <SettingsGroup title={t("Code view")} section="code-view">
+        <SettingsRow label={t("Click a line to comment")} description={t("With a mouse: a click anywhere on a line opens a comment. Off: only the ⊕ beside the line number.")}>
+          <Toggle label={t("Click a line to comment")} checked={settings.codeCommentLineClick} disabled={off} onChange={(codeCommentLineClick) => update({ codeCommentLineClick })} />
+        </SettingsRow>
+        <SettingsRow label={t("On mobile, comment with")} description={t("Phones and tablets: how a line is commented while comment mode is on.")}>
+          <Segmented label={t("On mobile, comment with")} value={settings.mobileCommentGesture} disabled={off} onChange={(mobileCommentGesture) => update({ mobileCommentGesture })} options={[{ value: "hold", label: t("Long press") }, { value: "tap", label: t("Tap") }]} />
+        </SettingsRow>
+        <SettingsRow label={t("On mobile, write comments in")} description={t("Phones and tablets: where the comment field opens.")}>
+          <Segmented label={t("On mobile, write comments in")} value={settings.mobileCommentInput} disabled={off} onChange={(mobileCommentInput) => update({ mobileCommentInput })} options={[{ value: "sheet", label: t("Bottom sheet") }, { value: "inline", label: t("Below the line") }]} />
+        </SettingsRow>
+      </SettingsGroup>
+
       {deleting !== null && <ConfirmDialog
         title={deleting === 1 ? t("Delete 1 comment?") : t("Delete {count} comments?", { count: deleting })}
         body={t("Every comment in the chat and the file viewer on this device is deleted. This cannot be undone.")}
@@ -488,7 +530,7 @@ function TerminalPage({ keyBarButtonRef, onEditKeyBar }: { keyBarButtonRef: RefO
 }
 
 /** File viewer: how a file opened from a pane reads. */
-function FileViewerPage({ onOpenChat }: { onOpenChat: () => void }) {
+function FileViewerPage() {
   const { settings, update } = useSettings();
   const t = useT();
   // literal keys, so the i18n check finds them
@@ -504,17 +546,6 @@ function FileViewerPage({ onOpenChat }: { onOpenChat: () => void }) {
       </SettingsRow>
       <SettingsRow label={t("Diff layout")} description={t("A phone shows one column either way.")}>
         <Segmented label={t("Diff layout")} value={settings.diffStyle} onChange={(diffStyle) => update({ diffStyle })} options={DIFF_STYLES.map((diffStyle) => ({ value: diffStyle, label: diffStyle === "split" ? t("Split") : t("Unified") }))} />
-      </SettingsRow>
-    </SettingsGroup>
-    <SettingsGroup title={t("Comments")} note={settings.comments ? undefined : <>{t("Comments are off on this device.")} <button type="button" className="btn btn-ghost" onClick={onOpenChat}>{t("Open Chat settings")}</button></>}>
-      <SettingsRow label={t("Click a line to comment")} description={t("With a mouse: a click anywhere on a line opens a comment. Off: only the ⊕ beside the line number.")}>
-        <Toggle label={t("Click a line to comment")} checked={settings.codeCommentLineClick} disabled={!settings.comments} onChange={(codeCommentLineClick) => update({ codeCommentLineClick })} />
-      </SettingsRow>
-      <SettingsRow label={t("On mobile, comment with")} description={t("Phones and tablets: how a line is commented while comment mode is on.")}>
-        <Segmented label={t("On mobile, comment with")} value={settings.mobileCommentGesture} disabled={!settings.comments} onChange={(mobileCommentGesture) => update({ mobileCommentGesture })} options={[{ value: "hold", label: t("Long press") }, { value: "tap", label: t("Tap") }]} />
-      </SettingsRow>
-      <SettingsRow label={t("On mobile, write comments in")} description={t("Phones and tablets: where the comment field opens.")}>
-        <Segmented label={t("On mobile, write comments in")} value={settings.mobileCommentInput} disabled={!settings.comments} onChange={(mobileCommentInput) => update({ mobileCommentInput })} options={[{ value: "sheet", label: t("Bottom sheet") }, { value: "inline", label: t("Below the line") }]} />
       </SettingsRow>
     </SettingsGroup>
     </>
@@ -1069,7 +1100,7 @@ function OpenSettingsDialog({ section = null, linkPage = null, linkSection = nul
   const [overComment] = useState(() => hasCommentDialog(document));
   useSheetSwipe(surface, onClose);
   const shown = useRef<{ page: SettingsPage | null; keyBar: boolean } | null>(null);
-  const label = (id: SettingsPage): string => t(id === "appearance" ? "Appearance" : id === "chat" ? "Chat" : id === "terminal" ? "Terminal" : id === "files" ? "File viewer" : id === "alerts" ? "Alerts" : id === "voice" ? "Voice input"
+  const label = (id: SettingsPage): string => t(id === "appearance" ? "Appearance" : id === "chat" ? "Chat" : id === "comments" ? "Comments" : id === "terminal" ? "Terminal" : id === "files" ? "File viewer" : id === "alerts" ? "Alerts" : id === "voice" ? "Voice input"
     : id === "usage" ? "Subscription usage" : id === "shortcuts" ? "Shortcuts" : id === "devices" ? "Phone & devices" : id === "remote" ? "Remote PCs" : id === "integrations" ? "Agent integrations" : "About");
   const openPage = (id: SettingsPage): void => { setKeyBarOpen(false); setChosen(id); };
   const openKeyBar = (): void => {
@@ -1143,7 +1174,8 @@ function OpenSettingsDialog({ section = null, linkPage = null, linkSection = nul
       case "appearance": return <AppearancePage />;
       case "chat": return <ChatPage />;
       case "terminal": return <TerminalPage keyBarButtonRef={keyBarButtonRef} onEditKeyBar={openKeyBar} />;
-      case "files": return <FileViewerPage onOpenChat={() => openPage("chat")} />;
+      case "comments": return <CommentsPage />;
+      case "files": return <FileViewerPage />;
       case "alerts": return <AlertsPage onEnableNotifications={onEnableNotifications} />;
       case "voice": return <VoicePage />;
       case "usage": return <UsagePage />;

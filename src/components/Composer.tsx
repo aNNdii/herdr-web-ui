@@ -57,8 +57,8 @@ import { MicButton, VoiceRecordingPill, useDictation } from "./VoiceInput.tsx";
 import { cachedPaneCommands } from "../lib/paneCommandCache.ts";
 import { useT } from "../lib/i18n.ts";
 import { blockComments, commentTarget, isReplyComment, outgoingMessage, useBlockComments, type BlockComment, type PaneComment } from "../lib/blockComments.ts";
-import { markCurrentComment, showWalkStop } from "../lib/commentHighlight.ts";
-import { changedField, inUnchangedPopover, revealField, savedPins } from "../lib/commentDom.ts";
+import { changedField, inUnchangedPopover, revealField } from "../lib/commentDom.ts";
+import { markShownComment, openShownComment, shownCommentIds } from "../lib/shownComments.ts";
 import { popoverOutlived } from "../lib/commentPopover.ts";
 import { lastFileStop } from "../lib/commentWalk.ts";
 import { FileCommentNavContext } from "../lib/fileCommentNav.ts";
@@ -325,15 +325,14 @@ export function Composer({
   /** the walk control (the bar's text): Escape from the note the walk stands on hands the focus back to it */
   const walkRef = useRef<HTMLButtonElement | null>(null);
   /**
-   * The note the walk stands on (`is-current`, set by hand: no state per note) and its chat view,
-   * whose current highlight shows the note's text, until the next step, a click elsewhere or Escape.
+   * The comment the walk stands on and its chat view, whose comment layer shows it (its field open in the comment mode,
+   * else its text marked: lib/shownComments.ts), until the next step, a click elsewhere or Escape.
    */
-  const currentNote = useRef<{ note: HTMLElement; view: Element } | null>(null);
+  const currentNote = useRef<{ id: string; view: Element } | null>(null);
   const clearCurrent = useCallback((): void => {
     const current = currentNote.current;
     if (current === null) return;
-    current.note.classList.remove("is-current");
-    markCurrentComment(current.view, null);
+    markShownComment(current.view, null);
     currentNote.current = null;
   }, []);
   useEffect(() => {
@@ -342,23 +341,18 @@ export function Composer({
     const onClick = (): void => clearCurrent();
     const onKeyDown = (event: globalThis.KeyboardEvent): void => {
       if (event.key !== "Escape") return;
-      const note = currentNote.current?.note;
-      // Escape from the note hands the focus back to the walk control, so Enter there walks on
-      // (it sits after the whole chat in the tab order)
-      // read from the event's target (the focused element, fixed at dispatch), not from `document.activeElement`: it stays
-      // inside the note even when an open edit form has been closed and detached meanwhile
-      // The popover the walk opened for the pin is the note's too, while nothing is typed in it: closed by this Escape, it
-      // finds the walk control focused and leaves it there
-      const inPopover = inUnchangedPopover(event.target);
-      const onNote = note !== undefined && event.target instanceof Node && (note.contains(event.target) || inPopover);
+      // Escape from the field the walk opened hands the focus back to the walk control, so Enter there walks on (it sits
+      // after the whole chat in the tab order): while nothing is typed in it, closed by this Escape, the field finds the
+      // walk control focused and leaves it there. Read from the event's target (the focused element, fixed at dispatch)
+      const onNote = currentNote.current !== null && inUnchangedPopover(event.target);
       clearCurrent();
       if (onNote) walkRef.current?.focus();
     };
     // keydown on the document in the capture phase: after the window-capture Escape owners (the palette, dialogs, menus,
     // dictation, the modal editor), which stop the event first, and before React's handlers. An open edit form the walk
-    // stands on gives up on Escape from its own key handler only while nothing was typed in it, so this has always run
-    // before it: the mark goes, the focus moves to the walk control, and an untouched form then closes without holding the
-    // focus, leaving it there. A form with typed text is left open (its Escape does nothing, so the event is not stopped)
+    // stands on is left on Escape from its own key handler, so this has always run before it: the mark goes, the focus
+    // moves to the walk control, and an untouched form then closes without holding the focus, leaving it there. A form
+    // with typed text saves it as it closes, and its focus goes back to its card (CommentDraft.tsx)
     document.addEventListener("click", onClick, true);
     document.addEventListener("keydown", onKeyDown, true);
     return () => {
@@ -369,14 +363,14 @@ export function Composer({
   }, [clearCurrent]);
   // the last comment gone: nothing to stand on
   useEffect(() => { if (comments.length === 0) clearCurrent(); }, [comments.length, clearCurrent]);
-  // the current comment deleted while others remain: its note left the chat, and the mark goes with
-  // it. Checked a frame later, once the chat has rendered the change. A focused element that leaves
-  // the document leaves the focus on the body: then it was the note's, and the walk control takes it
+  // the current comment gone while others remain (deleted, or edited into a new one): the mark goes with it. Checked a
+  // frame later, once the chat has rendered the change. A focused element that leaves the document leaves the focus on
+  // the body: then it was the comment's, and the walk control takes it
   useEffect(() => {
     if (currentNote.current === null) return;
     const frame = window.requestAnimationFrame(() => {
       const current = currentNote.current;
-      if (current === null || current.note.isConnected) return;
+      if (current === null || shownCommentIds(current.view).includes(current.id)) return;
       clearCurrent();
       if (document.activeElement === null || document.activeElement === document.body) walkRef.current?.focus();
     });
@@ -392,14 +386,15 @@ export function Composer({
       revealField(unsaved);
       return;
     }
-    // one stop per pin, in the order the pins appear, which is reading order (CommentPins). Not the provisional pin of a
-    // comment being written
-    const notes = savedPins(view, ".chat-view");
-    // a comment whose text is not in the chat (older history not loaded, a reply that changed) has no pin: it
-    // is a stop of its own that opens its popover as a dialog, so the bar reaches every comment it counts
-    const shown = new Set(notes.map((note) => note.dataset.commentId));
+    // one stop per reply comment the chat's comment layer shows, in reading order (lib/shownComments.ts)
+    const chat = view.querySelector(".chat-view");
+    const replies = comments.filter(isReplyComment);
+    const notes = chat === null ? [] : shownCommentIds(chat).filter((id) => replies.some((comment) => comment.id === id));
+    // a comment whose text is not in the chat (older history not loaded, a row outside the list's window, a reply that
+    // changed) is a stop of its own that opens it as a dialog, so the bar reaches every comment it counts
+    const shown = new Set(notes);
     // (a file comment has no place in the chat: the viewer shows it)
-    const missing = comments.filter(isReplyComment).filter((comment) => !shown.has(comment.id));
+    const missing = replies.filter((comment) => !shown.has(comment.id));
     // then the file comments, in the order they are sent, each a stop that opens the viewer at it
     const files = sortFileComments(comments.filter((comment): comment is FileComment => !isReplyComment(comment)));
     const inChat = notes.length + missing.length;
@@ -419,16 +414,17 @@ export function Composer({
       setEditedComment(comment);
       return;
     }
-    const pin = notes[stop]!;
-    const chat = pin.closest(".chat-view");
-    if (chat === null) return;
-    // its popover opens to edit (ChatView), and its field takes the focus as it mounts, once its pin is placed. The pin is marked
-    // after the click: the click is one, and the document's click listener above clears the mark
-    pin.click();
-    pin.classList.add("is-current");
-    currentNote.current = { note: pin, view: chat };
-    // its text highlighted, it and its pin scrolled into view, the focus on the pin (`showWalkStop`)
-    showWalkStop(chat, pin);
+    const id = notes[stop]!;
+    // the layer scrolls it into view (the chat's scroller only) and opens it: its field in the comment mode, else marked,
+    // or the sheet on a touch screen. Its text no longer drawn meanwhile: the dialog, as for a comment never shown
+    if (chat === null || !openShownComment(chat, id)) {
+      const comment = replies.find((one) => one.id === id);
+      if (comment === undefined) return;
+      editedText.current = comment.comment;
+      setEditedComment(comment);
+      return;
+    }
+    currentNote.current = { id, view: chat };
   };
   const mounted = useRef(true);
   const [caret, setCaret] = useState(text.length);
@@ -1503,7 +1499,7 @@ export function Composer({
           </span>}
         </div>
       )}
-      {/* a comment the walk reached that has no pin: its popover as a dialog (a sheet on a phone), to edit, its field
+      {/* a comment the walk reached that has no card: its popover as a dialog (a sheet on a phone), to edit, its field
           filled, with Delete beside ↑. The focus goes back to the walk control, so Enter walks on; to the message box when
           that was the last comment and the bar is gone (not on a touch screen: no keyboard unasked) */}
       {editedComment && settings.comments && <CommentPopover

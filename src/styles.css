@@ -40,6 +40,11 @@
      action - an amber-phosphor terminal) and the four agent states, none of them amber */
   --accent: #f0a830;
   --accent-tint: rgba(240, 168, 48, 0.13);
+  /* the fills of commented text (BlockComments.css, lib/commentHighlight.ts): every comment's at rest, translucent so
+     overlapping comments add up, and the comment in focus (or being written). Mixed from the palette's own --accent, so
+     every palette and theme has its own, with no override */
+  --comment-fill: color-mix(in srgb, var(--accent) 16%, transparent);
+  --comment-fill-strong: color-mix(in srgb, var(--accent) 34%, transparent);
   --primary: #f0a830;
   --primary-hover: #f6bb55;
   --primary-text: #1b1407;
@@ -175,6 +180,8 @@
   --rail-w: 3px;
   --hairline: 1px;
   --content-w: 820px;
+  /* a field floating over text: the comment field over a selection (MarkdownComments.css) */
+  --float-w: 320px;
   /* the chat lane: transcript, composer column, held list (Settings → Chat width, lib/settings.ts).
      At the Default step PaneTerminal writes the pane's own lane on .terminal-stack, as one
      length (chatLaneLength: 71.43% of the pane in px, min 820px, max 60rem), and a file viewer

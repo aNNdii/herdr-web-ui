@@ -142,7 +142,7 @@ export interface Settings {
   autoSendQueued: boolean;
   /** show the agent's folded reasoning blocks in the chat view */
   showThinking: boolean;
-  /** comment on a reply or a file by selecting text or clicking a block; off deletes every comment */
+  /** comment on a reply or a file by selecting text in the comment mode; off deletes every comment */
   comments: boolean;
   /** request a screen wake lock while a pane is open in this visible tab */
   keepScreenOn: boolean;
@@ -193,8 +193,15 @@ export interface Settings {
   markdownWidth: MarkdownWidth;
   /** a repository diff as one column of old and new lines, or the two side by side (a phone shows one column either way) */
   diffStyle: DiffStyle;
-  /** the file viewer code view's comment mode, switched from the viewer's header */
-  codeCommentMode: boolean;
+  /** comment mode for the whole app (file viewer code and preview, chat); a stored `codeCommentMode` is read into it once */
+  commentMode: boolean;
+  /** comments beside the text: full cards in a margin, or only a count per place */
+  commentLayout: CommentLayout;
+  /**
+   * in the comment mode, with a mouse, pen or keyboard, a selection in the Markdown preview or the chat shows a Comment
+   * button (`"button"`) or opens the comment field at once (`"field"`)
+   */
+  commentOnSelect: CommentOnSelect;
   /** with a mouse, a click anywhere on a line opens a comment; off, only the ⊕ beside the line number does */
   codeCommentLineClick: boolean;
   /** on a touch screen in comment mode: a long press or a tap comments on a line */
@@ -205,6 +212,10 @@ export interface Settings {
 
 export const MARKDOWN_WIDTHS = ["readable", "full"] as const;
 export type MarkdownWidth = (typeof MARKDOWN_WIDTHS)[number];
+export const COMMENT_LAYOUTS = ["cards", "counts"] as const;
+export type CommentLayout = (typeof COMMENT_LAYOUTS)[number];
+export const COMMENT_ON_SELECT = ["button", "field"] as const;
+export type CommentOnSelect = (typeof COMMENT_ON_SELECT)[number];
 export const DIFF_STYLES = ["unified", "split"] as const;
 export type DiffStyle = (typeof DIFF_STYLES)[number];
 
@@ -216,7 +227,7 @@ type TelemetrySourceSettings = Omit<Settings,
   // not collected: the report's schema (shared/telemetry.ts) has no field for it yet
   | "diffStyle" | "contrast" | "fontSmoothing" | "panelMotion" | "uiFontSize" | "showComposerStrip"
   // not collected: the fork's comment settings have no field in the report's schema
-  | "comments" | "codeCommentMode" | "codeCommentLineClick" | "mobileCommentGesture" | "mobileCommentInput"
+  | "comments" | "commentMode" | "commentLayout" | "commentOnSelect" | "codeCommentLineClick" | "mobileCommentGesture" | "mobileCommentInput"
   // not collected: only System mode reads them, and `palette` is already reported
   | "paletteLight" | "paletteDark">;
 
@@ -308,7 +319,7 @@ export const SETTING_SCOPE = {
   // Viewer layout follows this screen, as chatWidth does; highlighting remains shared.
   wrapCode: "device", markdownWidth: "device", diffStyle: "device",
   // comments are kept in this browser's storage, so how they are made is this device's too
-  comments: "device", codeCommentMode: "device", codeCommentLineClick: "device", mobileCommentGesture: "device", mobileCommentInput: "device",
+  comments: "device", commentMode: "device", commentLayout: "device", commentOnSelect: "device", codeCommentLineClick: "device", mobileCommentGesture: "device", mobileCommentInput: "device",
 } as const satisfies Record<keyof Settings, "shared" | "device">;
 
 /** The shared part of `settings`, by the names shared/preferences.ts lists. */
@@ -387,7 +398,9 @@ export const DEFAULT_SETTINGS: Settings = {
   wrapCode: false,
   highlightCode: true,
   markdownWidth: "readable",
-  codeCommentMode: false,
+  commentMode: false,
+  commentLayout: "cards",
+  commentOnSelect: "button",
   codeCommentLineClick: false,
   mobileCommentGesture: "hold",
   mobileCommentInput: "sheet",
@@ -589,7 +602,11 @@ export function sanitizeSettings(raw: unknown): Settings {
     wrapCode: typeof record["wrapCode"] === "boolean" ? record["wrapCode"] : DEFAULT_SETTINGS.wrapCode,
     highlightCode: typeof record["highlightCode"] === "boolean" ? record["highlightCode"] : DEFAULT_SETTINGS.highlightCode,
     markdownWidth: MARKDOWN_WIDTHS.find((width) => width === record["markdownWidth"]) ?? DEFAULT_SETTINGS.markdownWidth,
-    codeCommentMode: typeof record["codeCommentMode"] === "boolean" ? record["codeCommentMode"] : DEFAULT_SETTINGS.codeCommentMode,
+    // `codeCommentMode` is the key this setting was stored under before the mode covered the whole app
+    commentMode: typeof record["commentMode"] === "boolean" ? record["commentMode"]
+      : typeof record["codeCommentMode"] === "boolean" ? record["codeCommentMode"] : DEFAULT_SETTINGS.commentMode,
+    commentLayout: COMMENT_LAYOUTS.find((layout) => layout === record["commentLayout"]) ?? DEFAULT_SETTINGS.commentLayout,
+    commentOnSelect: COMMENT_ON_SELECT.find((value) => value === record["commentOnSelect"]) ?? DEFAULT_SETTINGS.commentOnSelect,
     codeCommentLineClick: typeof record["codeCommentLineClick"] === "boolean" ? record["codeCommentLineClick"] : DEFAULT_SETTINGS.codeCommentLineClick,
     mobileCommentGesture: MOBILE_COMMENT_GESTURES.find((gesture) => gesture === record["mobileCommentGesture"]) ?? DEFAULT_SETTINGS.mobileCommentGesture,
     mobileCommentInput: MOBILE_COMMENT_INPUTS.find((input) => input === record["mobileCommentInput"]) ?? DEFAULT_SETTINGS.mobileCommentInput,

@@ -28,7 +28,11 @@
   gap: 0;
 }
 
+/* positioned: a reply's comment margin (CommentMargin.tsx) is placed in its row, past its right edge, in the free space
+   right of the transcript (ChatComments.tsx `ReplyMargin`, which lets the row's list container paint it there): comments
+   never move or narrow the text */
 .chat-virtual-row {
+  position: relative;
   padding-bottom: var(--space-3);
 }
 
@@ -40,12 +44,14 @@
   background: var(--accent-tint);
 }
 
+/* the transcript starts below the floating comment-mode toggle and Find (ChatFind.css) */
 .chat-virtual-header {
-  padding-top: calc(var(--space-4) + var(--header-over, 0px));
+  padding-top: calc(var(--space-2) + var(--control-h) + var(--space-2) + var(--header-over, 0px));
 }
 
+/* the find bar takes the buttons' place, but the room under them stays: opening or closing Find moves no message */
 .chat-virtual-header-with-find {
-  padding-top: var(--space-4);
+  padding-top: calc(var(--space-2) + var(--control-h) + var(--space-2));
 }
 
 .chat-virtual-footer {

@@ -1,7 +1,6 @@
 /**
- * Which click on a reply block or a file line opens a comment, and which mouse drag opens one on the text it selected.
- * `isCommentClick` and `isCommentDrag` decide from plain facts and need no DOM; `clickFacts` reads a click's facts off
- * its event.
+ * Which click on a file line opens a comment (the code view). `isCommentClick` decides from plain facts and needs no
+ * DOM; `clickFacts` reads a click's facts off its event.
  */
 import { COMMENT_UI_SELECTOR, inPopover } from "./commentDom.ts";
 
@@ -9,7 +8,7 @@ import { COMMENT_UI_SELECTOR, inPopover } from "./commentDom.ts";
 export interface ClickFacts {
   button: number;
   detail: number;
-  /** the target is inside an interactive element, a pin or a popover (`COMMENT_CLICK_IGNORED`) */
+  /** the target is inside an interactive element, a comment layer or a popover (`COMMENT_CLICK_IGNORED`) */
   interactive: boolean;
   /** the document's selection is collapsed */
   selectionCollapsed: boolean;
@@ -24,8 +23,8 @@ export const COMMENT_CLICK_IGNORED =
 /**
  * The presses that dismissed an open popover (a press outside it, `markDismissingPress`, CommentPopover.tsx): such a
  * press only closes it, or gives its field the focus back: the click that follows it opens no comment
- * (`isDismissingPress`, asked with the same press event by `useCommentClick`). A drag that starts with it still opens
- * its selection's comment (`useSelectionComment`). Kept by the event itself, so a mark never reaches another press.
+ * (`isDismissingPress`, asked with the same press event by the code view's layer). Kept by the event itself, so a mark
+ * never reaches another press.
  */
 const dismissingPresses = new WeakSet<Event>();
 
@@ -37,18 +36,6 @@ export function markDismissingPress(press: Event): void {
 /** Whether `press` (a `pointerdown`) dismissed an open popover (`markDismissingPress`); none never did. */
 export function isDismissingPress(press: Event | null | undefined): boolean {
   return press != null && dismissingPresses.has(press);
-}
-
-/** How far a mouse moves between its press and its release for a drag: less is a click, or a hand that shook. */
-export const DRAG_MIN_PX = 4;
-
-/**
- * Whether a press and its release are a mouse's drag that selected text to comment on (`useSelectionComment`): a mouse
- * (not a finger or a pen), one click (`clicks`, the press's `mousedown` detail: a double or triple click selects a word
- * or a line by itself, to copy it), moved at least `DRAG_MIN_PX` between the press and the release.
- */
-export function isCommentDrag(pointerType: string, clicks: number, from: { x: number; y: number }, to: { x: number; y: number }): boolean {
-  return pointerType === "mouse" && clicks < 2 && Math.hypot(to.x - from.x, to.y - from.y) >= DRAG_MIN_PX;
 }
 
 /** A plain primary single click, on nothing interactive, that does not end a selection or put the keyboard away. */

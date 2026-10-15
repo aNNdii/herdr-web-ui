@@ -1,74 +1,23 @@
 import { describe, expect, it } from "bun:test";
-import { focusAfter } from "./commentPins.ts";
-import { changedAttrs, changedField, firstPin, focusOpenField, hasChangedComment, hasCommentDialog, pinAnchors, pinAttrs, pinByAnchor, pinById, revealField, savedPins } from "./commentDom.ts";
+import { changedAttrs, changedField, commentRootAttrs, commentRootsIn, focusOpenField, hasChangedComment, hasCommentDialog, revealField } from "./commentDom.ts";
 import { setFrameAnchor } from "./frameField.ts";
 
-/** A stand-in for a comment surface: `querySelectorAll` hands back pins carrying these anchors (and ids `id-<anchor>`), in this order. */
-function surfaceWith(anchors: readonly string[]): { view: Element; pins: { dataset: { commentAnchor: string; commentId: string } }[]; asked: string[] } {
-  const pins = anchors.map((commentAnchor) => ({ dataset: { commentAnchor, commentId: `id-${commentAnchor}` } }));
-  const asked: string[] = [];
-  const view = {
-    querySelectorAll: (selector: string) => {
-      asked.push(selector);
-      return selector.includes(".comment-pin") ? pins : [];
-    },
-  } as unknown as Element;
-  return { view, pins, asked };
-}
-
-describe("firstPin", () => {
-  it("is the pin of the first anchor that has one, in the order given", () => {
-    const { view, pins } = surfaceWith(["a", "b", "c"]);
-    expect(firstPin(view, ["c", "a"])).toBe(pins[2] as unknown as HTMLElement);
-    expect(firstPin(view, ["z", "b"])).toBe(pins[1] as unknown as HTMLElement);
-  });
-  it("is null with no anchor drawn, none asked for, or no surface", () => {
-    const { view } = surfaceWith(["a"]);
-    expect(firstPin(view, ["z"])).toBeNull();
-    expect(firstPin(view, [])).toBeNull();
-    expect(firstPin(null, ["a"])).toBeNull();
-  });
-});
-
-describe("pinAnchors", () => {
-  it("lists the pins' anchors in the document's order, which is reading order", () => {
-    expect(pinAnchors(surfaceWith(["b", "a", "c"]).view)).toEqual(["b", "a", "c"]);
-    expect(pinAnchors(null)).toEqual([]);
-  });
-  it("with focusAfter and firstPin, names the next pin after a delete, else the previous one", () => {
-    const { view, pins } = surfaceWith(["a", "b", "c"]);
-    expect(firstPin(view, focusAfter(pinAnchors(view), "b"))).toBe(pins[2] as unknown as HTMLElement);
-    const last = surfaceWith(["a", "b"]);
-    expect(firstPin(last.view, focusAfter(pinAnchors(last.view), "b"))).toBe(last.pins[0] as unknown as HTMLElement);
-  });
-});
-
-describe("pinByAnchor and pinById", () => {
-  it("find a pin by its comment's anchor or id, null where it is not drawn", () => {
-    const { view, pins } = surfaceWith(["a", "b"]);
-    expect(pinByAnchor(view, "b")).toBe(pins[1] as unknown as HTMLElement);
-    expect(pinById(view, "id-a")).toBe(pins[0] as unknown as HTMLElement);
-    expect(pinByAnchor(view, "z")).toBeNull();
-    expect(pinById(view, "id-z")).toBeNull();
-    expect(pinByAnchor(null, "a")).toBeNull();
-    expect(pinById(null, "id-a")).toBeNull();
-  });
-});
-
-describe("savedPins", () => {
-  it("asks for saved comments' pins only, not the provisional one, inside `within` when given", () => {
-    const { view, pins, asked } = surfaceWith(["a"]);
-    expect(savedPins(view)).toEqual(pins as unknown as HTMLElement[]);
-    expect(savedPins(view, ".chat-view")).toEqual(pins as unknown as HTMLElement[]);
-    expect(asked).toEqual([".comment-pin[data-comment-id]:not(.is-pending)", ".chat-view .comment-pin[data-comment-id]:not(.is-pending)"]);
-  });
-});
-
-describe("the attributes the popover and the pins render", () => {
-  it("mark a changed popover, and a saved comment's pin", () => {
+describe("the attributes the popover renders", () => {
+  it("mark a changed popover", () => {
     expect(changedAttrs(true)).toEqual({ "data-comment-changed": "" });
     expect(changedAttrs(false)).toEqual({ "data-comment-changed": undefined });
-    expect(pinAttrs("c1", "r:1")).toEqual({ "data-comment-id": "c1", "data-comment-anchor": "r:1" });
+  });
+});
+
+describe("the attributes of a commentable Markdown root", () => {
+  it("mark a reply part's root with its turn, and no other root", () => {
+    expect(commentRootAttrs("2026-10-04T10:01:05.000Z")).toEqual({ "data-comment-root": "", "data-comment-turn": "2026-10-04T10:01:05.000Z" });
+    expect(commentRootAttrs(null)).toEqual({ "data-comment-root": undefined, "data-comment-turn": undefined });
+  });
+  it("are what the roots are found by", () => {
+    const roots = [{ root: 1 }, { root: 2 }];
+    const scope = { querySelectorAll: (selector: string) => selector === "[data-comment-root]" ? roots : [] } as unknown as ParentNode;
+    expect(commentRootsIn(scope)).toEqual(roots as unknown as Element[]);
   });
 });
 

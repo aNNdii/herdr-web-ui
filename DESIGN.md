@@ -46,6 +46,8 @@ Only tokens overridden by `[data-theme="light"]` have a light value. Both column
 | Contrast pole | `--contrast-far` | `#ffffff` | `#000000` |
 | Accent | `--accent` | `#f0a830` | `#8c5000` |
 | Accent/tint | `--accent-tint` | `rgba(240, 168, 48, 0.13)` | `rgba(140, 80, 0, 0.1)` |
+| Comment fill | `--comment-fill` | `color-mix(in srgb, var(--accent) 16%, transparent)` | same expression |
+| Comment fill/strong | `--comment-fill-strong` | `color-mix(in srgb, var(--accent) 34%, transparent)` | same expression |
 | Primary | `--primary` | `#f0a830` | `#c57d12` |
 | Primary/hover | `--primary-hover` | `#f6bb55` | `#d48c1f` |
 | Primary/text | `--primary-text` | `#1b1407` | `#1b1407` |
@@ -370,6 +372,7 @@ Comfortable values are `:root`; the final column is the complete compact overrid
 | `--rail-w` | `3px` | — | Device and quoted-content rails |
 | `--hairline` | `1px` | — | Borders |
 | `--content-w` | `820px` | — | Settings and dialog content |
+| `--float-w` | `320px` | — | A field floating over text: the comment field over a selection in rendered Markdown |
 | `--pending-max-h` | `min(20dvh, 12rem)` | — | Pending-message stack ceiling |
 | `--chat-w` | `--content-w`, then the pane's lane as one length | — | Chat lane: transcript, composer column, held list. Settings → Chat width: Narrow `--content-w`; Default follows the pane (min 820px, max `60rem` = 960px, 71% of the pane between; the px floor wins where 60rem is under it); Wide `72rem` (1152px); Full `100%` |
 | `--chat-fold-lines` | `12` | — | Lines of prose a long user message shows before it folds behind Show full message (Chat turn); `lib/userMessageFold.ts` folds a message past the same count |
@@ -988,282 +991,312 @@ One set for both themes: the card is island black wherever it shows.
   column is never narrower than its longest word, and a table without room scrolls sideways in
   its own box.
   Thinking renders as a folded block only when **Show thinking** is enabled.
-- Block comments (`BlockComments.css`, `CommentPins.css`, `CommentPopover.css`): a comment is made
-  by a mouse dragging over text in a final reply (it opens as the mouse lets go, below), or by
-  clicking or tapping one of its blocks (below), while **Settings → Chat → Comments** is on (the
-  default). There is no Comment button, as in Claude: no floating button for a selection and no
-  button on a part. A selection in one part (a paragraph, heading, list item, code block, table, display
-  formula, a whole blockquote) is the comment's text; several selections in one part are several
-  comments. A selection that runs over several parts (paragraphs, list items, a heading and the
-  paragraph after it) is still ONE comment: all of it is quoted (the parts' text, one line break
-  between them) and highlighted, and its pin sits where the drag let go. An end on a
-  rule, or at the very start of the next part (a triple click), ends at the part before. A user
-  message, a live reply and a work block's narration take none, and a selection that starts
-  outside a reply is not a comment.
-- Keyboard and touch selections open nothing, and neither does a double or triple click: the text is
-  selected to copy. On a touch screen a tap on a block is the way to comment. A keyboard-only user
-  has no way to create a comment: a block takes no focus, and caret browsing (F7) with Enter on a
-  block opens nothing (a click comments, a key does not). Existing comments are reached through
-  their pins, which are in the tab order, and the composer's walk. A decision made for this
-  feature; no keyboard path of its own is built.
-- Settings → Chat → **Comments** (a toggle in the first group, on by default, per device) turns the
-  feature off for the chat and the file viewer: no pins, popover, drag, hover outline or
-  block click, and the surfaces lose `data-comments`. Turning it off with comments stored asks
-  first (`ConfirmDialog`, "Delete {count} comments?", confirm **Turn off and delete**; Cancel
-  leaves it on), then deletes every stored comment on this device, in every pane
-  (`BlockCommentStore.clearAll`; other tabs follow through the `storage` event). With none stored
-  it turns off at once. An open popover closes. Messages already composed with comments (the
-  pending list) are not touched.
-- A mouse's drag opens the comment at once (`useSelectionComment.ts`), as in Claude: a press of the
-  primary button (one click: the press's `mousedown` `detail` is 1) that moved at least 4px before
-  it was released (`isCommentDrag`, `lib/commentClick.ts`), and left a selection the surface can
-  comment on (in a reply part; in the file viewer, in the loaded lines), opens the new comment's
-  popover for that selection a frame after the release, once the browser has settled it (the same
-  target, pending highlight, focused field and `show()` refusal while another popover holds typed
-  text). Its pin's tip is where the mouse let go (below). A drag let go past the end of a line, in
-  the margin under a block, or across several parts opens it too (the selection ends where the
-  browser put it). A double or triple click that selects a word or a line by itself is no drag: it
-  opens nothing, so text can be selected to copy; nor does a press that follows a click closely
-  enough to count as its second (`detail` 2) and then drags (the browser selects by words). Nothing
-  opens with comments off, nor while a comment's field in the surface has the focus.
+- Comments on rendered Markdown (`BlockComments.css`, `MarkdownComments.css`, `CommentMargin.css`,
+  `CommentPopover.css`; one comment layer, `MarkdownComments.tsx`, for the final replies in the chat and the file
+  viewer's Markdown preview): a comment is made by selecting text in the **comment mode** (below), while
+  **Settings → Comments** is on (the default). There is no click on a block and no mark but the highlight. A
+  selection in one part (a paragraph, heading, list item, code block, table, display formula, a whole blockquote) is
+  the comment's text; several selections in one part are several comments. A selection that runs over several parts
+  (paragraphs, list items, a heading and the paragraph after it) is still ONE
+  comment: all of it is quoted (the parts' text, one line break between them) and highlighted. An end on a rule, or at
+  the very start of the next part (a triple click), ends at the part before. A user message, a live reply, a work
+  block's narration and the terminal fallback take none. Where the selection starts or ends does not matter, only the
+  commentable text in it counts (`clampSelection`, `lib/markdownSelection.ts`): a selection across two replies counts
+  in the first reply only, one that starts in the user's bubble or has no commentable text opens nothing. A code
+  block's language label and the comment UI are never part of the text, its offsets or its quote. A comment stored
+  before selections existed, on a whole block, still shows (its highlight covers the block's text) and reads and
+  edits like any other; it cannot be made any more.
+- **The comment mode** (`commentMode`, one switch for the whole app, per device; it was the code view's
+  `codeCommentMode`, which is read once into it) turns the commenting on or off in the preview, the code view and the
+  chat together. It is switched by one toggle in two places (`CommentModeToggle.tsx`): the file viewer's header (for
+  the preview too) and the chat, beside Find in messages, to its left, wherever Find shows and not while the find bar
+  is open (the transcript starts below these floating buttons, so they never cover the first message). The toggle is
+  an icon button as the header's others (a `MessageSquareText`), with the count of this file's or this pane's
+  replies' comments as a badge on its top right (21px, 22px on a coarse pointer; `--bg-hover` with `--text-strong`,
+  `--primary` with `--primary-text` while the mode is on; `--fs-xs` at `--fw-semibold`, tabular figures, a 2px
+  `--bg-panel` ring, `99+` above 99), pressed while on (`--bg-hover` ground, the glyph in `--accent`). Its name and
+  tooltip say "Comment mode", with the count. Both show only while Comments is on. Turning the mode on by touch shows
+  a hint under the header for 2.6 s ("Select text to comment" in the preview and the chat).
+  - **On:** a mouse's or pen's selection shows the Comment button (or opens the comment field, as Settings say) as the
+    button goes up, a keyboard's (Shift+arrows) as Shift is let go (not on each arrow); a finger gets the app's own
+    selection (below). A card is edited by a click;
+    its bin and a sheet's Delete show.
+  - **Off:** text reads and selects as plain text, for copying (the system's selection and menu). Comments still show
+    (highlights, cards, counts) and are read-only: a card does nothing on a click and has no bin; a count shows its
+    comments as plain cards beside it, or in the sheet with no input and no actions on touch. An open field is left,
+    and so saved, when the mode is turned off.
+- Settings → **Comments** is a page of its own (`MessageSquareText`, between Chat and Terminal) with every comment
+  setting. Its first group, untitled (the page names it), holds the **Comments** toggle (on by default, per device),
+  which turns the feature off for the chat and the file viewer: no field, button, card, count, toggle or touch
+  selection. Turning it off with comments stored
+  asks first (`ConfirmDialog`, "Delete {count} comments?", confirm **Turn off and delete**; Cancel leaves it on), then
+  deletes every stored comment on this device, in every pane (`BlockCommentStore.clearAll`; other tabs follow through
+  the `storage` event). With none stored it turns off at once. An open field closes. Messages already composed with
+  comments (the pending list) are not touched. Under it, the **Selected text** group (its note: "In the Markdown
+  preview and the chat") has two segmented controls: **When you select text** (`commentOnSelect`, per device): **Show a
+  Comment button** (the default) or **Open the comment field**; and **Comments beside the text** (`commentLayout`, per
+  device): **Cards in the margin** (the default) or **Counts beside the lines**. Last, the **Code view** group: **Click
+  a line to comment**, **On mobile, comment with** and **On mobile, write comments in** (the code view's own; their
+  notes leave its name to the group). Every row below the toggle is disabled while Comments is off. The Chat and File
+  viewer pages have no comment rows.
+- The **Comment button** (`SelectionButton.tsx`; When you select text → Show a Comment button, the default; a mouse,
+  a pen or the keyboard in the comment mode; touch keeps its own pill, below): releasing a selection, or a keyboard
+  selection's Shift, shows it instead of the field. It is the touch Comment pill's look at a pointer's size
+  (`.markdown-comment-pill`: `--bg-elevated`, a `--border-strong` hairline, `--radius-pill`, `--shadow-pop`, a
+  `MessageSquarePlus` and "Comment", `--fw-medium`; here `--control-h` high at `--fs-sm`), with no animation, placed
+  8px under the selection's last line and centred on its end, kept inside the scrolling body; with no room below in
+  the body's view, above the first line (`buttonPlace`, `lib/selectionField.ts`). It is in the surface's content and
+  scrolls with the text. The selection stays the browser's (Copy works), drawn as a selection, not a comment's fill. Its
+  name is "Comment on the selection"; it takes no focus as it shows, the first Tab after it moves the focus to it, and
+  the live region says "Comment button shown" once per selection. Its click (or Enter, Space) opens the field over the
+  selection as the other variant does, with the focus in it (on a stored comment's place, that comment). It goes,
+  opening nothing, when the selection collapses or changes, on Escape (the selection stays), on a press anywhere
+  else, and when the field, the margin's fields or the sheet opens; a new selection shows it anew. Typing while it
+  shows opens nothing. Which text counts is the same as for the field.
+- Writing: selecting text in the comment mode and releasing opens the **comment field** over the selection at once
+  where When you select text says **Open the comment field** (`MarkdownComments.tsx`), and so does the Comment
+  button's click. The field is the code view's row card (`.comment-popover.is-row`), at most `--float-w` (320px) wide,
+  in the scrolling surface's content: its bottom edge 8px above the selection's first line, so it grows upward as the
+  text wraps and never covers what it is about; with no room above for one line, under the last line, growing downward
+  (`lib/selectionField.ts`). It is placed without a transition, and only the viewer's body or the chat's scroller
+  scrolls, just far enough to show it, never the page. It casts `--shadow-pop`, as it floats over the text. Opened at
+  once (not by the button), it takes no focus: the selection stays, drawn in `comment-strong`, and the first printable
+  key (not with Ctrl, Cmd or Alt) moves the focus into the field inside its `keydown`, so that key is typed there.
+  Enter saves, Shift+Enter breaks the line, an IME composition is respected. Leaving it (Escape, a press anywhere
+  outside it, the mode turned off) saves what was typed, or leaves nothing when it is empty, and clears the selection;
+  a new selection while a field holds typed text first leaves, and so saves, the old one. Selecting the place of a
+  stored comment opens that comment with its text instead (the store keeps one comment per place). A press or a Shift
+  that leaves the selection as it was opens nothing and shows no button (a selection made before the mode was on, or
+  one whose button Escape hid). A drag released beside the text (in the margin, the gutter) is cut back to the block
+  at the release's height, as Chrome would extend it to the end of the document.
 - The text of every comment is highlighted for as long as the comment exists (CSS Custom Highlight,
-  `lib/commentHighlight.ts`), faintly: `::highlight(block-comment)` is `--accent` at 8% over transparent, a plain tint
-  with no underline, there to be found and read through; the pin is what catches the eye. It is
-  translucent, so a code block's, table's or blockquote's own fill shows through, in every theme.
+  `lib/commentHighlight.ts`), softly: `--comment-fill` (`--accent` at 16% over transparent), a plain fill with no
+  underline, there to be found and read through. It is translucent, so a code block's, table's or blockquote's own fill
+  shows through, in every theme.
+  - Each comment is its own highlight: it is painted on one of four layers (`comment-layer-0` … `-3`, priority 0,
+    `lib/commentLayers.ts`). Comments that overlap get different layers, so where they overlap their fills add up and
+    the text reads darker (ranges inside one highlight never stack); comments that do not overlap share a layer, and a
+    fifth comment over the same text reuses the last.
   - A comment on a whole part (stored by an earlier version) highlights all of that part's text.
   - A spanning comment gets one range per part it covers: the first from where the selection
     starts, the parts in between whole, the last up to where it ends. There is never one range
-    across parts, so the pins between them are not painted. A formula is highlighted whole, its
+    across parts, so what lies between them (the comment UI) is not painted. A formula is highlighted whole, its
     glyphs included.
-  - Nothing is drawn beside the text: no bar, no rail, no tint on the part. A commented part looks
+  - Nothing else is drawn on the text: no bar, no rail, no outline or tint under the pointer. A commented part looks
     as an uncommented one.
-  - Where the browser lacks the API there is no highlight, and the pins still show (they are placed from the ranges, which are built either way). A selection
-    in a code block that is still folded is highlighted only while it lies in the visible head.
-- Stronger: `::highlight(block-comment-active)` (the comment whose pin the pointer is over or the
-  keyboard focus is on, a focus left by a click not counting, and the saved comment whose popover
-  is open), `block-comment-current` (the composer's walk) are `--accent` at 30%, and
-  `block-comment-pending` (the selection a comment is being written on, below) at 30%. The current
-  one is painted over the active and the pending one. In focus mode (`data-comment-focus` on the
-  surface, while a pin's comment is up) the base goes (transparent), so the comment that is up
-  stands alone, and the pending one keeps its 30%.
-  - An open popover holds its saved comment's text up (`showOpenComment`, set by `CommentPins` from
-    the open comment's id) for as long as it is open, wherever the focus or the pointer goes (into
-    its field, off the pin), in every placement (beside the pin, a dialog, a sheet), and releases it
-    as it closes. A new comment has its pending highlight instead.
-- A click on a block comments on all of it (`ChatView.tsx`, `lib/commentClick.ts`): a paragraph,
-  heading, list item's own text, code block, table, display formula or whole blockquote (the
-  `.is-commentable` elements). It opens the block's whole-block comment to edit when there is
-  one, else a new comment on the block, whose pin's tip is where the block was clicked
-  (below). The same block clicked again elsewhere opens the same comment, its pin where it was first
-  put: where it was clicked is not part of what names the comment.
-  - Under `(hover: hover)`, while the surface has `data-comments` and holds neither the Comment
-    button nor a popover (`:has()`), the block under the pointer is framed, quietly: a fill of
-    `--accent` at 5% reaching 2px (`--space-1` / 2) past the block and a `--hairline` edge of
-    `--accent` at 55% around that, nearly square (`--radius-sm` / 3), drawn by the background, a box shadow and an outline. They take no room, so nothing moves. A touch screen has no hover state.
-  - A click counts (`isCommentClick`) only when it is the primary button, a single click
-    (`detail` 1), its target is in nothing interactive or part of the comment UI (a link, button,
-    summary, field, label, `[role="button"]`, `[contenteditable]`, a code block's header and "show
-    more", a pin, a popover), the selection is collapsed (a drag that selected
-    text is not a click), and it is not a tap that puts a phone's keyboard away (a text field
-    outside a comment popover had the focus, read as the press comes down and again at the click).
-  - A double click still selects a word: its second press, outside the new comment the first click
-    opened, dismisses that one (below), when nothing is typed in it, and opens nothing. On a pin or
-    inside a popover it closes nothing.
-  - While a popover is open, a press outside it only dismisses it (`markDismissingPress`,
-    `lib/commentClick.ts`): its click opens no comment on the block or line under it; the next
-    click does open one. A mouse drag that starts with it is different: selecting text is asking for
-    a comment on it, so the drag closes the open popover with its press and opens its selection's
-    comment as it lets go (where the open one kept its typed text, its field holds the focus and the
-    drag opens nothing). The mark is the press event itself (`useCommentClick` asks with the same
-    `pointerdown`), so it never reaches a later press. A press on another pin is not one:
-    that pin's comment opens in its place. On a phone the sheet's scrim takes the tap (below).
-  - In the code view the line is the block (see File comments).
-- A comment is shown by a **pin** (`CommentPins.tsx`, `lib/commentPins.ts`, `.comment-pin`), not by
-  anything drawn under the text: a speech bubble `--space-5` (20px) square, round
-  but for its square top left corner, which is its tip (`border-radius: 0 var(--radius-pill)
-  var(--radius-pill) var(--radius-pill)`), filled with `--primary` (the send button's colour), framed by a 2px ring of `--bg` that keeps it apart from its own
-  highlighted text and a 2px `--accent` ring outside that, so it is found at a glance; no border,
-  `--shadow-card`, and an 11px (`--space-3` − `--hairline`) `MessageSquare` drawn with a 2.75 stroke so it holds at that size, in `--bg`, the colour of its inner ring
-  (`--primary-hover` under a pointer that hovers). The text it is on is the
-  highlight, so the pin shows no excerpt; its accessible name keeps it, "Comment on “excerpt”:
-  text" (the excerpt cut at 32 characters; a comment on a whole part has its text as its name).
-  - Place: all pins lie in one layer (`.comment-pins`) at the top left of the scrolling content,
-    with no height and no stacking context of its own, so pins scroll with the text, under the
-    chat's top fade and its "New messages" button. The layer is a sibling of the transcript, never
-    inside it, so a pin drawn or moved never makes the highlights rebuild. The pin's tip (its top
-    left corner) sits on its comment's anchor point, so the bubble hangs down and right of it:
-    - A comment made by a click on a block (a line, a preview element) or by a mouse's drag keeps
-      where the pointer was (`point`, stored with it): fractions of the bounding box of its
-      highlighted text (the union of its highlight ranges' text rects), measured as it is made on
-      the ranges its highlight will have. The fractions keep the pin at the same place on the text
-      as it rewraps (a window, a font size); a click in the blank right of a short heading is more
-      than 1. A stored point outside x −1…8, y −1…2, or not finite numbers, is dropped on load and
-      the comment kept. The point is not part of the comment's anchor, and an edit keeps it.
-    - A comment stored without a point (by an earlier version, which also had a Comment button) has its tip
-      `--space-1` after the end of its last line of text (the last client rect of its last highlight
-      range, a formula by its glyphs), at that line's vertical middle; a spanning comment's pin
-      follows the last part.
-    - Inside an element that scrolls sideways (a code view without wrapping, a chat code block or
-      table) a pin whose point (or whose whole last line) is scrolled out of its view is hidden.
-  - Clamping: a pin stays `--space-2` inside the surface's right side and never goes left of its
-    left edge. Pins that would overlap (less than a pin's height apart vertically, their ranges
-    `[left, left + 20px + --space-1)` crossing) sit side by side, each moved right of the one
-    in its way in reading order; a row that runs past the right edge moves back inside whole.
-  - Measured at most once a frame: after the highlights rebuilt, the comments changed, or the
-    surface or its content resized (a window, a chat width, a font or an image that arrived). A
-    comment whose text is not drawn has no pin; the composer's walk still reaches it, as a dialog.
-  - Touch: on `(pointer: coarse)` the hit area reaches `max(44px, --touch-target)` square around
-    the pin (a transparent `::before`), and the pin is kept that far inside the surface's right
-    side, so the area never overflows it and the chat does not pan sideways.
-  - Keyboard: pins are buttons in reading order, which is their tab order. A pointer over a pin or
-    a keyboard focus on it (`:focus-visible`; a focus a click left, or a finger, does not count)
-    brings its comment's text up (`block-comment-active`, focus mode); the text stays up while the
-    pin is held, or its popover open, and is released when the pin leaves.
-  - While a new comment is written, a provisional pin (`is-pending`: drawn as a saved one; not a control, out of the tab order, `aria-hidden`) marks where it will go,
-    already at the click or the drag's release. It is shown once the text's pending highlight is, one frame at most.
-    It takes no pointer (`pointer-events: none`): its tip is under the pointer, and the second click
-    of a double click must still reach the word there.
-- The current comment: when the composer's context bar walks to a comment (below), its pin is
-  `is-current` (`--ring` outline at `--ring-offset`) until the next step, a click or tap anywhere
-  else (a touch scroll or a scrollbar drag is not one), or Escape; one at a time. The walk clicks
-  the pin, so its popover opens to edit, its field filled, and its text takes the current highlight. The walk
-  goes in the order the pins stand in the chat. The chat scrolls so that the comment's text and
-  its pin are in the view's middle together; when both are taller than the view, the pin's bottom
-  goes to the view's bottom. The pin takes the keyboard focus (without scrolling), and the popover's
-  field takes it as it mounts, after the scroll has settled. The bar sits after the whole chat in the
-  tab order, so Escape, pressed with the focus on the current pin or in its untouched popover, ends
-  the mark and returns the focus to the bar's walk button: Enter there walks on.
-- The open comment (`CommentPopover.tsx`, `useCommentPopover.ts`, wired per surface by `useCommentSurface.tsx`; its markup is named in `lib/commentDom.ts`; `.comment-popover`) has one
-  content and three places. Only one is open per surface; two panes can each hold one.
-  - Content: the card is the input box, as the inline form before it was: `--bg-panel`, a
-    `--hairline` `--border-strong` edge that turns `--accent` while its field has the focus,
-    `--radius-lg`, `--shadow-pop`, padding `--space-4`, gap `--space-3`, in the chat's face
-    (`--font-chat`, else `--font-ui`) at `--fs-chat` scaled by Settings → Chat font size
-    (`--chat-scale`), the transcript's own size. Every comment opens to be edited, as in Claude: a
-    saved one (by its pin, a click on its block or line, the composer's walk, the file viewer's
-    counter) straight into its field, filled with it, a new one into an empty field; there is no
-    reading view and no ⋯ menu.
-    - Beside its pin there is no quote, new or saved: the highlighted text beside it shows what the
-      comment is on. A file comment's file and lines (`FileReference`, below) are not shown
-      either, as they are no matter while it is written: they are only said to assistive tech
-      (`.visually-hidden`). There is no ✕ (Escape and a press outside close it, as in Claude).
-    - A dialog and a phone's sheet first quote what the comment is on, with ✕ (an `.icon-button`
-      `--space-6` square, `--touch-target` on a coarse pointer) at the right of that row, the one
-      visible way out where a keyboard covers the page: a file comment's file and lines and, for an
-      outdated one, why it is shown; then the quote, the commented text as the message will carry it
-      (plain text, line breaks kept, a file's lines in `--font-mono` at `--fs-sm`; a block
-      comment's block drawn, a code box or table without its own frame), quiet context:
-      `--text-dim` at `--fs-md` (scaled the same) behind a `--border-strong` rail of
+  - Where the browser lacks the API there is no highlight, and the cards and counts still show (they are placed from
+    the ranges, which are built either way). A selection in a code block that is still folded is highlighted only
+    while it lies in the visible head.
+- Stronger: the comment in focus (its card or count under the pointer or the keyboard focus, a focus left by a click
+  not counting, its field open, or the composer's walk on it) leaves its layer for `comment-strong`, and the text a
+  new comment is being written on is the strong fill too (`comment-strong` over a selection in the Markdown layer,
+  where the field leaves the selection drawn; `comment-pending` for a line of the code view): both `--comment-fill-strong` (`--accent` at 34%) with
+  `--text-strong`, priority 1, over the other comments' layers, which stay as they are (no fading). A touch screen's
+  own selection in the comment mode is `comment-touch-selection` (priority 2) in `--term-selection`, so it never reads
+  as a comment's fill. Checked in Amber, Charcoal and Catppuccin, dark and light: the rest fill, the overlap and the
+  strong fill each stand clearly off `--bg` and the text stays legible (`preview-overlap`).
+  - An open field holds its saved comment's text up (`showOpenComment`, set by the layer from the open comments'
+    ids) for as long as it is open, wherever the focus or the pointer goes (into its field, off the card), in every
+    placement (in place, a dialog, a sheet), and releases it as it closes. A new comment has the pending fill instead.
+- The comments shown sit beside the text (`CommentMargin.tsx`, `lib/commentMargin.ts` `marginLayout`), as Settings →
+  Comments → Comments beside the text says. **The margin never moves the text**: the text keeps exactly the place and
+  width it has with comments off (`--chat-w` in the chat, the Markdown width in the preview, centred), and the margin
+  uses the free space right of it, up to the scrolling container's right edge (the text's own right padding, what lies
+  between it and the container, the container's padding). **Cards in the margin** (280px, 24px right of the text) show
+  where that space holds 24 + 280px, else **counts beside the lines** whatever the setting says: 4px right of the text
+  where their 24px column (a finger's 44px target) fits there, else at the container's right edge, the bubble never
+  left of the text's edge and the target over the free space only, never over glyphs. Only the room and the setting
+  decide, never whether there are comments; turning comments on or off, or switching cards and counts, moves no text.
+  The file viewer's dialog (at most 1100px wide, the text at least 820px) leaves about 150px, so its preview shows
+  counts on a desktop; a full-screen viewer on a wide touch screen has room for cards. In the chat the margin lies
+  right of the transcript, outside each reply's row (the row's list container drops paint containment while its reply
+  has comments, `ChatComments.tsx` `unclipRow`, so nothing clips it and it widens no scrolling); the composer keeps
+  `--chat-w` and the minimap stays on the left, wherever it showed. Each reply lays out its own margin from its
+  virtualized row: the push-down below runs within one reply, and a reply whose cards need more height than its text
+  grows by the overflow. The preview is not virtualized and places across the whole document.
+  - A card (`--bg-elevated`, a `--border-strong` hairline, `--radius-lg`, no shadow, as it sits on the page) shows the
+    comment's text only (no excerpt, no file or lines), level with its text's first line, pushed below the card above,
+    8px apart; cards are only ever pushed down, so an open or growing card never moves the cards above it. Placed once
+    per frame at most, without a transition (nothing slides). Under a pointer that hovers it lifts a shade
+    (`--bg-hover`), with no accent edge, and its text takes the strong fill. In the mode its text is a button (in
+    reading order, which is the tab order) and a click turns the card into its field in its place, at the margin's
+    width; its bin (`Trash2`, 14px in a 24px button, top right, 8px in; `--status-blocked` under a pointer or the
+    keyboard focus) shows on hover and on focus within. With the mode off the card is plain text with no bin.
+  - A count is a 16 × 15px speech bubble with its number inside (`--fs-2xs`, `--fw-medium`, tabular figures; the small
+    radius on three corners and a square one at the bottom left for its tail): `--bg-hover` with a `--text-dim`
+    number at rest, a step stronger under a pointer, `--accent-tint` with an accent number while its comments are open.
+    Comments whose text starts on one visual line share one count, level with that line; a mouse's target is the
+    column's width. A pointer over a count gives its comments' text the strong fill. No icon beside the number.
+    With a finger the target is `max(44px, --touch-target)` high and 44px wide from the text's edge where the free space
+    holds it; at the container's edge (a phone, a full-width text) it spans only the free space there (the text's right
+    padding and the container's), never the glyphs. Counts whose targets would come closer than 8px (tops less than 52px
+    apart) become one count, whose sheet pages through all of its comments.
+  - Editing looks like writing. A mouse's click on a count opens the same comment field as writing, in the same place
+    (over the first comment's text, growing upward), holding the comment; with several comments on that line their
+    fields stack, 8px apart, and the stack grows upward too. Edits apply as typed; Enter, ↑, Escape or a press elsewhere
+    leaves them all, each by the leave rule (below), and a second click on the count closes them. With the mode off a
+    count shows its comments as plain read-only cards beside it, which float over the text's edge and so cast
+    `--shadow-pop`. A field a key closes gives the focus back to its card (or count); a deleted card's goes to the next
+    card, else the one before, else the header's comment-mode toggle. Comments turned off drop an open field unsaved; a
+    field whose comment is no longer stored closes. Each press acts by its own `pointerType`: a finger's tap on a card
+    or a count opens the sheet, a mouse's click edits in place; without a press (the composer's walk)
+    `(pointer: coarse)` decides.
+- Touch (phones and tablets), in the comment mode: a finger gets the app's own selection, never the system's, because
+  the system's Copy / Look Up / Share menu cannot be turned off while keeping its selection. The commentable text is
+  `user-select: none` and `-webkit-touch-callout: none` while the mode is on, on a coarse primary pointer
+  (`TouchSelection.tsx`); with the mode off the system's selection and menu are back, for copying.
+  - A long press (450 ms, the finger moving less than 8px; moving earlier is a scroll) selects the word under it
+    (word bounds from `Intl.Segmenter`), with a short vibration where supported; moving on without lifting extends the
+    end. Two handles (a 2px `--accent` bar with a 12px knob, above the start and below the end, in a 44px target,
+    `touch-action: none`) move the ends; crossing swaps them, and positions come only from commentable text. The
+    selection is drawn as `comment-touch-selection`.
+  - **Comment** is its one action, where the system's menu would be: a 40px-high pill (`.markdown-comment-pill`, the
+    Comment button's look: `--bg-elevated`, a `--border-strong` hairline, `--shadow-pop`, a `MessageSquarePlus` and the
+    word) above the selection, else below the end handle. Tapping it opens the comment sheet and drops the selection
+    (the text keeps the strong fill while the sheet is open). A tap elsewhere in the text drops the selection, and so
+    does turning the mode off.
+  - The code view's touch settings (`mobileCommentGesture`, `mobileCommentInput`) do not apply to the preview or the
+    chat, which always use the sheet.
+- The current comment: when the composer's context bar walks to a comment (below), the surface scrolls (its own
+  scroller only, never the page) so that the comment's text and its card or count are in the view's middle together;
+  when both are taller than the view, the card's or count's bottom goes to the view's bottom (`walkScroll`). Then the
+  stop opens the comment as a click would: in the mode for editing (a card's field, a count's fields, or on touch the
+  sheet), with the mode off read-only (its text in the strong fill until the walk moves on or ends; a count's cards, or
+  the sheet without input and actions). A comment whose text, card or count is not drawn (an outdated file comment, a
+  reply comment whose turn is not loaded, whose list row is not rendered or whose block changed) opens in the dialog
+  (below), as it always did. The walk goes in the order the comments are sent.
+- The open comment (`CommentPopover.tsx`, `useCommentPopover.ts`; its markup is named in `lib/commentDom.ts`;
+  `.comment-popover`) has one content and three places. Only one is open per surface; two panes can each hold one.
+  - Content: the card is the input box: `--bg-panel`, a `--hairline` `--border-strong` edge that turns `--accent` while
+    its field has the focus, `--radius-lg`, padding `--space-4`, gap `--space-3`, in the chat's face (`--font-chat`,
+    else `--font-ui`) at `--fs-chat` scaled by Settings → Chat font size (`--chat-scale`), the transcript's own size.
+    Every comment opens to be edited, as in Claude: a saved one (by its card or count, the composer's walk, the file
+    viewer's counter) straight into its field, filled with it, a new one into an empty field; there is no reading
+    view and no ⋯ menu. Outside a sheet every comment field is the same one: the field over a selection, the fields
+    behind a count, a card in edit and the code view's field under a line.
+    - In place there is no quote, new or saved: the highlighted text beside it shows what the comment is on. A file
+      comment's file and lines (`FileReference`, below) are not shown either, as they are no matter while it is
+      written: they are only said to assistive tech (`.visually-hidden`). There is no ✕ (Escape and a press outside
+      leave it, as in Claude).
+    - A dialog (an outdated file comment, a comment whose text is not drawn) first quotes what the comment is on, with
+      ✕ (an `.icon-button` `--space-6` square, `--touch-target` on a coarse pointer) at the right of that row, the one
+      visible way out where a keyboard covers the page: a file comment's file and lines and, for an outdated one, why
+      it is shown; then the quote, the commented text as the message will carry it (plain text, line breaks kept, a
+      file's lines in `--font-mono` at `--fs-sm`; a block comment's block drawn, a code box or table without its own
+      frame), quiet context: `--text-dim` at `--fs-md` (scaled the same) behind a `--border-strong` rail of
       `--rail-w`, no box of its own, at most five lines tall and scrolling past that.
-    - The field is bare in the card, no edge or fill, the popover's size with a mouse (never under
-      `--fs-input` on a touch screen); two lines tall at first, it grows to six, then scrolls. It
-      takes the focus with the caret at the end (not a saved comment's on a touch screen, below), and
-      is limited to 2000 characters.
-    - Under it a row: a saved comment's **Delete** (`.icon-button.comment-popover-delete`, a lucide
-      `Trash2`, named "Delete comment") at the left, always in view, `--control-h` square with an
-      `--icon-size` icon, `--text-dim`, `--status-blocked` under a pointer that hovers or a
-      keyboard focus; a new comment has none. The **↑** save button at the right, well apart: the
-      composer's send button's tokens, `--primary`, round at `--control-h`, an `--icon-size`
-      arrow, dimmed (0.55) while there is nothing to save. Both are a full `--touch-target` on a
-      coarse pointer. Save is Cmd/Ctrl+Enter or ↑ (named "Save comment"); Enter is a line break. An
-      edit saved blank deletes the comment; ↑ is disabled, and Cmd/Ctrl+Enter does nothing, while a
-      saved comment is unchanged or a new one blank (`commentCanSave`): Escape or a press outside
-      closes it then.
-  - **Beside its pin** (a desktop, a comment with a pin): in the pin layer, so it scrolls with the
-    text and never closes on scroll, in `.comment-popover-place` at `--z-popover`. It is
-    `min(360px, 100vw − 2 × --space-4)` wide, beside its pin (`besidePlace`, `lib/commentPins.ts`):
-    to the pin's right, `--space-2` from it, its top level with the pin's top, shifted up as far as it
-    would run past the surface's visible bottom (`--space-2` inside it; never above the pin's bottom);
-    else, with no room to the right, the same to the pin's left; else `--space-2` under the pin and
-    inside the surface's sides, above it where there is no room below. Its side is
-    `data-side` on `.comment-popover-place`. It is placed again when it changes size (a field that
-    grew). It is not modal: no scrim, no inert page, and
-    Tab goes on from it. It is drawn only once a measure has seen the pin (or, for a new comment,
-    its pending highlight). Once the surface has stopped scrolling it brings itself into view,
-    once per opening; a reader who keeps scrolling is not waited for.
-  - **As a dialog** (a comment with no pin, such as an outdated file comment or one the walk
-    reaches whose text is not drawn): the shared modal primitive, portalled to the body in a
-    `.modal-scrim` at `--z-modal` + 2, `min(100%, 360px)` wide, centred, `role="dialog"` with
-    `aria-modal`. Tab cycles inside it (`useFocusTrap`, the topmost trap, so the file viewer under
-    it does not pull Tab out), and its Escape is its own unless another dialog (Settings) is over it. A click or tap in it or on its scrim never reaches the chat's or the viewer's block
-    click.
-  - **As a bottom sheet** at `(max-width: 640px)`, the `.modal` breakpoint, for every popover, pin
-    or not: the same dialog at full width, rounded on top only (`--radius-lg`), with a grip
-    (`--space-8` by `--space-1`, `--border-strong`) and `env(safe-area-inset-bottom)` under it
-    (dropped while the keyboard is up, `[data-keyboard]`). It is drawn in the commit that opens it,
-    so a new comment's field takes the focus inside the tap that opened it, where a phone raises its keyboard.
-  - Name and focus: `role="dialog"` named **Comment**. Its field takes the focus as it opens, the
-    caret at the end, but for a saved comment on a touch screen (`(pointer: coarse)`,
-    `popoverFocusesField`): there the box (`tabIndex=-1`) takes it, so a tap on a pin raises no
-    keyboard; the sheet shows the field filled, and a tap into it starts editing. A new comment's
-    field takes it on a touch screen too.
-  - Closing: Escape (from inside it beside a pin; from anywhere for a dialog), a press outside it
-    beside its pin, a press on a dialog's scrim, and ✕ (where there is one) close it at once while
-    its text is unchanged (`commentChanged`). With a change typed it stays, so does the text, and each
-    of them, a press on a pin or a block, or a mouse's drag, only puts the focus
-    back in the field (a press outside keeps the focus from moving to what it landed on); the
-    composer's Send and its walk do the same. A press outside that closes it does nothing else (no
-    comment opens where it landed, above). A press inside another modal dialog over the surface
-    (Settings, a question, the file viewer opened from a reply) is that dialog's own, never one
-    outside the popover beneath (`inAnotherDialog`). A press on a pin while an unchanged popover is open
-    opens that pin's comment instead. Saving a new comment lets the selection go; editing one
-    leaves whatever is selected. A popover also closes when the setting is turned off, or when its
-    comment is no longer stored (a send acknowledged it, another tab deleted it) while its text is
-    unchanged; a change typed keeps it, and saving it stores the comment again.
-  - Delete, beside ↑, is immediate, without a question or an undo. The focus goes to the next
-    pin, else the previous one (`focusAfter`), else the pane's composer (the file viewer has none:
-    the focus is let go); on a touch screen (`(pointer: coarse)`) with no pin left it is only let
-    go, so no keyboard rises unasked.
-  - Otherwise, as it closes, the focus returns to the comment's pin while that is drawn, else to
-    the pane's composer (a new comment's pin is not placed yet when it is saved). Beside a pin it
-    does so only if the popover still had the focus or nothing had: it never takes it from where
-    the user went (another pane's composer, the terminal). On a touch screen the composer is not
-    given the focus.
-  - For a new comment the field takes the browser's selection away, so the selected text shows as
-    `block-comment-pending` (over the base highlight, the same segments a saved comment gets,
-    several parts included) until the comment is saved or given up.
+    - The field is bare in the card, no edge or fill, the popover's size with a mouse (never under `--fs-input` on a
+      touch screen), in the chat's face for its text and its placeholder alike ("Write a comment…"; also in the code
+      view's frame, never the code's); one line tall at first (a row beside ↑ is about 52px), it grows with the text
+      to six lines (a row: about 160px in all), then scrolls. It takes the focus with the caret at the end (not a
+      saved comment's on a touch screen, and not the field over a selection, above), and is limited to 2000 characters.
+      The sheet's input is the exception: four lines tall at rest.
+    - **The sheet** (`placement="sheet"`, the code view's and the Markdown layer's; the one description of it) is the
+      modal bottom sheet, at any width, with its grip and a ✕ (`--touch-target`, at least 44px) at the top right, no
+      title and no line numbers (the file and lines are only said to assistive tech, `.visually-hidden`, and in its
+      name). Then the commented text (`.comment-sheet-quote`, `sheetQuote`): the comment's selected words (the code
+      view's: the commented lines' text joined by spaces), drawn as a Markdown blockquote is, a `--rail-w` rail in
+      `--border-strong`, `--text-dim`, the popover's face and size, no box, no fill, clamped to three lines with "…"
+      (none for a blank line); then its own input (`--bg-input`, a hairline, accent while focused, `--radius-md`, full
+      width) four lines tall at rest (`4lh`), growing to six, then scrolling, in the chat's face at least
+      `--fs-input`; then the actions, the app's text buttons with no icon, at least 44px high: **Delete**
+      (`.btn.btn-ghost`, left, saved comments only) and **Save** (`.btn.btn-primary`, right, disabled while there is
+      nothing to save; Enter in the field saves too). The Markdown layer's sheet of a count with several comments
+      has ‹ and › (icon buttons) and "1 of 2" left of ✕ on the top line: ‹ is disabled on the first and › on the
+      last, they do not wrap; each keeps the edit of the comment shown (an emptied one is deleted) and shows the one
+      before or after, and Delete removes the comment shown and stays on the next (else the one before). With the
+      mode off the sheet is read-only: the comment as text, no input and no actions. A tap on its scrim or ✕ leaves,
+      which saves.
+    - Under the field, in a row or in a dialog: a saved comment's **Delete** (`.icon-button.comment-popover-delete`, a
+      lucide `Trash2`, named "Delete comment") at the left, always in view, `--control-h` square with an `--icon-size`
+      icon, `--text-dim`, `--status-blocked` under a pointer that hovers or a keyboard focus; a new comment has none.
+      The **↑** save button at the right, well apart: the composer's send button's tokens, `--primary`, round at
+      `--control-h`, an `--icon-size` arrow, dimmed (0.55) while there is nothing to save. Both are a full
+      `--touch-target` on a coarse pointer. Enter saves (↑ is named "Save comment", its title says "(↵)"),
+      Shift+Enter breaks the line. An edit saved blank, or a comment left empty, deletes the comment. There is no
+      Cancel. ↑ is disabled while a saved comment is unchanged or a new one blank (`commentCanSave`): leaving closes it
+      then. Icon-only buttons (↑, ✕, ‹ ›, the bin on a card) are icons; text buttons (Delete and Save in a sheet)
+      carry none.
+  - **In place** (`placement="row"`): the field over a selection, a card in edit, the fields behind a count and the
+    code view's field under a line. It lies in the surface's scrolling content, so it scrolls with the text and never
+    closes on scroll, at `--z-popover`. It is not modal: no scrim, no inert page, and Tab goes on from it.
+  - **As a dialog** (a comment with no text on screen, such as an outdated file comment or one the walk reaches whose
+    text is not drawn): the shared modal primitive, portalled to the body in a `.modal-scrim` at `--z-modal` + 2,
+    `min(100%, 360px)` wide, centred, `role="dialog"` with `aria-modal`. Tab cycles inside it (`useFocusTrap`, the
+    topmost trap, so the file viewer under it does not pull Tab out), and its Escape is its own unless another dialog
+    (Settings) is over it. A click or tap in it or on its scrim never reaches the surface under it. It stays editable,
+    with the mode on or off: it is the only way to reach those comments. At `(max-width: 640px)`, the `.modal`
+    breakpoint, it is the bottom sheet's shape: full width, rounded on top only (`--radius-xl`), with a grip
+    (`--space-8` by `--space-1`, `--border-strong`) and `env(safe-area-inset-bottom)` under it (dropped while the
+    keyboard is up, `[data-keyboard]`). It is drawn in the commit that opens it, so a new comment's field takes the
+    focus inside the tap that opened it, where a phone raises its keyboard.
+  - Name and focus: `role="dialog"` named **Comment**. Its field takes the focus as it opens, the caret at the end, but
+    for a saved comment on a touch screen (`(pointer: coarse)`, `popoverFocusesField`): there the box (`tabIndex=-1`)
+    takes it, so a tap on a card raises no keyboard; the sheet shows the field filled, and a tap into it starts
+    editing. A new comment's field takes it on a touch screen too.
+  - Leaving: Escape (from inside it in place; from anywhere for a dialog), a press outside it in place, a press on a
+    dialog's or sheet's scrim, and ✕ (where there is one) leave it, and **leaving saves** (`leaveOutcome`; the walk's
+    dialog too): a change typed is saved (a new comment stored, an edit applied), an emptied edit deletes its comment,
+    and an unchanged field or a new one holding only blanks just closes. Tab out of a field does not leave it. A press
+    outside that leaves it does nothing else (no comment opens where it landed), but a press on a card or a count
+    opens that comment (`show`, which saves this one first). The composer's Send, with text typed in an open field,
+    goes there first (`data-comment-changed`). A press inside another modal dialog over the surface (Settings, a
+    question, the file viewer opened from a reply) is that dialog's own, never one outside the popover beneath
+    (`inAnotherDialog`). Saving a new comment lets the selection go; editing one leaves whatever is selected. A field
+    also closes when the setting is turned off, or when its comment is no longer stored (a send acknowledged it,
+    another tab deleted it) while its text is unchanged; a change typed keeps it, and saving it stores the comment
+    again.
+  - Delete, beside ↑ or on a card, is immediate, without a question or an undo. The focus goes to the next card, else
+    the previous one (`focusAfter`), else the pane's composer (the file viewer has none: the focus is let go); on a
+    touch screen (`(pointer: coarse)`) with no card left it is only let go, so no keyboard rises unasked.
+  - Otherwise, as it closes, the focus returns to the comment's card while that is drawn, else to the pane's composer
+    (a new comment's card is not placed yet when it is saved). In place it does so only if the field still had the
+    focus or nothing had: it never takes it from where the user went (another pane's composer, the terminal). On a
+    touch screen the composer is not given the focus.
+  - For a new comment the text it is on stays drawn while the field is open, in the same segments a saved comment gets
+    (several parts included), until the comment is saved or given up: over a selection in the strong fill, a code line
+    in `comment-pending`.
 - File comments (`FileComments.tsx`, `FileViewer.css`, `lib/fileComments.ts`): the file viewer is a
   second comment surface, only where it knows its pane (a viewer opened without one takes no
   click, drag or tap for a comment and has no counter), and only on the loaded part of a text file. A comment is
   made in the Markdown preview or in the code view and is sent with the next message like a reply
-  comment; the chat's highlights, pins and popover are reused (the viewer's body is a comment
-  surface with its own pin layer), so only what differs is written here.
-  - Preview and code view alike: a mouse's drag over text opens the comment as it lets go, as in the
-    chat; a keyboard or touch selection (a long press and its handles) opens nothing, and a triple
-    click selects one line to copy, with nothing shown. There is no Comment button and no button per
-    line; a click or tap on a line (its number included) comments on it (below). The line numbers
-    stay a CSS counter, so a copy of the code is the code alone.
-  - A click or tap comments on a line, as a click on a block does in the chat (same `isCommentClick`
-    rules and double-click rule, `FileComments.tsx`): in the code view the line element, in the
-    preview the element under the click, a paragraph whole (its source lines together). Only a
-    line among those loaded whole takes it: the cut-off last line of a file cut short does not.
-    Under `(hover: hover)` and `data-comments`, with no popover in the body, a
-    code line under the pointer takes `--accent-tint` and another element of the preview the chat's
-    frame (a faint fill reaching 2px past it and a hairline accent edge, nearly square); neither
-    takes room. It opens the line's whole-line comment to edit, its field filled, else a new one.
-  - A pin's tip stands where the line or element was clicked or the drag let go (its `point`, as in
-    the chat), else at the end of the comment's last line of text, in the code view and the preview
-    alike (a whole-line comment: the end of its last line), and opens the chat's popover beside it. The
-    reference (`FileReference.tsx`) is the first line of a dialog's or a sheet's popover, above the
-    quote (beside its pin, only for assistive tech), `--text-dim` at
+  comment; the chat's highlights and the comment mode are shared (the viewer's body is a comment surface), so only
+  what differs is written here.
+  - The Markdown preview is the Markdown comment layer's (`MarkdownComments.tsx`), the same as the chat's replies
+    above: the header's comment-mode toggle (shown for the preview too), the field over a selection, cards or counts
+    in the margin beside the document (in the free space right of it in the viewer's body, which never moves the text:
+    `usePreviewMargin`), and on touch the app's own selection and the
+    sheet. A preview selection's `lines` are the line elements it covers (`measureFileSelection`); only when an end
+    falls outside them (white space between blocks, the gutter, a code block's label) is that end moved to the nearest
+    block that holds text.
+  - In the code view a mouse's drag over text opens nothing; a click or tap on a line (its number
+    included) comments on it (below). There is no Comment button and no button per line. The line
+    numbers stay a CSS counter, so a copy of the code is the code alone.
+  - A click or tap comments on a code line (`isCommentClick`: the primary button, a single click, nothing
+    interactive or comment UI under it, a collapsed selection, and not a tap that puts a phone's keyboard away; a
+    double click still selects a word; `CodeComments.tsx`). A press outside an open field only leaves it
+    (`markDismissingPress`): its click opens no comment on the line under it; the next click does. Only a line among those
+    loaded whole takes it: the cut-off last line of a file cut short does not. Under
+    `(hover: hover)`, a code line under the pointer takes `--accent-tint`; it takes no room. It
+    opens the line's whole-line comment to edit, its field filled, else a new one.
+  - The reference (`FileReference.tsx`) is the first line of a dialog's or a sheet's popover, above the
+    quote (in place, only for assistive tech), `--text-dim` at
     `--fs-xs`, one line: the file name and lines, `sync.ts · Line 8`, `spec.md · Lines 42–44` (en
     dash), the full path as its tooltip; a long name is cut inside its stem, so the extension and
-    the lines stay; a saved comment beside its pin keeps it over its field (only the quote goes). The quote is the file's lines in the code font. The viewer has no composer, so
+    the lines stay; a saved comment in place keeps it over its field (only the quote goes). The quote is the file's lines in the code font. The viewer has no composer, so
     a focus that has nowhere to go is let go. Each comment shows only in the view it was written in: a preview comment is not drawn in the
     code view and the other way round, but both count, and both are sent.
-  - Highlights are the chat's (`block-comment`, `-active`, `-current`, `-pending`; focus mode while a
-    pin's comment is up or its popover open). A stored comment on a whole line without a selection (written by an
+  - Highlights are the chat's (`comment-layer-0` … `-3`, `comment-strong` while a card's comment is up or its field
+    open, `comment-pending`). A stored comment on a whole line without a selection (written by an
     earlier build) highlights the whole line and puts its number in `--accent` at `--fw-semibold`
     (`.hl-line.is-commented`).
-  - The header's counter (`.file-viewer-comments`) is an icon button as the header's others, a
-    `MessageSquare` with the count as a bubble on its top right (`--primary` fill, `--primary-text`,
-    `--fs-2xs` at `--fw-semibold`, `--radius-pill`, 16px tall, `99+` above 99), at every width. Its
-    name and tooltip have the words: `3 comments` or `3 comments · 1 outdated`. Each tap walks
-    to the next comment of this file, in the order they are sent: it switches to the view the
-    comment was written in, unfolds a folded code block it is in, scrolls it to the middle, clicks its
-    pin (its popover opens to edit, its field filled), marks it current and focuses it. The header has no button
+  - The header's toggle (`.file-viewer-comments`, the comment mode's, above) carries the file's comment count as its
+    badge. Its name and tooltip have the words: `Comment mode, 3 comments` or `Comment mode, 3 comments · 1 outdated`.
+    The count's walk is the composer's: it goes to the next comment of this file, in the order they are sent,
+    switching to the view the comment was written in, unfolding a folded code block it is in, scrolling it to the
+    middle, and opening it as above (the current comment). The header has no button
     to write the message: Close returns to the chat, whose composer sends the comments. Escape
-    closes an open popover (or the dialog of an outdated comment) before the viewer.
+    closes an open field (or the dialog of an outdated comment) before the viewer.
   - Outdated: when the file loads, a comment is placed where its lines still read as saved; else
     where those exact lines occur once in the file (its stored line numbers follow it); else, with
     no such place, more than one, or only beyond the loaded part, it is **outdated**. In a file cut
@@ -1279,14 +1312,17 @@ One set for both themes: the card is island black wherever it shows.
     its view and at its place (the stop's comment is the current one), or its dialog where the
     file cannot show it. The viewer covers the bar, so the walk goes on by the counter there; once
     the viewer is closed, the bar continues after the last file comment visited (kept in memory).
-  - Sent as a quote of whole source lines: `> src/sync.ts:8` or `> docs/spec.md:42-44` (ASCII
-    hyphen; the path relative to the pane's folder where inside it), then the lines, each behind
-    `> ` (a blank line is a bare `>`), then the comment. File comments follow the reply comments,
-    grouped by file in the order each got its first comment, within a file by line and then
-    selection start. A quoted line is cut at 200 characters (a window around the selection, the
-    start of a whole-line comment), a quote at 20 lines (`> … (+N lines)`, the header keeps the
-    range) and at 2000 characters in all, always on a code point and each cut marked with `…`,
-    which counts toward the limit.
+  - Sent as a quote: a header, `> src/sync.ts:8` or `> docs/spec.md:42-44` (ASCII hyphen; the path relative to the
+    pane's folder where inside it), then the lines, each behind `> ` (a blank line is a bare `>`), then the comment.
+    A comment on selected text quotes only the selected words (`selection.text`; a table's cells already joined by
+    ` | `), not the whole source line, so the agent can tell which words were meant and two comments on one line
+    send different quotes; a comment without a selection (the code view's line comments, a whole-block preview
+    comment from before) quotes its whole lines. A reply comment keeps its quote: the selected text behind `> `,
+    with no header. File comments follow the reply comments, grouped by file in the order each got its first
+    comment, within a file by line and then selection start. A quoted line is cut at 200 characters
+    (`QUOTE_LINE_MAX`, at its start), a quote at 20 lines (`> … (+N lines)`, the header keeps the range) and at
+    2000 characters in all (`SELECTION_QUOTE_MAX`), always on a code point and each cut marked with `…`, which
+    counts toward the limit.
 - Auto-follow stops when the reader scrolls up; later output raises a **New messages** pill.
 - An empty chat is greeted from the composer (`.composer-greeting`, below), only where the agent's
   conversation was read and holds no turn. A chat still loading, one whose read failed, an agent
@@ -1542,8 +1578,8 @@ One set for both themes: the card is island black wherever it shows.
   A working Send with comments becomes a pending message whose text carries the quotes; the
   bridge holds it for the agent session that accepted it, and a saved copy sent again with Send
   now goes agent-only while its text quotes (`hasQuotedLine`), so the quotes never reach a shell.
-- Block comments waiting for the next message are shown where they were written, as pins at the
-  end of their text in the chat. The composer holds them as one context bar, a row between the
+- Block comments waiting for the next message are shown where they were written, as cards or counts beside
+  their text in the chat. The composer holds them as one context bar, a row between the
   attachment strip and the message (rows: attachments, comments, message, controls; the DOM is in
   the same order), in the grammar of a "Replying to…" bar (`.composer-comments-bar`). Nothing of
   them shows above the card (no pill, no row), the control row and status content are exactly as
@@ -1574,16 +1610,16 @@ One set for both themes: the card is island black wherever it shows.
     and sentence, which says `3 comments waiting`; the reason ("Comments stay
     here: they are not sent with a command" and its siblings) is in the button's name and title.
 
-  The sentence is one button: a tap walks the chat to the next pin of this pane's own chat
-  (several panes can be mounted), round again, opens its popover to edit, its field filled, and makes it the
-  current comment (above), one stop per pin, so a part with three comments is three stops. Its
+  The sentence is one button: a tap walks the chat to the next comment of this pane's own chat
+  (several panes can be mounted), round again, opens it to edit, its field filled, and makes it the
+  current comment (above), one stop per comment, so a part with three comments is three stops. Its
   name is the sentence (while waiting, with the reason after it), and its title adds "Go to the next comment". The button fills the box's
   full height (it takes the box's padding as negative margin, as the X does), so a tap anywhere in
   the box's height lands on it: `--touch-target` tall on a coarse pointer. A comment whose part is
   not in the chat (older history not loaded, a reply that changed) is a stop of its own that opens
-  its popover as a dialog, so the bar reaches every comment it counts. The bar counts every stored
+  its field as a dialog, so the bar reaches every comment it counts. The bar counts every stored
   comment, and comments stored for a pane outlive a reload. While a comment of this pane is being
-  written (text typed in an open popover), a walk step or a Send sends nothing and puts the focus
+  written (text typed in an open field), a walk step or a Send sends nothing and puts the focus
   back in that field, since the comment would not go with the message.
 
   The X is a button of its own, "Remove all comments": it drops every comment of the pane at once,

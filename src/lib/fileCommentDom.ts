@@ -209,10 +209,11 @@ function pointColumn(units: readonly (Text | Separator)[], container: Node, offs
 interface Edge { index: number; point: [Node, number] | null }
 
 /**
- * The line element a selection's start (or its end) lies in. A point between lines or past them
- * (the "\n" between a code block's lines, the padding around them) belongs to the nearest line
- * element on the selection's side, when nothing but blanks lies between; text of anything else
- * there (a heading) makes it null.
+ * The line element a selection's start (or its end) lies in. A point outside every line element
+ * (the "\n" between a code block's lines, the padding around them, white space between blocks, a code
+ * block's language label, the gutter) is moved to the nearest line element that holds text on the
+ * selection's side: the first one the selection covers for its start, the last for its end. Null
+ * only when the selection covers none.
  */
 function edgeOf(range: Range, elements: readonly Element[], asEnd: boolean): Edge | null {
   const container = asEnd ? range.endContainer : range.startContainer;
@@ -221,35 +222,26 @@ function edgeOf(range: Range, elements: readonly Element[], asEnd: boolean): Edg
   if (inside >= 0) return { index: inside, point: outsideMath(container, offset, asEnd) };
   let nearest = -1;
   elements.forEach((element, index) => {
-    if (range.intersectsNode(element) && (asEnd || nearest < 0)) nearest = index;
+    if (range.intersectsNode(element) && (element.textContent ?? "").trim() !== "" && (asEnd || nearest < 0)) nearest = index;
   });
-  if (nearest < 0) return null;
-  const element = elements[nearest]!;
-  const gap = document.createRange();
-  if (asEnd) { gap.setStart(element, element.childNodes.length); gap.setEnd(container, offset); }
-  else { gap.setStart(container, offset); gap.setEnd(element, 0); }
-  return gap.toString().trim() === "" ? { index: nearest, point: null } : null;
+  return nearest < 0 ? null : { index: nearest, point: null };
 }
 
 /**
- * The comment the current selection makes in `root`, or null: it is not collapsed, both ends lie
- * in line elements of `root` (or in blanks right next to them, `edgeOf`) and some of what it covers
- * is not blank. Line elements the selection covers only with blanks are left out at both ends, so
+ * The comment a selection's range (`selected`, clamped to the text first: lib/markdownSelection.ts `clampSelection`)
+ * makes in `root`, or null: it is not collapsed, both ends lie in line elements of `root` (or outside them, moved to
+ * the nearest one with text, `edgeOf`) and some of what it covers is not blank. Line elements the selection covers only with blanks are left out at both ends, so
  * a selection that ends at the start of the next line (a triple click) belongs to the line before.
  * `selection`'s indexes count the measured line elements (0 = the first), its columns count the
  * text of `lineQuoteText`, which `quoteLines` holds for each of them.
  */
-export function measureFileSelection(selection: Selection | null, root: Element): {
+export function measureFileSelection(selected: Range, root: Element): {
   lines: LineRange;
   quoteLines: string[];
   selection: FileSelection;
 } | null {
-  if (selection === null || selection.rangeCount === 0 || selection.isCollapsed) return null;
-  const first = selection.getRangeAt(0);
-  const last = selection.getRangeAt(selection.rangeCount - 1);
-  const range = document.createRange();
-  range.setStart(first.startContainer, first.startOffset);
-  range.setEnd(last.endContainer, last.endOffset);
+  if (selected.collapsed) return null;
+  const range = selected.cloneRange();
   const elements = lineElements(root);
   const from = edgeOf(range, elements, false);
   const to = edgeOf(range, elements, true);

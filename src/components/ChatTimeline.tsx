@@ -1,8 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
-import { createPortal } from "react-dom";
 import { LegendList, type LegendListRef } from "@legendapp/list/react";
-
-import type { CommentSurfaceProps } from "./useCommentSurface.tsx";
 
 import { ChatRowMemoryContext, type ChatRowMemory } from "../lib/chatRowState.tsx";
 import { chatMarkdownClipboardPayload } from "../lib/markdownClipboard.ts";
@@ -31,17 +28,17 @@ export interface ChatTimelineProps<Row extends ChatTimelineRow> {
   finding: boolean;
   onScroll: () => void;
   renderRow: (row: Row, index: number) => ReactNode;
-  /** the chat's comment surface (useCommentSurface.tsx): its handlers and marks go on the scroller */
-  surfaceProps?: CommentSurfaceProps;
-  /**
-   * the comment pin layer: drawn in the scroller after the list's content container, so it scrolls with the text and
-   * the container stays the scroller's first child (the transcript the highlights watch, which a pin must never be in)
-   */
-  overlay?: ReactNode;
 }
 
-/** One scroll owner; selected and focused rows stay real DOM nodes outside its window. */
-export function ChatTimeline<Row extends ChatTimelineRow>({ rows, scope, source, scroller, listRef, following, smoothFollow, memories, outputChanged, header, footer, label, matchKey, finding, onScroll, renderRow, surfaceProps, overlay = null }: ChatTimelineProps<Row>) {
+/**
+ * One scroll owner; selected and focused rows stay real DOM nodes outside its window.
+ *
+ * The chat's comment layer (ChatView, MarkdownComments.tsx) draws its field over a selection, its sheet's touch handles
+ * and nothing else in the scroller, after the list's content container (portals), so the container stays the scroller's
+ * first child (the transcript the highlights watch); a reply's cards or counts are its row's own (ChatComments.tsx
+ * `ReplyMargin`), placed past the row's right edge in the free space beside the transcript, which never moves for them.
+ */
+export function ChatTimeline<Row extends ChatTimelineRow>({ rows, scope, source, scroller, listRef, following, smoothFollow, memories, outputChanged, header, footer, label, matchKey, finding, onScroll, renderRow }: ChatTimelineProps<Row>) {
   const [selectionKeys, setSelectionKeys] = useState<string[]>([]);
   const [focusKey, setFocusKey] = useState<string | null>(null);
   useLayoutEffect(() => {
@@ -53,13 +50,10 @@ export function ChatTimeline<Row extends ChatTimelineRow>({ rows, scope, source,
   const positions = useMemo(() => new Map(rowKeys.map((key, index) => [key, index])), [rowKeys]);
   const pinned = useMemo(() => [...new Set(focusKey === null ? selectionKeys : [...selectionKeys, focusKey])], [selectionKeys, focusKey]);
   const extraData = useMemo(() => ({ renderRow, matchKey }), [renderRow, matchKey]);
-  /** the scroller as a state too: the pin layer is portalled into it once it exists */
-  const [scrollNode, setScrollNode] = useState<HTMLDivElement | null>(null);
   const attachList = useCallback((instance: LegendListRef | null) => {
     listRef.current = instance;
     const node = instance?.getScrollableNode();
     scroller.current = node instanceof HTMLDivElement ? node : null;
-    setScrollNode(scroller.current);
   }, [listRef, scroller]);
 
   useLayoutEffect(() => {
@@ -157,8 +151,7 @@ export function ChatTimeline<Row extends ChatTimelineRow>({ rows, scope, source,
     </ChatRowMemoryContext.Provider>;
   }, [memories, outputChanged, renderRow, matchKey]);
 
-  return <><LegendList
-    {...surfaceProps}
+  return <LegendList
     ref={attachList}
     className={finding ? "chat-view chat-view-virtual chat-view-with-find" : "chat-view chat-view-virtual"}
     contentContainerClassName="chat-transcript chat-transcript-virtual"
@@ -191,8 +184,5 @@ export function ChatTimeline<Row extends ChatTimelineRow>({ rows, scope, source,
       if (smoothFollow && node !== null) node.scrollTo({ top: node.scrollHeight - node.clientHeight, behavior: "smooth" });
       else listRef.current?.scrollToEnd({ animated: false });
     }}
-  />
-  {/* after the content: the pins come after the replies' own controls in the tab order, in reading order */}
-  {overlay !== null && scrollNode !== null && createPortal(overlay, scrollNode)}
-  </>;
+  />;
 }

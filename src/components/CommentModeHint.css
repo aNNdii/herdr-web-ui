@@ -1,0 +1,45 @@
+/* the hint as a finger turns the comment mode (CommentModeHint.tsx: the code view, the preview, the chat): a live region
+   at the top of the surface's view (its top kept at the surface's scroll), so under the viewer's header, the pill centred
+   in it. It takes no tap: the text or code under it stays pressable */
+.code-comment-status {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 1;
+  width: 100%;
+  height: 0;
+  pointer-events: none;
+}
+
+.code-comment-hint {
+  position: absolute;
+  top: var(--space-3);
+  left: 50%;
+  width: max-content;
+  max-width: calc(100% - 2 * var(--space-4));
+  margin: 0;
+  padding: var(--space-2) var(--space-4);
+  transform: translateX(-50%);
+  background: var(--bg-elevated);
+  border: var(--hairline) solid var(--border-strong);
+  border-radius: var(--radius-pill);
+  box-shadow: var(--shadow-card);
+  color: var(--text-strong);
+  font-family: var(--font-ui);
+  font-size: var(--fs-sm);
+  line-height: var(--lh-base);
+  text-align: center;
+  animation: code-comment-hint-in var(--dur-base) var(--ease-out);
+}
+
+@keyframes code-comment-hint-in {
+  from {
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .code-comment-hint {
+    animation: none;
+  }
+}

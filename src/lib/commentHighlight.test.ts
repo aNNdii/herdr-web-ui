@@ -1,11 +1,11 @@
-import { describe, expect, it } from "bun:test";
-import { notifyRanges, PENDING_COMMENT_ID, registerCommentSurface, showOpenComment, SurfaceMarks, walkScroll, watchSurfaceRanges, type CommentSurface } from "./commentHighlight.ts";
+import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { notifyRanges, PENDING_COMMENT_ID, registerCommentSurface, showOpenComment, SurfaceMarks, watchSurfaceRanges, type CommentSurface, type OpenComments } from "./commentHighlight.ts";
 
 type Ranges = ReadonlyMap<string, readonly Range[]>;
 
 /** A surface with no DOM: only its ranges matter here, and the open comments it is told of (`opened`). */
-function fakeSurface(ranges: Ranges, opened: (string | null)[] = []): CommentSurface {
-  return { mark() {}, activate() {}, open: (id) => { opened.push(id); }, boxOf: () => null, ranges: () => ranges };
+function fakeSurface(ranges: Ranges, opened: OpenComments[] = []): CommentSurface {
+  return { activate() {}, open: (id) => { opened.push(id); }, ranges: () => ranges };
 }
 
 /** A view key: the registries are WeakMaps, any object does. */
@@ -85,7 +85,7 @@ describe("watchSurfaceRanges", () => {
 describe("showOpenComment", () => {
   it("tells the registered surface which saved comment's popover is open, and that none is", () => {
     const view = fakeView();
-    const opened: (string | null)[] = [];
+    const opened: OpenComments[] = [];
     registerCommentSurface(view, fakeSurface(new Map(), opened));
     expect(opened).toEqual([null]);
     showOpenComment(view, "c1");
@@ -96,47 +96,55 @@ describe("showOpenComment", () => {
   it("keeps the open comment for a surface that registers later (its highlights watched anew)", () => {
     const view = fakeView();
     showOpenComment(view, "c1");
-    const opened: (string | null)[] = [];
+    const opened: OpenComments[] = [];
     registerCommentSurface(view, fakeSurface(new Map(), opened));
     expect(opened).toEqual(["c1"]);
     showOpenComment(view, null);
-    const again: (string | null)[] = [];
+    const again: OpenComments[] = [];
     registerCommentSurface(view, fakeSurface(new Map(), again));
     expect(again).toEqual([null]);
+  });
+
+  it("tells it of several open at once (a count's fields)", () => {
+    const view = fakeView();
+    const opened: OpenComments[] = [];
+    registerCommentSurface(view, fakeSurface(new Map(), opened));
+    showOpenComment(view, ["c1", "c2"]);
+    expect(opened).toEqual([null, ["c1", "c2"]]);
+    const later: OpenComments[] = [];
+    registerCommentSurface(view, fakeSurface(new Map(), later));
+    expect(later).toEqual([["c1", "c2"]]);
   });
 
   it("reaches only its own view", () => {
     const view = fakeView();
     const other = fakeView();
-    const opened: (string | null)[] = [];
+    const opened: OpenComments[] = [];
     registerCommentSurface(other, fakeSurface(new Map(), opened));
     showOpenComment(view, "c1");
     expect(opened).toEqual([null]);
   });
 });
 
-describe("walkScroll", () => {
-  // a view 100 to 500 on screen
-  const view = { top: 100, height: 400 };
-
-  it("centres the text and its card when they fit", () => {
-    expect(walkScroll({ top: 600, bottom: 700 }, { top: 710, bottom: 740 }, view)).toBe(370);
-    expect(walkScroll({ top: 0, bottom: 40 }, { top: 50, bottom: 80 }, view)).toBe(-260);
-  });
-
-  it("brings the card's bottom to the view's bottom when they are taller than the view", () => {
-    expect(walkScroll({ top: 200, bottom: 1200 }, { top: 1210, bottom: 1240 }, view)).toBe(740);
-    expect(walkScroll({ top: -900, bottom: 80 }, { top: 90, bottom: 120 }, view)).toBe(-380);
-  });
-
-  it("keeps the card on screen when the text runs on below it", () => {
-    expect(walkScroll({ top: 200, bottom: 1300 }, { top: 1210, bottom: 1240 }, view)).toBe(740);
-  });
-});
-
 describe("SurfaceMarks", () => {
-  /** A view that only takes the focus attribute: without the highlight API the marks touch nothing else. */
-  const markedView = (): Element => ({ toggleAttribute() {}, removeAttribute() {} }) as unknown as Element;
+  // the highlight registry, stood in for: a Highlight is a set of ranges, CSS.highlights holds them by name
+  const globals = globalThis as unknown as { CSS?: unknown; Highlight?: unknown };
+  let saved: { css: unknown; highlight: unknown };
+  let registry: Map<string, Set<Range>>;
+  beforeEach(() => {
+    saved = { css: globals.CSS, highlight: globals.Highlight };
+    registry = new Map();
+    globals.CSS = { highlights: registry };
+    globals.Highlight = class extends Set<Range> { priority = 0; };
+  });
+  afterEach(() => {
+    globals.CSS = saved.css;
+    globals.Highlight = saved.highlight;
+  });
+  /** the ranges `name` holds */
+  const painted = (name: string): Range[] => [...(registry.get(name) ?? [])];
+
+  const markedView = (): Element => ({}) as Element;
 
   it("lists the comment being written under PENDING_COMMENT_ID only while there is one, and tells the watchers", () => {
     const view = markedView();
@@ -152,5 +160,29 @@ describe("SurfaceMarks", () => {
     expect([...heard.at(-1)!]).toEqual([["a", saved]]);
     expect(marks.comments.get("a")).toBe(saved);
     expect(marks.pending).toBeNull();
+  });
+
+  it("brings up the comments a count names (data-comment-ids), and the several open", () => {
+    const marks = new SurfaceMarks(markedView());
+    // one comment: without a DOM two cannot be given layers (their ranges are compared)
+    const text = [{} as Range];
+    marks.publish(new Map([["b", text]]), null);
+    // at rest the comment is on its layer; in focus it is in the strong highlight instead
+    expect(painted("comment-layer-0")).toEqual(text);
+    expect(painted("comment-strong")).toEqual([]);
+    const pin = (dataset: Record<string, string>): HTMLElement => ({ isConnected: true, dataset }) as unknown as HTMLElement;
+    marks.activate(pin({ commentIds: "x y" }), "pointer", true);
+    expect(painted("comment-strong")).toEqual([]);
+    marks.activate(pin({ commentIds: "x b" }), "pointer", true);
+    expect(painted("comment-strong")).toEqual(text);
+    expect(painted("comment-layer-0")).toEqual([]);
+    marks.activate(pin({ commentId: "z" }), "pointer", true);
+    expect(painted("comment-strong")).toEqual([]);
+    marks.open(["z", "b"]);
+    expect(painted("comment-strong")).toEqual(text);
+    marks.open(null);
+    expect(painted("comment-strong")).toEqual([]);
+    marks.dispose();
+    expect(painted("comment-layer-0")).toEqual([]);
   });
 });

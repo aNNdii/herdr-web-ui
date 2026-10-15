@@ -6,7 +6,7 @@ import { FONT_FAMILY_MAX_CHARS } from "./fontFamily.ts";
 import { DEFAULT_KEY_BAR_ITEMS, migrateKeyBarItems } from "./keyBar.ts";
 import { SHARED_SETTING_KEYS } from "../../shared/preferences.ts";
 import { NOTICE_VERSION, TELEMETRY_SETTINGS_KEYS, telemetrySettings } from "../../shared/telemetry.ts";
-import { SETTING_SCOPE, telemetrySettingsSnapshot, alertPrefs, CHAT_FONT_MAX, CHAT_FONT_MIN, CHAT_LANE_MAX_REM, CHAT_LANE_MIN, CHAT_WIDTHS, chatFontSize, chatLaneLength, chatLaneWidth, DEFAULT_SETTINGS, MARKDOWN_WIDTHS, QUICK_REPLIES_MAX, QUICK_REPLY_MAX_CHARS, quickReplyButtons, sanitizeSettings, terminalTheme, forgetPaneViews, DICTATION_LANGUAGES, VOICE_BUTTONS, wantsVoiceInput } from "./settings.ts";
+import { SETTING_SCOPE, telemetrySettingsSnapshot, alertPrefs, CHAT_FONT_MAX, CHAT_FONT_MIN, CHAT_LANE_MAX_REM, CHAT_LANE_MIN, CHAT_WIDTHS, chatFontSize, chatLaneLength, chatLaneWidth, COMMENT_ON_SELECT, DEFAULT_SETTINGS, MARKDOWN_WIDTHS, QUICK_REPLIES_MAX, QUICK_REPLY_MAX_CHARS, quickReplyButtons, sanitizeSettings, terminalTheme, forgetPaneViews, DICTATION_LANGUAGES, VOICE_BUTTONS, wantsVoiceInput } from "./settings.ts";
 
 it("keeps a tab's pane while out of use until this device turns the pause on", () => {
   expect(DEFAULT_SETTINGS.releasePaneAway).toBe(false);
@@ -749,14 +749,40 @@ it("keeps the Markdown preview's width to readable or full, readable by default"
 });
 
 it("keeps the code view's comment settings, off, mouse-only and long press with a sheet by default", () => {
-  expect(DEFAULT_SETTINGS.codeCommentMode).toBe(false);
+  expect(DEFAULT_SETTINGS.commentMode).toBe(false);
   expect(DEFAULT_SETTINGS.codeCommentLineClick).toBe(false);
   expect(DEFAULT_SETTINGS.mobileCommentGesture).toBe("hold");
   expect(DEFAULT_SETTINGS.mobileCommentInput).toBe("sheet");
-  expect(sanitizeSettings({ codeCommentMode: true, codeCommentLineClick: true, mobileCommentGesture: "tap", mobileCommentInput: "inline" }))
-    .toMatchObject({ codeCommentMode: true, codeCommentLineClick: true, mobileCommentGesture: "tap", mobileCommentInput: "inline" });
-  expect(sanitizeSettings({ codeCommentMode: "on", codeCommentLineClick: 1, mobileCommentGesture: "press", mobileCommentInput: "modal" }))
-    .toMatchObject({ codeCommentMode: false, codeCommentLineClick: false, mobileCommentGesture: "hold", mobileCommentInput: "sheet" });
+  expect(sanitizeSettings({ commentMode: true, codeCommentLineClick: true, mobileCommentGesture: "tap", mobileCommentInput: "inline" }))
+    .toMatchObject({ commentMode: true, codeCommentLineClick: true, mobileCommentGesture: "tap", mobileCommentInput: "inline" });
+  expect(sanitizeSettings({ commentMode: "on", codeCommentLineClick: 1, mobileCommentGesture: "press", mobileCommentInput: "modal" }))
+    .toMatchObject({ commentMode: false, codeCommentLineClick: false, mobileCommentGesture: "hold", mobileCommentInput: "sheet" });
+});
+
+it("reads a stored codeCommentMode into commentMode once", () => {
+  expect(sanitizeSettings({ codeCommentMode: true }).commentMode).toBe(true);
+  expect("codeCommentMode" in sanitizeSettings({ codeCommentMode: true })).toBe(false);
+});
+
+it("prefers commentMode over the old key", () => {
+  expect(sanitizeSettings({ commentMode: false, codeCommentMode: true }).commentMode).toBe(false);
+});
+
+it("parses commentLayout and falls back to cards", () => {
+  expect(DEFAULT_SETTINGS.commentLayout).toBe("cards");
+  expect(SETTING_SCOPE.commentMode).toBe("device");
+  expect(SETTING_SCOPE.commentLayout).toBe("device");
+  expect(sanitizeSettings({ commentLayout: "counts" }).commentLayout).toBe("counts");
+  expect(sanitizeSettings({ commentLayout: "margin" }).commentLayout).toBe("cards");
+  expect(sanitizeSettings({}).commentLayout).toBe("cards");
+});
+
+it("parses commentOnSelect per device and falls back to the button", () => {
+  expect(DEFAULT_SETTINGS.commentOnSelect).toBe("button");
+  expect(SETTING_SCOPE.commentOnSelect).toBe("device");
+  for (const value of COMMENT_ON_SELECT) expect(sanitizeSettings({ commentOnSelect: value }).commentOnSelect).toBe(value);
+  for (const bad of ["popover", "", null, 1, true]) expect(sanitizeSettings({ commentOnSelect: bad }).commentOnSelect).toBe("button");
+  expect(sanitizeSettings({}).commentOnSelect).toBe("button");
 });
 
 describe("comments", () => {

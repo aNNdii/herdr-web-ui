@@ -1,0 +1,182 @@
+/* The margin beside a text (CommentMargin.tsx): cards, or counts. Placed by script in its offset parent (the scrolling
+   surface): its left right of the text's content box, its top level with the text's, its width the margin's (inline),
+   no height of its own; each card and count at its own top. Nothing in it moves by a transition. Only its cards and
+   counts take the pointer, so a drag released beside the text still lands on the surface. */
+.comment-margin {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 1;
+  height: 0;
+  pointer-events: none;
+  user-select: none;
+  color: var(--text);
+  /* the comment field's face and size (CommentPopover.css), so a card turned into its field reads the same */
+  font-family: var(--font-chat, var(--font-ui));
+  font-size: calc(var(--fs-chat) * var(--chat-scale, 1));
+  line-height: var(--lh-base);
+}
+
+.comment-margin > * {
+  pointer-events: auto;
+}
+
+/* a card sits on the page: the elevated ground and a hairline, no shadow; the comment's text only, where its field's
+   text will be (CommentPopover.css `.is-row`: its padding, and its field's own `--space-1` above and below) */
+.markdown-comment-card {
+  position: absolute;
+  left: 0;
+  width: 100%;
+  padding: calc(var(--space-2) + var(--space-1)) var(--space-2) calc(var(--space-2) + var(--space-1)) var(--space-4);
+  background: var(--bg-elevated);
+  border: var(--hairline) solid var(--border-strong);
+  border-radius: var(--radius-lg);
+}
+
+/* in the mode a click edits it */
+.markdown-comment-card:has(> button.markdown-comment-text) {
+  cursor: pointer;
+}
+
+/* in edit the card is its field (CommentPopover.css `.is-row`), which has its own box */
+.markdown-comment-card.is-editing {
+  padding: 0;
+  background: none;
+  border: 0;
+}
+
+/* hovered, a card lifts a shade, with no accent edge (its text takes the strong fill) */
+@media (hover: hover) {
+  .markdown-comment-card:not(.is-editing):hover {
+    background: var(--bg-hover);
+  }
+}
+
+/* the text of a card in the mode (a button) keeps clear of the bin at the top right; a read-only card's (text) has none */
+.markdown-comment-text {
+  display: block;
+  width: 100%;
+  margin: 0;
+  padding: 0;
+  background: none;
+  border: 0;
+  color: inherit;
+  font: inherit;
+  text-align: start;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  cursor: inherit;
+}
+
+button.markdown-comment-text {
+  padding-right: calc(var(--space-6) + var(--space-1));
+}
+
+/* the bin: 14 px in a 24 px button, 8 px in from the top right, only on hover and on focus within (the mode only) */
+.markdown-comment-delete {
+  position: absolute;
+  top: var(--space-2);
+  right: var(--space-2);
+  width: var(--space-6);
+  height: var(--space-6);
+  color: var(--text-dim);
+  visibility: hidden;
+}
+
+.markdown-comment-delete svg {
+  width: 14px;
+  height: 14px;
+}
+
+.markdown-comment-card:is(:hover, :focus-within) .markdown-comment-delete {
+  visibility: visible;
+}
+
+.markdown-comment-delete:focus-visible {
+  color: var(--status-blocked);
+}
+
+@media (hover: hover) {
+  .markdown-comment-delete:hover {
+    color: var(--status-blocked);
+  }
+}
+
+/* a count: level with the line its comments start on. Its target spans the free space the margin measured
+   (CommentMargin.tsx, lib/commentMargin.ts `marginLayout`): beside the text, the column (a finger's: 44 px from the
+   text's edge); at the surface's edge, what is free there, never over the text's glyphs. Its bubble is where the margin
+   puts it in either case, `--count-bubble-x` into the target */
+.markdown-comment-count-slot {
+  position: absolute;
+  left: 0;
+  width: 100%;
+}
+
+.markdown-comment-count {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  width: var(--count-target-w, 100%);
+  height: var(--space-5);
+  margin-left: var(--count-target-x, 0px);
+  padding: 0 0 0 var(--count-bubble-x, var(--space-1));
+  background: none;
+  border: 0;
+  cursor: pointer;
+}
+
+/* a small speech bubble: about 16 × 15 px, the small radius on three corners and a square one at the bottom left for
+   its tail; the number on the type scale, in tabular figures */
+.markdown-comment-count-bubble {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 16px;
+  height: 15px;
+  padding: 0 3px;
+  border-radius: calc(var(--radius-sm) * 2 / 3) calc(var(--radius-sm) * 2 / 3) calc(var(--radius-sm) * 2 / 3) 0;
+  background: var(--bg-hover);
+  color: var(--text-dim);
+  font-family: var(--font-ui);
+  font-size: var(--fs-2xs);
+  font-weight: var(--fw-medium);
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+}
+
+@media (hover: hover) {
+  .markdown-comment-count:hover .markdown-comment-count-bubble {
+    background: var(--border-strong);
+    color: var(--text);
+  }
+}
+
+/* its comments open: an accent tint and an accent number */
+.markdown-comment-count[aria-expanded="true"] .markdown-comment-count-bubble {
+  background: var(--accent-tint);
+  color: var(--accent);
+}
+
+/* the mode off: a count's comments as read-only cards beside it, over the text's edge, so they cast a shadow */
+.markdown-comment-readonly {
+  position: absolute;
+  top: 0;
+  right: calc(100% + var(--space-1));
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.markdown-comment-card.is-readonly {
+  position: static;
+  box-shadow: var(--shadow-pop);
+}
+
+/* a finger's target: 44 px high (counts whose targets would come closer than 8 px merge, lib/commentMargin.ts
+   `groupCounts`), and as wide as the margin measured (44 px from the text's edge where the free space holds it) */
+@media (pointer: coarse) {
+  .markdown-comment-count {
+    height: max(44px, var(--touch-target));
+    margin-top: calc((var(--space-5) - max(44px, var(--touch-target))) / 2);
+  }
+}
