@@ -57,6 +57,9 @@ describe("machine boundaries", () => {
     for (const destination of ["-oProxyCommand=touch /tmp/no", "host;id", "x\ny", "$(id)", "user@host -p 22", ""]) expect(() => validateTarget({ destination })).toThrow();
     expect(validateTarget({ destination: "user@[::1]", port: 2222, session: "work" }).port).toBe(2222);
     for (const session of ["../default", "$(id)", "work;id"]) expect(() => validateTarget({ destination: "host", session })).toThrow();
+    // a key path on the web server, which may be a Windows one; never an option or a relative path
+    for (const identity_file of ["/home/u/.ssh/id", "~/.ssh/id", "~\\.ssh\\id", "C:\\Users\\u\\.ssh\\id", "D:/keys/id"]) expect(validateTarget({ destination: "host", identity_file }).identity_file).toBe(identity_file);
+    for (const identity_file of ["-oProxyCommand=x", "keys/id", "C:id", "~user/id", "/k\nx"]) expect(() => validateTarget({ destination: "host", identity_file })).toThrow();
     const value = "a'$(touch /tmp/no)";
     expect(Bun.spawnSync(["sh", "-c", `printf %s ${shellQuote(value)}`]).stdout.toString()).toBe(value);
   });
@@ -69,9 +72,9 @@ describe("machine boundaries", () => {
   });
   it("proxies only pane/workspace data and never remote management credentials", () => {
     for (const path of ["pane/focus", "layout/ratio", "tab/move"]) expect(MACHINE_PROXY_PATH.test(path)).toBe(true);
-    for (const path of ["pane/focus/extra", "layout/apply", "layout/ratio/extra", "layout/../auth"]) expect(MACHINE_PROXY_PATH.test(path)).toBe(false);
+    for (const path of ["pane/focus/extra", "pane/move", "layout/apply", "layout/ratio/extra", "layout/../auth"]) expect(MACHINE_PROXY_PATH.test(path)).toBe(false);
     for (const path of ["auth", "push", "updates/install", "machines/setup", "bridge", "../auth", "pane/../../auth", "pane/prompt/answer/extra", "tab/move/extra", "tab/close/extra"]) expect(MACHINE_PROXY_PATH.test(path)).toBe(false);
-    for (const path of ["session", "agents", "integrations", "pane/files", "pane/find", "pane/image", "pane/prompt/answer", "pane/move", "workspace/create", "tab/create", "tab/rename", "tab/close"]) expect(MACHINE_PROXY_PATH.test(path)).toBe(true);
+    for (const path of ["session", "agents", "integrations", "pane/files", "pane/find", "pane/image", "pane/prompt/answer", "workspace/create", "tab/create", "tab/rename", "tab/close"]) expect(MACHINE_PROXY_PATH.test(path)).toBe(true);
     for (const path of ["session", "agents", "integrations", "pane/files", "pane/find", "pane/image", "pane/prompt/answer", "pane/split", "pane/zoom", "pane/swap", "pane/resize", "pane/clear", "workspace/create", "tab/create", "tab/rename", "tab/close"]) expect(MACHINE_PROXY_PATH.test(path)).toBe(true);
   });
 });

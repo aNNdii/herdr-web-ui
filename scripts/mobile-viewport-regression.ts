@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import type { Browser } from "playwright-core";
-import { moreItem } from "./header-more.ts";
 import { sheetsSettled } from "./sheets-settled.ts";
 
 type ViewportQA = Window & { viewportQA: { resize: (height: number) => void; pointer: (touch: boolean) => void } };
@@ -12,6 +11,8 @@ export async function checkMobileViewport(browser: Browser, origin: string, pane
   const context = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, locale: "en-US" });
   try {
     await context.addInitScript(() => {
+      // the walk starts in the input line, where a tapped grid raises no keyboard
+      if (localStorage.getItem("herdr-web-ui:settings") === null) localStorage.setItem("herdr-web-ui:settings", JSON.stringify({ terminalInputMode: "line" }));
       const viewport = window.visualViewport!;
       let height = 795; // a standalone app's idle visual viewport can exclude its status bar
       Object.defineProperty(viewport, "height", { get: () => height });
@@ -123,7 +124,7 @@ export async function checkMobileViewport(browser: Browser, origin: string, pane
     const terminal = page.locator(".xterm-helper-textarea");
     await terminal.focus();
     await shell(false, "", 844);
-    const direct = page.getByRole("button", { name: "Type straight into the terminal", exact: true });
+    const direct = page.getByRole("button", { name: "Input line", exact: true });
     await direct.click();
     await page.locator("[data-direct-typing]").waitFor();
     await shell(true, "500px", 500);
@@ -165,11 +166,10 @@ export async function checkMobileViewport(browser: Browser, origin: string, pane
 
     // A sheet with a text field ends where the keyboard begins: an iPhone home screen app keeps
     // the layout viewport at full height, so a sheet on its bottom edge would sit under the keyboard.
-    // at phone width the palette's header button is gone: it is the More menu's first item
+    // at phone width the palette's header button is gone: a hardware keyboard's shortcut opens it
     assert.equal(await page.locator(".app-header .palette-button").isVisible(), false, "a phone's header has no palette button");
-    const palette = await moreItem(page, "Command palette");
-    assert.equal(await page.locator(".row-sheet-item").first().textContent(), "Command palette", "the palette is the More menu's first item");
-    await palette.click();
+    await page.keyboard.press("ControlOrMeta+Shift+K");
+    await page.getByRole("dialog", { name: "Command palette", exact: true }).waitFor();
     const search = page.locator(".palette-search input");
     await search.focus();
     await height(500);

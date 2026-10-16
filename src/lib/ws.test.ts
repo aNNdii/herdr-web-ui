@@ -70,6 +70,53 @@ it("keeps ordinary immediate sends working on a legacy bridge", async () => {
   }
 });
 
+it("control: a held-copy id on a legacy bridge keeps its existing immediate input behavior", async () => {
+  const client = new HerdrSocket("ws://test/ws");
+  client.connect();
+  const socket = FakeSocket.last;
+  socket.open();
+  socket.receive(snapshot([]));
+  try {
+    expect(await client.submit("w1:p1", "held copy", "held copy", { resendId: "stable-copy-id" })).toEqual({ ok: true });
+    expect(submissions(socket)).toEqual([{ type: "input", pane_id: "w1:p1", text: "held copy\r" }]);
+  } finally { client.close(); }
+});
+
+it("regression: sends the held-copy id independently of the connection request id", async () => {
+  const client = new HerdrSocket("ws://test/ws");
+  client.connect();
+  const socket = FakeSocket.last;
+  socket.open();
+  socket.receive(snapshot(["submit"]));
+  try {
+    const sent = socket.nextSubmission();
+    const result = client.submit("w1:p1", "held copy", "held copy", { resendId: "stable-copy-id", generation: 3 });
+    const frame = await sent;
+    expect(submissions(socket)[0]?.resend_id).toBe("stable-copy-id");
+    expect(submissions(socket)[0]?.resend_generation).toBe(3);
+    socket.receive({ type: "submit-result", id: frame.id, pane_id: "w1:p1", ok: true });
+    expect(await result).toEqual({ ok: true });
+  } finally { client.close(); }
+});
+
+it("refuses a held-copy resend combined with Send anyway without sending a frame", async () => {
+  const client = new HerdrSocket("ws://test/ws");
+  client.connect();
+  const socket = FakeSocket.last;
+  socket.open();
+  socket.receive(snapshot(["submit"]));
+  try {
+    const sent = socket.nextSubmission();
+    const result = client.submit("w1:p1", "held copy", "held copy", { sendAnyway: true, resendId: "combined-copy", generation: 0 });
+    const answer = await Promise.race([result, sent.then((frame) => {
+      socket.receive({ type: "submit-result", id: frame.id, pane_id: "w1:p1", ok: true });
+      return result;
+    })]);
+    expect(answer).toMatchObject({ ok: false, code: "invalid_delivery" });
+    expect(submissions(socket)).toEqual([]);
+  } finally { client.close(); }
+});
+
 it("delivers partial clear outcomes unchanged and never retries the submission", async () => {
   const client = new HerdrSocket("ws://test/ws");
   client.connect();
@@ -434,6 +481,23 @@ it("requires attachment readiness and never replays held input after a detach", 
   client.close();
 });
 
+it("marks only the composer's Stop as a Stop on the wire", () => {
+  const client = new HerdrSocket("ws://test/ws");
+  client.connect();
+  const socket = FakeSocket.last;
+  socket.open();
+  socket.receive(snapshot(["submit", "input-ready"]));
+  client.attach("w1:p1", 80, 24);
+  socket.receive({ type: "input-ready", pane_id: "w1:p1" });
+  expect(client.sendInput("w1:p1", "\u001b")).toBe(true);
+  expect(client.sendInput("w1:p1", "\u001b", true)).toBe(true);
+  expect(socket.sent.filter((m) => m.type === "input")).toEqual([
+    { type: "input", pane_id: "w1:p1", text: "\u001b" },
+    { type: "input", pane_id: "w1:p1", text: "\u001b", stop: true },
+  ]);
+  client.close();
+});
+
 it("takes a held pane only from a server that knows how, while interacting with an attached pane", () => {
   const takes = (socket: FakeSocket) => socket.sent.filter((m) => m.type === "take-over");
   const old = new HerdrSocket("ws://test/ws");
@@ -513,6 +577,33 @@ it("releases the shared grid once when the chat lens covers a terminal this tab 
   client.close();
 });
 
+it("keeps a visible unfocused grid while changing only its reconnect policy", () => {
+  const client = new HerdrSocket("ws://test/ws");
+  client.connect();
+  const socket = FakeSocket.last;
+  socket.open();
+  const releases = () => socket.sent.filter((m) => m.type === "release-size");
+  try {
+    client.attach("w1:p1", 120, 40);
+    // A plain blur does not hide the terminal or discard its fallback grid.
+    client.keepSize("w1:p1", false);
+    // Regression (fails on #1085): no release until the terminal really stops showing.
+    expect(releases()).toEqual([]);
+    client.releaseSize("w1:p1");
+    client.releaseSize("w1:p1");
+    expect(releases()).toEqual([{ type: "release-size", pane_id: "w1:p1" }]);
+    client.resize("w1:p1", 120, 40);
+    client.keepSize("w1:p1", false);
+    socket.open();
+    // Control: blur still changes the reconnect policy, without replaying a release.
+    expect(socket.sent.filter((m) => m.type === "attach").at(-1))
+      .toEqual({ type: "attach", pane_id: "w1:p1", cols: 120, rows: 40, flow_control: "ack", keep_size: true });
+    expect(releases()).toHaveLength(1);
+  } finally {
+    client.close();
+  }
+});
+
 it("releases the shared grid once when a hidden terminal returns directly to Chat", () => {
   const client = new HerdrSocket("ws://test/ws");
   client.connect();
@@ -521,8 +612,10 @@ it("releases the shared grid once when a hidden terminal returns directly to Cha
   const releases = () => socket.sent.filter((m) => m.type === "release-size");
   try {
     client.attach("w1:p1", 53, 33);
-    // Selecting another pane hides this terminal without releasing its server-side grid.
+    // Selecting another pane must release its grid immediately, even if Chat never opens.
     client.keepSize("w1:p1");
+    // regression (fails on main): hiding itself removes this client's server-side grid.
+    expect(releases()).toEqual([{ type: "release-size", pane_id: "w1:p1" }]);
     // A notification selects this pane and Chat together, without a terminal-return resize.
     client.releaseSize("w1:p1");
     client.releaseSize("w1:p1");
@@ -532,6 +625,11 @@ it("releases the shared grid once when a hidden terminal returns directly to Cha
     expect(releases()).toHaveLength(1);
     expect(socket.sent.filter((m) => m.type === "attach").at(-1))
       .toEqual({ type: "attach", pane_id: "w1:p1", cols: 53, rows: 33, flow_control: "ack", keep_size: true });
+    // Showing the terminal again at the same dimensions still reclaims its released grid.
+    client.resize("w1:p1", 53, 33);
+    expect(socket.sent.at(-1)).toEqual({ type: "resize", pane_id: "w1:p1", cols: 53, rows: 33 });
+    client.keepSize("w1:p1");
+    expect(releases()).toHaveLength(2);
   } finally {
     client.close();
   }
@@ -595,6 +693,65 @@ it("watches a pane it let go of only on a server that can, again after a reconne
   expect(ended).toEqual(["w1:p1", "w1:p2"]);
   expect(client.watch("w1:p2", 80, 24)).toBe(false);
   client.close();
+});
+
+it("lets a pane replace a background reconnect's attach with a watch before replay", () => {
+  const client = new HerdrSocket("ws://test/ws");
+  client.connect();
+  let socket = FakeSocket.last;
+  socket.open();
+  socket.receive(snapshot(["watch"]));
+  client.attach("w1:p1", 140, 40);
+  client.attach("w1:p2", 100, 30);
+  const off = client.onBeforeReplay(() => {
+    client.detach("w1:p1");
+    client.watch("w1:p1", 140, 40);
+  });
+  try {
+    socket.disconnect();
+    client.connect();
+    socket = FakeSocket.last;
+    socket.open();
+    expect(socket.sent.filter((frame) => frame.type === "attach").map((frame) => frame.pane_id)).toEqual(["w1:p2"]);
+    expect(socket.sent.filter((frame) => frame.type === "watch")).toEqual([]);
+    socket.receive(snapshot(["watch"]));
+    expect(socket.sent.filter((frame) => frame.type === "watch")).toEqual([
+      { type: "watch", pane_id: "w1:p1", cols: 140, rows: 40 },
+    ]);
+    client.resize("w1:p1", 80, 24, true);
+    expect(socket.sent.filter((frame) => frame.type === "resize")).toEqual([]);
+    off();
+    client.unwatch("w1:p1");
+    client.attach("w1:p1", 140, 40);
+    socket.disconnect();
+    client.connect();
+    socket = FakeSocket.last;
+    socket.open();
+    expect(socket.sent.filter((frame) => frame.type === "attach").map((frame) => frame.pane_id)).toEqual(["w1:p2", "w1:p1"]);
+  } finally { off(); client.close(); }
+});
+
+it("discovers watch support anew before each connection's attach replay", () => {
+  const client = new HerdrSocket("ws://test/ws");
+  const capabilities: boolean[] = [];
+  client.onBeforeReplay(() => capabilities.push(client.canWatch()));
+  try {
+    client.connect();
+    let socket = FakeSocket.last;
+    socket.open();
+    expect(client.canWatch()).toBe(true);
+    socket.receive(snapshot([]));
+    expect(client.canWatch()).toBe(false);
+    expect(client.watch("w1:p1", 100, 30)).toBe(false);
+    socket.disconnect();
+    client.connect();
+    socket = FakeSocket.last;
+    socket.open();
+    expect(client.canWatch()).toBe(true);
+    socket.receive(snapshot(["watch"]));
+    expect(client.canWatch()).toBe(true);
+    expect(capabilities).toEqual([true, true]);
+  } finally { client.close(); }
 });
 
 it("waits for capabilities when output precedes snapshot, and supports old bridges", () => {
@@ -784,6 +941,111 @@ it("reconnects at once when the page wakes instead of waiting out the backoff, a
   client.close();
 });
 
+it("backs off repeated short-lived opens, even when each receives a snapshot and terminal readiness", () => {
+  jest.useFakeTimers();
+  const { client, socket } = liveClient([]);
+  try {
+    let current = socket;
+    for (const delay of [250, 500, 1000, 2000, 4000, 5000, 5000]) {
+      current.disconnect();
+      expect(client.state).toBe("waiting");
+      jest.advanceTimersByTime(delay - 1);
+      expect(FakeSocket.last).toBe(current);
+      jest.advanceTimersByTime(1);
+      const next = FakeSocket.last;
+      expect(next).not.toBe(current);
+      next.open();
+      next.receive(snapshot(["input-ready"]));
+      next.receive({ type: "input-ready", pane_id: "w1:p1" });
+      expect(client.canInput("w1:p1")).toBe(true);
+      expect(next.sent.filter((frame) => frame.type === "attach")).toHaveLength(1);
+      current = next;
+    }
+  } finally {
+    client.close();
+    jest.useRealTimers();
+  }
+});
+
+it("starts the retry delay over only after an open connection has stayed up for 10s", () => {
+  jest.useFakeTimers();
+  const { client, socket } = liveClient([]);
+  try {
+    socket.disconnect();
+    jest.advanceTimersByTime(250);
+    const short = FakeSocket.last;
+    short.open();
+    jest.advanceTimersByTime(9_999);
+    short.disconnect();
+    jest.advanceTimersByTime(499);
+    expect(FakeSocket.last).toBe(short);
+    jest.advanceTimersByTime(1);
+    const stable = FakeSocket.last;
+    expect(stable).not.toBe(short);
+    stable.open();
+    jest.advanceTimersByTime(10_000);
+    stable.disconnect();
+    jest.advanceTimersByTime(249);
+    expect(FakeSocket.last).toBe(stable);
+    jest.advanceTimersByTime(1);
+    expect(FakeSocket.last).not.toBe(stable);
+  } finally {
+    client.close();
+    jest.useRealTimers();
+  }
+});
+
+it("ignores a late open from an abandoned attempt instead of replaying on the replacement", () => {
+  jest.useFakeTimers();
+  const client = new HerdrSocket("ws://test/ws");
+  try {
+    client.attach("w1:p1", 100, 30);
+    client.connect();
+    const abandoned = FakeSocket.last;
+    jest.advanceTimersByTime(8_000);
+    jest.advanceTimersByTime(250);
+    const replacement = FakeSocket.last;
+    expect(replacement).not.toBe(abandoned);
+    replacement.open();
+    const sent = [...replacement.sent];
+    abandoned.open();
+    expect(replacement.sent).toEqual(sent);
+    expect(client.state).toBe("open");
+    replacement.disconnect();
+    jest.advanceTimersByTime(499);
+    expect(FakeSocket.last).toBe(replacement);
+    jest.advanceTimersByTime(1);
+    expect(FakeSocket.last).not.toBe(replacement);
+  } finally {
+    client.close();
+    jest.useRealTimers();
+  }
+});
+
+it("still bypasses a flapping connection's backoff on wake and resets its next retry", () => {
+  jest.useFakeTimers();
+  const { client, socket } = liveClient([]);
+  try {
+    socket.disconnect();
+    jest.advanceTimersByTime(250);
+    const second = FakeSocket.last;
+    second.open();
+    second.disconnect();
+    client.wake();
+    const woken = FakeSocket.last;
+    expect(woken).not.toBe(second);
+    woken.open();
+    woken.disconnect();
+    jest.advanceTimersByTime(249);
+    expect(FakeSocket.last).toBe(woken);
+    jest.advanceTimersByTime(1);
+    expect(FakeSocket.last).not.toBe(woken);
+  } finally {
+    client.close();
+    jest.useRealTimers();
+  }
+});
+
 it("does not wake a connection whose output stopped, nor one that was closed", () => {
   const client = new HerdrSocket("ws://test/ws");
   client.connect();
@@ -933,9 +1195,9 @@ it("lets a slow handshake connect: each attempt given up doubles the next deadli
     expect(second.readyState).toBe(FakeSocket.CONNECTING);
     second.open();
     expect(client.connected).toBe(true);
-    // an attempt that opened starts the deadline over at 8s
+    // Opening starts the connect deadline over at 8s, not the backoff: this open was brief.
     second.disconnect();
-    jest.advanceTimersByTime(250);
+    jest.advanceTimersByTime(500);
     const third = FakeSocket.last;
     expect(third).not.toBe(second);
     jest.advanceTimersByTime(8_000);

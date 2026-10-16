@@ -1,5 +1,5 @@
-/* The comment mode's toggle (CommentModeToggle.tsx), in the file viewer's header and in the chat beside Find; where it
-   sits is its host's (FileViewer.css, ChatFind.css), which also makes it the badge's positioned ancestor. On, the glyph
+/* The comment mode's toggle (CommentModeToggle.tsx), in the file viewer's header and at the chat's top right; where it
+   sits is its host's (FileViewer.css, ChatView.css), which also makes it the badge's positioned ancestor. On, the glyph
    carries the accent; the count is a badge on its corner. */
 .comment-mode-toggle[aria-pressed="true"] {
   background: var(--bg-hover);

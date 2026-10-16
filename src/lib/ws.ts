@@ -33,6 +33,8 @@ const SUBMIT_TIMEOUT_MS = 90_000;
  */
 const CONNECT_TIMEOUT_MS = 8_000;
 const CONNECT_TIMEOUT_MAX_MS = 30_000;
+/** A completed handshake alone is not recovery: short-lived opens must keep the retry backoff. */
+const STABLE_CONNECTION_MS = 10_000;
 /**
  * Liveness (feature "ping"): a socket can read OPEN while its TCP path is gone (a phone moved from
  * Wi-Fi to cellular, a NAT entry expired while it slept) and no close event comes for minutes. The
@@ -79,7 +81,7 @@ interface AttachState {
   rows: number;
   /** Chat or a hidden pane: attaches (a reconnect's too) leave the shared pty's size alone */
   keepSize: boolean;
-  /** Hiding changes reconnect policy, but this connection may still owe a grid release. */
+  /** This connection has sized the terminal since its last grid release. */
   releaseSizeOwed: boolean;
 }
 
@@ -99,6 +101,10 @@ export interface SubmitOptions {
   clearDraft?: string;
   /** an immediate send after a refusal that showed the box (ClientMessage `send_anyway`) */
   sendAnyway?: boolean;
+  /** a held copy's stable id for an immediate chat resend across connections (ClientMessage `resend_id`); not with `sendAnyway` */
+  resendId?: string;
+  /** the resend's attempt generation (ClientMessage `resend_generation`, 0 by default) */
+  generation?: number;
 }
 
 /**
@@ -119,6 +125,7 @@ export class HerdrSocket {
   private readonly url: string;
   private readonly handlers = new Set<Handler>();
   private readonly disconnectHandlers = new Set<() => void>();
+  private readonly beforeReplayHandlers = new Set<() => void>();
   private snapshotKnown = false;
   private readonly outputSeen = new Set<string>();
   private readonly inputReady = new Set<string>();
@@ -130,6 +137,8 @@ export class HerdrSocket {
    * after letting go of it) asks again; only the chat taking its interest back removes it. */
   private readonly conversationWanted = new Set<string>();
   private retries = 0;
+  /** When this connection opened; a brief open must not restart a flapping connection's retries. */
+  private openedAt: number | null = null;
   private reconnectTimer: number | null = null;
   /** the deadline of the attempt still in CONNECTING */
   private connectTimer: number | null = null;
@@ -288,14 +297,13 @@ export class HerdrSocket {
     }, Math.min(CONNECT_TIMEOUT_MAX_MS, CONNECT_TIMEOUT_MS * 2 ** this.connectTimeouts));
 
     socket.addEventListener("open", () => {
-      if (this.socket === socket) {
-        this.clearConnectTimer();
-        this.connectTimeouts = 0;
-        this.connectionState = "open";
-        this.lastFrameAt = Date.now();
-        this.watchIdle(socket);
-      }
-      this.retries = 0;
+      if (this.socket !== socket) return;
+      this.clearConnectTimer();
+      this.connectTimeouts = 0;
+      this.connectionState = "open";
+      this.openedAt = Date.now();
+      this.lastFrameAt = this.openedAt;
+      this.watchIdle(socket);
       // always send the role, never only when non-default: a user can flip the role
       // while disconnected (setMode stores it without sending), so without this frame
       // the reconnect would leave the server on the stale role and no ack would ever
@@ -303,6 +311,8 @@ export class HerdrSocket {
       this.rawSend({ type: "role", mode: this.mode });
       // a new connection is a new client to the server: it has to hear again whether the page is in use
       if (this.presence !== null) this.rawSend({ type: "presence", active: this.presence });
+      // Mounted panes decide whether a new connection may acquire an attach before any replay.
+      for (const handler of this.beforeReplayHandlers) handler();
       for (const [paneId, state] of this.attached) {
         state.releaseSizeOwed = !state.keepSize;
         this.rawSend({ type: "attach", pane_id: paneId, cols: state.cols, rows: state.rows, flow_control: "ack", ...(state.keepSize ? { keep_size: true } : {}) });
@@ -426,6 +436,8 @@ export class HerdrSocket {
 
   /** Drops the current connection: its submits settle as disconnected and the disconnect handlers run. */
   private endConnection(): void {
+    if (this.openedAt !== null && Date.now() - this.openedAt >= STABLE_CONNECTION_MS) this.retries = 0;
+    this.openedAt = null;
     this.socket = null;
     this.clearConnectTimer();
     this.clearLiveness();
@@ -650,6 +662,11 @@ export class HerdrSocket {
     return () => { this.disconnectHandlers.delete(handler); };
   }
 
+  onBeforeReplay(handler: () => void): () => void {
+    this.beforeReplayHandlers.add(handler);
+    return () => { this.beforeReplayHandlers.delete(handler); };
+  }
+
   attach(paneId: string, cols: number, rows: number, keepSize = false): void {
     this.outputSeen.delete(paneId);
     this.inputReady.delete(paneId);
@@ -708,11 +725,16 @@ export class HerdrSocket {
    * a reconnect's snapshot. False when the server cannot (no "watch" in its snapshot): the tab stays paused.
    */
   watch(paneId: string, cols: number, rows: number): boolean {
-    if (this.snapshotKnown && !this.features.has("watch")) return false;
+    if (!this.canWatch()) return false;
     this.watched.set(paneId, { cols, rows });
     // before the snapshot, the snapshot handler sends it
     if (this.connected && this.snapshotKnown) this.rawSend({ type: "watch", pane_id: paneId, cols, rows });
     return true;
+  }
+
+  /** Before the snapshot, a watch waits for capability discovery rather than acquiring an attach. */
+  canWatch(): boolean {
+    return !this.snapshotKnown || this.features.has("watch");
   }
 
   unwatch(paneId: string): void {
@@ -726,7 +748,7 @@ export class HerdrSocket {
     if (!state) return;
     // skip only redundant resizes of OUR OWN geometry: a force resize re-asserts
     // it after another client resized the shared pty (see PaneTerminal refit)
-    if (!force && state.cols === cols && state.rows === rows) return;
+    if (!force && !state.keepSize && state.cols === cols && state.rows === rows) return;
     state.cols = cols;
     state.rows = rows;
     state.keepSize = false;
@@ -746,14 +768,17 @@ export class HerdrSocket {
     return true;
   }
 
-  /** The chat lens covers the grid again: a reconnect attaches without resizing, until the next resize. */
-  keepSize(paneId: string): void {
-    const state = this.attached.get(paneId);
-    if (state) state.keepSize = true;
+  /** Keep the pane's size on reconnect; release its grid only when the terminal stops showing. */
+  keepSize(paneId: string, releaseGrid = true): void {
+    if (releaseGrid) this.releaseSize(paneId);
+    else {
+      const state = this.attached.get(paneId);
+      if (state) state.keepSize = true;
+    }
   }
 
   /**
-   * keepSize, for the chat lens covering a terminal this tab sized: the server hands the pty to a
+   * A terminal this tab sized is no longer showing: the server hands the pty to a
    * terminal still showing on another device (#472). Not replayed: a reconnect attaches with keep_size.
    */
   releaseSize(paneId: string): void {
@@ -793,9 +818,10 @@ export class HerdrSocket {
     return this.canQueueMessages() && this.features.has("pending-hold");
   }
 
-  sendInput(paneId: string, text: string): boolean {
+  /** `stop`: the composer's Stop, a lone ESC the bridge keeps ahead of the next message. */
+  sendInput(paneId: string, text: string, stop = false): boolean {
     if (!this.canInput(paneId)) return false;
-    try { this.rawSend({ type: "input", pane_id: paneId, text }); return true; } catch { return false; }
+    try { this.rawSend(stop ? { type: "input", pane_id: paneId, text, stop: true } : { type: "input", pane_id: paneId, text }); return true; } catch { return false; }
   }
 
   /**
@@ -807,8 +833,8 @@ export class HerdrSocket {
    * as written, `payload` the same shaped for the pane's paste mode. null, sending
    * nothing, when offline.
    */
-  submit(paneId: string, text: string, payload: string, { delivery = "immediate", agentOnly = false, clearDraft, sendAnyway = false }: SubmitOptions = {}): Promise<SubmitResult> | null {
-    return this.sendMessage(paneId, text, payload, false, delivery, agentOnly, clearDraft, sendAnyway);
+  submit(paneId: string, text: string, payload: string, { delivery = "immediate", agentOnly = false, clearDraft, sendAnyway = false, resendId, generation }: SubmitOptions = {}): Promise<SubmitResult> | null {
+    return this.sendMessage(paneId, text, payload, false, delivery, agentOnly, clearDraft, sendAnyway, resendId, generation);
   }
 
   /**
@@ -821,9 +847,10 @@ export class HerdrSocket {
   }
 
   private sendMessage(paneId: string, text: string, payload: string, typed: boolean, delivery: SubmitDelivery, agentOnly: boolean, clearDraft?: string,
-    sendAnyway = false): Promise<SubmitResult> | null {
+    sendAnyway = false, resendId?: string, generation?: number): Promise<SubmitResult> | null {
     const socket = this.socket;
     if (!this.connected || socket === null || this.mode === "observe") return null;
+    if (resendId !== undefined && sendAnyway) return Promise.resolve({ ok: false, code: "invalid_delivery", message: "Use a held-copy resend id only for an immediate chat message", typed: false });
     return (async (): Promise<SubmitResult> => {
       await Promise.race([this.snapshotSeen, new Promise((resolve) => window.setTimeout(resolve, SNAPSHOT_WAIT_MS))]);
       // a liveness probe in flight is waited out: nothing is sent on a socket that may be dead
@@ -843,12 +870,13 @@ export class HerdrSocket {
       const id = this.nextSubmit++;
       return this.submitRequest({ type: "submit", id, pane_id: paneId, text, payload, ...(typed ? { typed: true } : {}),
         ...(delivery !== "immediate" ? { delivery } : {}), ...(agentOnly ? { agent_only: true } : {}),
-        ...(clearDraft !== undefined ? { clear_draft: clearDraft } : {}), ...(sendAnyway ? { send_anyway: true as const } : {}) });
+        ...(clearDraft !== undefined ? { clear_draft: clearDraft } : {}), ...(sendAnyway ? { send_anyway: true as const } : {}),
+        ...(resendId !== undefined ? { resend_id: resendId, resend_generation: generation ?? 0 } : {}) });
     })();
   }
 
   /** Explicitly steer or discard one server-owned pending item. Never queued or replayed. */
-  pendingAction(paneId: string, pendingId: string, action: "steer" | "discard"): Promise<SubmitResult> | null {
+  pendingAction(paneId: string, pendingId: string, action: "steer" | "discard", generation?: number): Promise<SubmitResult> | null {
     const socket = this.socket;
     if (!this.connected || socket === null || this.mode === "observe") return null;
     return (async (): Promise<SubmitResult> => {
@@ -856,7 +884,8 @@ export class HerdrSocket {
       if (!(await this.probeSettled(socket))) return DISCONNECTED;
       if (this.mode === "observe") return { ok: false, code: "read_only", message: "Observe connections cannot change pending messages.", typed: false };
       if (!this.canQueueMessages()) return { ok: false, code: "pending_input_unsupported", message: "Update this PC to manage pending messages.", typed: false };
-      return this.submitRequest({ type: "pending-action", id: this.nextSubmit++, pane_id: paneId, pending_id: pendingId, action });
+      return this.submitRequest({ type: "pending-action", id: this.nextSubmit++, pane_id: paneId, pending_id: pendingId, action,
+        ...(generation !== undefined ? { resend_generation: generation } : {}) });
     })();
   }
 
@@ -952,5 +981,6 @@ export class HerdrSocket {
     this.settleSubmits(DISCONNECTED);
     this.handlers.clear();
     this.disconnectHandlers.clear();
+    this.beforeReplayHandlers.clear();
   }
 }

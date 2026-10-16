@@ -14,7 +14,7 @@ import {
   type ReactNode,
 } from "react";
 import { flushSync } from "react-dom";
-import { ArrowUp, FileText, Folder, FolderGit2, GitBranch, MessageSquare, Minimize2, Plus, Square, TriangleAlert, X } from "lucide-react";
+import { ArrowUp, FileText, Folder, FolderGit2, GitBranch, LoaderCircle, MessageSquare, Minimize2, Package, Plus, Square, TriangleAlert, UserRound, X } from "lucide-react";
 
 import "./Composer.css";
 
@@ -24,6 +24,10 @@ import { composerDrafts } from "../lib/composerDraft.ts";
 import { paneStorageId } from "../../shared/machines.ts";
 import {
   agentDisplayLabel,
+  briefDescription,
+  COMMAND_GROUPS,
+  commandGroup,
+  commandsForTrigger,
   composerModelDraw,
   composerSendShown,
   composerStatusCompact,
@@ -36,6 +40,7 @@ import {
   insertLeadingMention,
   MAX_COMPOSER_CHARS,
   rankSlashCommands,
+  slashCommandReplacement,
   submitNote,
   terminalOnlyCommand,
 } from "../lib/compose.ts";
@@ -111,6 +116,8 @@ export interface ComposerProps {
 }
 
 const UPLOADS_AT_ONCE = 3;
+/** files one paste, pick or drop takes; the rest are left out with a note */
+const ATTACH_LIMIT = 100;
 /**
  * Any file can be attached (an icon, a PDF, a log): the server stores it beside the pane
  * and the message mentions its path. These image types also get a thumbnail.
@@ -125,7 +132,8 @@ const COMPOSER_HEIGHT_STEP = 24;
 const RESIZE_SLACK = { mouse: 3, touch: 10 } as const;
 /** Two taps on the grip this close return the box to its automatic height (iOS may send no dblclick). */
 const DOUBLE_TAP_MS = 350;
-const COMMAND_SOURCES = ["builtin", "user", "project", "skill", "plugin"] as const;
+/** How long a Send tapped mid-composition waits for the keyboard to commit the word (as in TerminalInput). */
+const COMMIT_WAIT_MS = 300;
 export const SOURCE_LABEL: Record<SlashCommand["source"], string> = {
   builtin: "Built in",
   user: "User",
@@ -459,8 +467,8 @@ export function Composer({
   attachmentsRef.current = attachments;
   textRef.current = text;
   caretRef.current = caret;
-  // Codex names its skills with `$`: only there does a `$` open a menu
-  const trigger = useMemo(() => activeTrigger(text, caret, { skills: agent === "codex" }), [agent, caret, text]);
+  // Codex uses `$name`; omo also accepts `$skill:name` anywhere a word starts.
+  const trigger = useMemo(() => activeTrigger(text, caret, { skills: agent === "codex" || agent === "omo", namespaced: agent === "omo" }), [agent, caret, text]);
   /** a command the agent runs but the chat cannot finish, while it is what the box holds */
   const terminalOnly = useMemo(() => terminalOnlyCommand(agent, text), [agent, text]);
   // a note from the last send comes first; then what the comments have to say
@@ -585,7 +593,9 @@ export function Composer({
     setAutoHeight((current) => current === height ? current : height);
   }, [manualHeight]);
 
-  useLayoutEffect(sizeTextarea, [sizeTextarea, text, placeholder, boxWidth, facesLoaded, hasCommentBar]);
+  // A suggestion or prompt hint changes only the placeholder of a populated draft.
+  // Collapsing it to measure unused placeholder text can scroll iOS's focused caret.
+  useLayoutEffect(sizeTextarea, [sizeTextarea, text, text.length === 0 ? placeholder : null, boxWidth, facesLoaded, hasCommentBar]);
 
   // SettingsProvider writes --chat-scale in a passive effect. Measure on the next frame,
   // after that CSS is applied, so a draft rewraps without waiting for another keystroke.
@@ -608,9 +618,9 @@ export function Composer({
    * - The model label: measured with everything drawn, then drawn as composerModelDraw says
    *   (the effort word steps out first); measured again without it, a name cut to its floor steps
    *   out whole with its mark (composerLabelDraw), so the ring after it is drawn whole. Stepping
-   *   out is CSS on the mark's attribute, so the label is still read. It runs after every render
-   *   of the composer, which is why the context ring's open number is this component's state:
-   *   opening it takes room from the label without changing the card's size.
+   *   out is CSS on the mark's attribute, so the label is still read. Drawn content changes fit
+   *   the row again: opening the context number takes room from the label without changing
+   *   the card's size.
    * - The sentence is never cut. Where it does not fit beside the model it wraps to a line of its
    *   own (CSS); there it is marked, so it takes the whole line and drops the dot that separated
    *   it from the model. The sentence alone wraps: the rest stays one row (.composer-status-meta),
@@ -619,38 +629,54 @@ export function Composer({
   const fitStatus = useCallback((): void => {
     const status = statusRef.current;
     if (!status) return;
-    status.removeAttribute("data-model");
-    status.removeAttribute("data-hint-alone");
-    status.removeAttribute("data-meta-empty");
-    const clipped = (selector: string): boolean => {
-      const item = status.querySelector<HTMLElement>(selector);
-      return item !== null && item.scrollWidth > item.clientWidth;
-    };
-    const first = composerModelDraw({
-      modelClipped: clipped(".composer-model"),
-      effortClipped: clipped(".composer-reasoning"),
-    });
-    if (first !== "full") status.setAttribute("data-model", first);
-    // with the level stepped out the row is laid out again: a name still cut to its floor (its
-    // min-width, in px once computed) takes the mark and the hairlines out with it
-    const model = status.querySelector<HTMLElement>(".composer-model");
-    const draw = model === null ? first : composerLabelDraw(first, {
-      modelClipped: model.scrollWidth > model.clientWidth,
-      modelWidth: model.clientWidth,
-      modelFloor: parseFloat(getComputedStyle(model).minWidth) || 0,
-    });
-    if (draw !== first) status.setAttribute("data-model", draw);
-    const hint = hintRef.current;
-    if (!hint) return;
-    // with the label stepped out and no ring, the row beside the sentence draws nothing: it gives
-    // up its box, or it would keep an empty line over the sentence
-    const meta = status.querySelector<HTMLElement>(".composer-status-meta")?.getBoundingClientRect();
-    if (!meta || meta.width <= 1) status.setAttribute("data-meta-empty", "");
-    const line = hint.getBoundingClientRect();
-    const beside = meta !== undefined && meta.width > 1 && meta.bottom > line.top && meta.top < line.top + line.height / 2 && meta.right <= line.left + 1;
-    if (!beside) status.setAttribute("data-hint-alone", "");
+    // Fitting temporarily exposes hidden labels and unwraps hints. Keep those measurement
+    // layouts from moving the focused textarea before the final attributes are restored.
+    const surface = surfaceRef.current;
+    const rows = surface?.style.gridTemplateRows ?? "";
+    if (surface) surface.style.gridTemplateRows = getComputedStyle(surface).gridTemplateRows;
+    try {
+      status.removeAttribute("data-model");
+      status.removeAttribute("data-hint-alone");
+      status.removeAttribute("data-meta-empty");
+      const clipped = (selector: string): boolean => {
+        const item = status.querySelector<HTMLElement>(selector);
+        return item !== null && item.scrollWidth > item.clientWidth;
+      };
+      const first = composerModelDraw({
+        modelClipped: clipped(".composer-model"),
+        effortClipped: clipped(".composer-reasoning"),
+      });
+      if (first !== "full") status.setAttribute("data-model", first);
+      // with the level stepped out the row is laid out again: a name still cut to its floor (its
+      // min-width, in px once computed) takes the mark and the hairlines out with it
+      const model = status.querySelector<HTMLElement>(".composer-model");
+      const draw = model === null ? first : composerLabelDraw(first, {
+        modelClipped: model.scrollWidth > model.clientWidth,
+        modelWidth: model.clientWidth,
+        modelFloor: parseFloat(getComputedStyle(model).minWidth) || 0,
+      });
+      if (draw !== first) status.setAttribute("data-model", draw);
+      const hint = hintRef.current;
+      if (!hint) return;
+      // with the label stepped out and no ring, the row beside the sentence draws nothing: it gives
+      // up its box, or it would keep an empty line over the sentence
+      const meta = status.querySelector<HTMLElement>(".composer-status-meta")?.getBoundingClientRect();
+      if (!meta || meta.width <= 1) status.setAttribute("data-meta-empty", "");
+      const line = hint.getBoundingClientRect();
+      const beside = meta !== undefined && meta.width > 1 && meta.bottom > line.top && meta.top < line.top + line.height / 2 && meta.right <= line.left + 1;
+      if (!beside) status.setAttribute("data-hint-alone", "");
+    } finally {
+      if (surface) surface.style.gridTemplateRows = rows;
+    }
   }, []);
-  useLayoutEffect(fitStatus);
+
+  // SettingsProvider applies typography in a passive effect. Fit after those CSS tokens land,
+  // even when the card's total width stays the same, without fitting on streaming renders.
+  useEffect(() => {
+    const frame = requestAnimationFrame(fitStatus);
+    return () => cancelAnimationFrame(frame);
+  }, [fitStatus, settings.uiFontSize,
+    settings.chatFontSize, settings.chatFontFamily, settings.density]);
 
   // the card's own width decides, not the window's: a sidebar or a narrow lane shrinks the card
   // in a wide window. Measured before the first paint, so a phone never draws the words first.
@@ -660,9 +686,13 @@ export function Composer({
     const surface = surfaceRef.current;
     if (!surface) return;
     let frame = 0;
-    setCardWidth(Math.round(surface.getBoundingClientRect().width));
+    let width = Math.round(surface.getBoundingClientRect().width);
+    setCardWidth(width);
     const observer = new ResizeObserver(() => {
-      setCardWidth(Math.round(surface.getBoundingClientRect().width));
+      const next = Math.round(surface.getBoundingClientRect().width);
+      if (next === width) return;
+      width = next;
+      setCardWidth(width);
       cancelAnimationFrame(frame);
       frame = requestAnimationFrame(fitStatus);
     });
@@ -745,16 +775,16 @@ export function Composer({
 
   const filteredCommands = useMemo(
     () => (trigger?.kind === "slash"
-      ? rankSlashCommands(commands.filter((command) => (command.trigger ?? "/") === (trigger.prefix ?? "/")), trigger.query, slashUsage)
+      ? rankSlashCommands(commandsForTrigger(commands, agent, trigger), trigger.query, slashUsage, trigger.start > 0 && text[trigger.start - 1] !== "\n")
       : []),
-    [commands, slashUsage, trigger],
+    [agent, commands, slashUsage, text, trigger],
   );
   // a typed query lists the matches in rank order, whatever their source (a plugin command whose
   // word starts with it must not sit under a built-in that only has its letters scattered);
-  // the source then rides on each row. Only the bare `/` lists by group.
+  // the source then rides on each row. Only a bare `/` or `$` lists by group.
   const groupedBySource = trigger?.kind === "slash" && trigger.query === "";
   const orderedCommands = useMemo(
-    () => groupedBySource ? COMMAND_SOURCES.flatMap((source) => filteredCommands.filter((command) => command.source === source)) : filteredCommands,
+    () => groupedBySource ? COMMAND_GROUPS.flatMap((group) => filteredCommands.filter((command) => commandGroup(command) === group)) : filteredCommands,
     [filteredCommands, groupedBySource],
   );
   const choices: readonly (SlashCommand | string)[] = trigger?.kind === "slash" ? orderedCommands : files;
@@ -889,7 +919,7 @@ export function Composer({
 
   const selectCompletion = useCallback(
     (choice: SlashCommand | string, currentTrigger: ActiveTrigger) => {
-      const replacement = currentTrigger.kind === "slash" ? `${currentTrigger.prefix ?? "/"}${(choice as SlashCommand).name} ` : `@${choice as string} `;
+      const replacement = currentTrigger.kind === "slash" ? slashCommandReplacement(choice as SlashCommand, agent, currentTrigger) : `@${choice as string} `;
       const completed = applyCompletion(text, currentTrigger, replacement);
       setTextAndCaret(completed.text, completed.caret);
       setMenuDismissed(true);
@@ -906,7 +936,7 @@ export function Composer({
         });
       }
     },
-    [setTextAndCaret, text],
+    [agent, setTextAndCaret, text],
   );
 
   const pumpUploads = useCallback(() => {
@@ -940,12 +970,12 @@ export function Composer({
 
   const uploadImages = useCallback(
     (incoming: readonly File[]) => {
-      const images = incoming.slice(0, settings.attachLimit);
+      const images = incoming.slice(0, ATTACH_LIMIT);
       if (images.length === 0) return;
 
       // the files left out of this pick: told now, and again beside an upload error of this batch
       const leftOut = images.length < incoming.length
-        ? t("Only the first {count} of {total} files were taken. Settings → Chat → Files at once sets how many one paste, pick or drop takes.", { count: images.length, total: incoming.length })
+        ? t("Only the first {count} of {total} files were taken.", { count: images.length, total: incoming.length })
         : null;
       const added = images.map<Attachment>((file) => {
         const uploadFile = normalizeComposerImageFile(file);
@@ -965,7 +995,7 @@ export function Composer({
       uploadQueue.current.push(...added);
       pumpUploads();
     },
-    [pumpUploads, settings.attachLimit, t],
+    [pumpUploads, t],
   );
 
   const removeAttachment = useCallback((attachment: Attachment) => {
@@ -989,17 +1019,17 @@ export function Composer({
   }, [placeWaitingMentions]);
 
   /** `clearDraft`: the terminal draft a DraftRefusal named, which the user asked to clear and send over;
-   * `sendAnyway`: the user saw the box a DraftRefusal showed and sends over it */
-  const send = useCallback((clearDraft?: string, sendAnyway = false) => {
-    if (composingRef.current) return;
-    if (!connected || uploading || roomless || sending || !outgoing.sendable) return;
+   * `sendAnyway`: the user saw the box a DraftRefusal showed and sends over it. False: nothing went out */
+  const send = useCallback((clearDraft?: string, sendAnyway = false): boolean => {
+    if (composingRef.current) return false;
+    if (!connected || uploading || roomless || sending || !outgoing.sendable) return false;
     // a comment still being written in this pane's chat would not go with the message: its form is
     // shown and takes the focus instead (inside the press, so a phone raises its keyboard there). This pane's: the
     // chat view in its stack; a dialog anywhere is modal, so it is the one being written in
     const unsaved = changedField(surfaceRef.current?.closest(".terminal-stack") ?? null);
     if (unsaved !== null) {
       revealField(unsaved);
-      return;
+      return false;
     }
     const sent = text;
     const sentAttachments = attachments;
@@ -1021,18 +1051,81 @@ export function Composer({
       for (const attachment of sentAttachments) { URL.revokeObjectURL(attachment.previewUrl); placedMentions.current.delete(attachment.id); }
       setAttachments((current) => current.filter((attachment) => !sentAttachments.includes(attachment)));
     };
-    if (!composerDrafts.begin(draftKey, sent)) return;
+    if (!composerDrafts.begin(draftKey, sent)) return false;
     // a polish landing before the acknowledgement would count as an edit and keep the sent message here
     dictation.forget();
     try {
       const result = onSend(sent, { comments: sentComments, ...(clearDraft !== undefined ? { clearDraft } : {}), ...(sendAnyway ? { sendAnyway } : {}) });
-      if (!(result instanceof Promise)) { settle(result); composerDrafts.end(draftKey); return; }
+      if (!(result instanceof Promise)) { settle(result); composerDrafts.end(draftKey); return true; }
       void result.then(settle).catch(() => { if (mounted.current) setNote(t("Not confirmed. Check the terminal before sending again.")); }).finally(() => composerDrafts.end(draftKey));
     } catch {
       composerDrafts.end(draftKey);
       if (mounted.current) setNote(t("Not confirmed. Check the terminal before sending again."));
     }
+    return true;
   }, [attachments, commentOwner, connected, dictation.forget, draftKey, onSend, outgoing, roomless, sending, text, uploading]);
+  const sendRef = useRef(send);
+  sendRef.current = send;
+  const connectedRef = useRef(connected);
+  connectedRef.current = connected;
+
+  // A Send tapped while the keyboard still composes the last word (Gboard composes every word,
+  // CJK IMEs an open syllable) finishes that word and sends once it commits. The button keeps
+  // focus (above), so nothing in the tap commits the word: a blur does (Chrome ends the
+  // composition on a focus change and fires compositionend at once), and the refocus inside the
+  // same gesture keeps the keyboard up. A keyboard that still does not commit by the tap's
+  // deadline gets the tap withdrawn with a note, so a later commit never sends on its own.
+  const commitWait = useRef<{ timer: ReturnType<typeof setTimeout> | null; deadline: number } | null>(null);
+  const clearCommitWait = useCallback(() => {
+    if (commitWait.current?.timer != null) clearTimeout(commitWait.current.timer);
+    commitWait.current = null;
+  }, []);
+  useEffect(() => clearCommitWait, [clearCommitWait]);
+  // a drop withdraws the tap: a quick reconnect inside the wait must not send it after all
+  useEffect(() => {
+    if (connected || commitWait.current === null) return;
+    clearCommitWait();
+    setNote(t("Not sent: the terminal is disconnected."));
+  }, [clearCommitWait, connected, t]);
+  const awaitCommit = useCallback((current: { timer: ReturnType<typeof setTimeout> | null; deadline: number }) => {
+    if (current.timer !== null) clearTimeout(current.timer);
+    current.timer = null;
+    const left = current.deadline - Date.now();
+    if (left <= 0) { commitWait.current = null; setNote(t("Finish the word, then send.")); return; }
+    setNote(t("Finishing the word…"));
+    current.timer = setTimeout(() => {
+      if (commitWait.current !== current) return;
+      commitWait.current = null;
+      setNote(t("Finish the word, then send."));
+    }, left);
+  }, [t]);
+  const sendTapped = useCallback(() => {
+    // only a tap on a live connection waits for the commit: the wait ends with that connection
+    if (!composingRef.current || !connected) { clearCommitWait(); send(); return; }
+    clearCommitWait();
+    const tapped = { timer: null, deadline: Date.now() + COMMIT_WAIT_MS };
+    commitWait.current = tapped;
+    const element = textareaRef.current;
+    if (element !== null && document.activeElement === element) {
+      element.blur();
+      element.focus({ preventScroll: true });
+    }
+    // committed inside the tap (Chrome, Gboard): compositionend already queued the send, no note
+    if (composingRef.current && commitWait.current === tapped) awaitCommit(tapped);
+  }, [awaitCommit, clearCommitWait, connected, send]);
+  /** The committed word's send, a tick after compositionend, for a tap still waiting. */
+  const sendCommitted = useCallback(() => {
+    const current = commitWait.current;
+    if (current === null) return;
+    // a new composition after the commit: wait out what is left of the tap's window, no more
+    if (composingRef.current) { awaitCommit(current); return; }
+    clearCommitWait();
+    setNote(null);
+    // a send that cannot go out (offline, uploading) says so instead of leaving the tap without a word
+    if (!sendRef.current() && textRef.current.trim().length > 0) {
+      setNote(connectedRef.current ? t("Not sent. Send it again.") : t("Not sent: the terminal is disconnected."));
+    }
+  }, [awaitCommit, clearCommitWait, t]);
 
   /** A quick reply follows the same delivery policy as Send, and leaves the box alone. */
   const sendQuick = useCallback((reply: string) => {
@@ -1145,7 +1238,7 @@ export function Composer({
   const shownStatus = paneStatus({ agent_status: agentStatus, ...(backgroundWait ? { background_wait: true as const } : {}) });
   const statusCompact = composerStatusCompact(cardWidth);
   // comments alone are a message too: Send takes them for the agent's next turn while it works
-  const sendShown = composerSendShown({ working: isWorking, text }) || (isWorking && goingComments > 0);
+  const sendShown = sending || composerSendShown({ working: isWorking, text }) || (isWorking && goingComments > 0);
   const hint = composerStatusHint({ uploading, connected, text, noRoom: roomless !== undefined });
   const model = metadata?.model ? modelLabel(metadata.model) : null;
   const modelShown = Boolean(metadata?.model || metadata?.reasoning_effort);
@@ -1159,9 +1252,15 @@ export function Composer({
     : hint === "no-room" ? t("No room for {file}: remove {count} characters", { file: roomless?.file.name ?? "", count: roomless?.missing ?? 0 })
     : hint === "near-limit" ? t("{count} characters left", { count: MAX_COMPOSER_CHARS - text.length })
     : t(hint === "uploading" ? "Uploading file…" : "Reconnecting… message held here, never queued");
-  /** the strip under the card: the folder and the branch the caller knows; none, or turned off, no strip */
-  const strip = settings.showComposerStrip ? composerStrip({ cwd, branch, repo: worktreeRepo }) : null;
+  /** the strip under the card: the folder and the branch the caller knows; none, or a phone's screen, no strip */
+  const strip = mobile ? null : composerStrip({ cwd, branch, repo: worktreeRepo });
   const worktree = worktreeRepo !== null;
+  // Fit only changes to drawn content. Streaming context usage is a fixed-size ring unless
+  // its number is open on desktop; transcript/status refreshes need no measurement layout.
+  useLayoutEffect(fitStatus, [fitStatus, agent, metadata?.model, metadata?.reasoning_effort,
+    metadata?.context?.window, contextShown && !mobile && metadata?.context ? contextLeftPercent(metadata.context) : null,
+    contextShown, mobile, usageCaption, usage?.problem, hintText, dictation.shown, backgroundTasks,
+    plan?.done, plan?.total, statusCompact, compactNow !== undefined, facesLoaded, t]);
   const menuId = `composer-menu-${paneId}`;
   // the arrow keys move the selection, not the focus (it stays in the box), so the browser does not scroll to it
   useEffect(() => {
@@ -1172,8 +1271,8 @@ export function Composer({
     <div className={`composer${notices ? " has-notices" : ""}`} role="group" aria-label={t("Message composer")} data-dictating={dictation.voice.state !== "idle" ? "" : undefined}>
       {greeting}
       {notices}
-      {/* no Tab key on a phone: the suggestion is a chip there that fills the box, unless Settings turns it off */}
-      {settings.showSuggestionChip && offered !== null && text === "" && (
+      {/* no Tab key on a phone: the suggestion can be a chip there that fills the box, when Settings asks for it */}
+      {settings.suggestionChip && offered !== null && text === "" && (
         <div className="composer-quick composer-suggestion-row">
           <button type="button" className="composer-quick-reply composer-suggestion" title={t("Use the suggestion")} onClick={() => setTextAndCaret(offered, offered.length)}>
             <span aria-hidden="true">↹ </span>{offered}
@@ -1243,8 +1342,16 @@ export function Composer({
           <div id={menuId} className="menu composer-menu" role="listbox" aria-label={t(trigger.kind === "slash" ? "Slash commands" : "Files")}>
             {trigger.kind === "slash" ? (
               (() => {
+                // omo's rows say what a command does in one sentence (the full text is the row's
+                // tooltip), and an omo skill's icon says whose it is: one that came with omo, or yours
+                const brief = agent === "omo";
+                const groupLabel = (group: ReturnType<typeof commandGroup>): string =>
+                  group === "skill-user" ? t("Your skills") : group === "skill-bundled" ? t("Built-in skills") : t(SOURCE_LABEL[group]);
                 const row = (command: SlashCommand, withSource: boolean) => {
                   const index = orderedCommands.indexOf(command);
+                  const description = brief ? briefDescription(command.description) : command.description;
+                  const owner = command.origin === undefined ? null : command.origin === "user" ? t("Your skill") : t("Built-in skill");
+                  const Owner = command.origin === "user" ? UserRound : Package;
                   return (
                     <button
                       id={`${menuId}-${index}`}
@@ -1253,22 +1360,27 @@ export function Composer({
                       className="menu-item"
                       role="option"
                       aria-selected={index === selectedIndex}
+                      data-brief={brief ? "" : undefined}
+                      data-origin={command.origin}
+                      title={brief && command.description.trim() !== "" ? command.description : undefined}
                       onMouseDown={(event) => event.preventDefault()}
                       onClick={() => selectCompletion(command, trigger)}
                     >
-                      <span className="menu-item-main">{command.trigger ?? "/"}{command.name}</span>
-                      <span className="menu-item-hint">{withSource ? `${t(SOURCE_LABEL[command.source])}${command.description ? " · " : ""}` : ""}{command.description}</span>
+                      {owner !== null && <Owner aria-hidden="true" />}
+                      <span className="menu-item-main">{agent === "omo" && trigger.prefix === "$" ? "$" : command.trigger ?? "/"}{command.name}</span>
+                      {owner !== null && <span className="visually-hidden">{owner}</span>}
+                      <span className="menu-item-hint">{withSource && owner === null ? `${t(SOURCE_LABEL[command.source])}${description ? " · " : ""}` : ""}{description}</span>
                     </button>
                   );
                 };
                 if (!groupedBySource) return <div className="composer-menu-group">{orderedCommands.map((command) => row(command, true))}</div>;
-                return COMMAND_SOURCES.map((source) => {
-                  const group = filteredCommands.filter((command) => command.source === source);
-                  if (group.length === 0) return null;
+                return COMMAND_GROUPS.map((group) => {
+                  const rows = orderedCommands.filter((command) => commandGroup(command) === group);
+                  if (rows.length === 0) return null;
                   return (
-                    <div className="composer-menu-group" key={source}>
-                      <div className="menu-heading">{t(SOURCE_LABEL[source])}</div>
-                      {group.map((command) => row(command, false))}
+                    <div className="composer-menu-group" key={group}>
+                      <div className="menu-heading">{groupLabel(group)}</div>
+                      {rows.map((command) => row(command, false))}
                     </div>
                   );
                 });
@@ -1349,6 +1461,13 @@ export function Composer({
         onCompositionStart={() => { composingRef.current = true; }}
         onCompositionEnd={() => {
           composingRef.current = false;
+          const waiting = commitWait.current;
+          if (waiting !== null) {
+            if (waiting.timer !== null) clearTimeout(waiting.timer);
+            waiting.timer = null;
+            // WebKit updates the value with an input event after compositionend: send the committed word
+            setTimeout(sendCommitted);
+          }
           // after the input that commits the candidate, which WebKit sends after compositionend, and
           // in a frame, after the caret of dictation held through the composition has landed
           setTimeout(() => requestAnimationFrame(() => { if (mounted.current) placeWaitingMentions(); }), 0);
@@ -1362,9 +1481,11 @@ export function Composer({
           aria-controls={menuOpen ? menuId : undefined}
           aria-expanded={menuOpen}
           aria-activedescendant={menuOpen ? `${menuId}-${selectedIndex}` : undefined}
-          // a message is prose: a phone keyboard keeps its suggestions, autocorrect and spell
-          // checking, and starts sentences with a capital
+          // most of what is typed to an agent is prose: a phone keyboard's corrections, suggestions
+          // and sentence capitals stay on here (the terminal input line keeps them off)
+          spellCheck
           autoCapitalize="sentences"
+          autoCorrect="on"
           // stays editable while the socket reconnects (sending waits for it): a phone's
           // dictation keyboard opens its own app and comes back, the socket may drop meanwhile,
           // and a disabled box would lose its focus and the dictated text with it
@@ -1473,11 +1594,15 @@ export function Composer({
               type="button"
               className="composer-action composer-send"
               aria-label={withComments(t("Send message"))}
-              title={withComments(t("Send message"))}
+              title={sending ? t("Sending…") : withComments(t("Send message"))}
+              aria-busy={sending || undefined}
               disabled={!connected || uploading || roomless !== undefined || sending || !outgoing.sendable}
-              onClick={() => send()}
+              // focus stays in the text box: leaving it closes the soft keyboard and moves the button
+              // out from under the tap before the click lands
+              onPointerDown={(event) => event.preventDefault()}
+              onClick={sendTapped}
             >
-              <ArrowUp aria-hidden="true" />
+              {sending ? <LoaderCircle className="composer-send-progress" aria-hidden="true" /> : <ArrowUp aria-hidden="true" />}
             </button>
           )}
         </div>

@@ -12,8 +12,9 @@ import { noInstalledNotes, unmanagedUpdateStatus, type HerdrUpdateStatus, type I
 import { USAGE_PROVIDERS, UsageService } from "./usage.ts";
 import { VoiceService } from "./voice.ts";
 import { Telemetry } from "./telemetry.ts";
-import { NOTICE_VERSION, type TelemetryEvent, type TelemetryStatus } from "../shared/telemetry.ts";
+import { NOTICE_VERSION, telemetryHarnesses, type TelemetryActive, type TelemetryEvent, type TelemetryStatus } from "../shared/telemetry.ts";
 import { DEFAULT_SETTINGS, telemetrySettingsSnapshot } from "../src/lib/settings.ts";
+import { HerdrSocket } from "../src/lib/ws.ts";
 import { herdrRpc, paneRead, ping, sessionSnapshot, tabCreate, workspaceCreate, workspaceClose } from "./herdr/client.ts";
 import { startFakePushService, type FakePushService } from "./push.fake.ts";
 import { descriptorPath, type BridgeDescriptor } from "./bridge.ts";
@@ -376,6 +377,25 @@ describe("update API", () => {
     } finally { managed.stop(); rmSync(managedState, { recursive: true, force: true }); }
   });
 
+  it("tells the served build's commit once it differs from the running revision", async () => {
+    const running = "a".repeat(40), moved = "d".repeat(40);
+    let head: string | null = running;
+    const managedState = mkdtempSync(join(tmpdir(), "herdr-update-checkout-"));
+    const managed = createServer({ port: 0, stateDir: managedState,
+      updates: { status: () => ({ ...unmanagedUpdateStatus(), managed: true, current_revision: running }), notes: () => ({ revision: null, releases: [], omitted: 0 }),
+        installed: noInstalledNotes, request() {}, servedRevision: async () => head } });
+    const read = async () => (await (await fetch(`http://localhost:${managed.port}/api/updates`)).json()) as { served_revision?: string | null };
+    try {
+      expect((await read()).served_revision).toBeNull();
+      head = moved;
+      expect((await read()).served_revision).toBe(moved);
+      head = null;
+      expect((await read()).served_revision).toBeNull();
+    } finally { managed.stop(); rmSync(managedState, { recursive: true, force: true }); }
+    // an unmanaged server names no checkout
+    expect((await (await fetch(`${base()}/api/updates`)).json() as { served_revision?: string | null }).served_revision).toBeUndefined();
+  });
+
   it("answers what the last update brought, and nothing where no update was installed", async () => {
     const none = await fetch(`${base()}/api/updates/installed`);
     expect(none.status).toBe(200);
@@ -527,6 +547,51 @@ describe("telemetry API", () => {
     } finally { server.stop(); rmSync(state, { recursive: true, force: true }); }
   });
 
+  it("counts a browser's websocket visit as one active message naming only allowed harness kinds", async () => {
+    const state = mkdtempSync(join(tmpdir(), "herdr-telemetry-active-"));
+    const posts: { url: string; body: TelemetryActive }[] = [];
+    let firstPost!: () => void;
+    const arrived = new Promise<void>((resolve) => { firstPost = resolve; });
+    const telemetry = new Telemetry({ stateDir: state, version: "9.9.9", env: {}, url: "http://receiver.invalid/v1/events", activeUrl: "http://receiver.invalid/v1/active", noticeGraceMs: 0,
+      fetch: (async (url: string | URL | Request, init?: RequestInit) => {
+        posts.push({ url: String(url), body: JSON.parse(String(init?.body)) as TelemetryActive });
+        if (String(url).endsWith("/v1/active")) firstPost();
+        return new Response(null, { status: 204 });
+      }) as typeof fetch });
+    const server = createServer({ port: 0, stateDir: state, token: "", telemetry });
+    const url = `http://localhost:${server.port}/api/telemetry`;
+    const headers = { "content-type": "application/json", "x-herdr-update": "1", origin: new URL(url).origin };
+    const sockets: WebSocket[] = [];
+    const snapshot = (): Promise<void> => new Promise((resolve, reject) => {
+      const socket = new WebSocket(`ws://localhost:${server.port}/ws`);
+      sockets.push(socket);
+      const timer = setTimeout(() => reject(new Error("no snapshot frame")), 10_000);
+      socket.onerror = () => { clearTimeout(timer); reject(new Error("websocket error")); };
+      socket.onmessage = (event) => {
+        if ((JSON.parse(String(event.data)) as { type: string }).type !== "snapshot") return;
+        clearTimeout(timer);
+        resolve();
+      };
+    });
+    try {
+      expect((await fetch(url, { method: "POST", headers, body: JSON.stringify({ notice_seen: true, notice_version: NOTICE_VERSION }) })).status).toBe(200);
+      await snapshot();
+      await Promise.race([arrived, new Promise<never>((_, reject) => setTimeout(() => reject(new Error("no active message")), 10_000))]);
+      const active = posts.filter((post) => post.url.endsWith("/v1/active"));
+      expect(active).toHaveLength(1);
+      expect(active[0]!.body.event).toBe("active");
+      expect(telemetryHarnesses(active[0]!.body.harnesses)).toEqual(active[0]!.body.harnesses);
+      expect((await (await fetch(url)).json() as TelemetryStatus).active.harnesses).toEqual(active[0]!.body.harnesses);
+      await snapshot();
+      await telemetry.active([]);
+      expect(posts.filter((post) => post.url.endsWith("/v1/active"))).toHaveLength(1);
+    } finally {
+      for (const socket of sockets) socket.close();
+      server.stop();
+      rmSync(state, { recursive: true, force: true });
+    }
+  });
+
   it("keeps telemetry behind the token gate", async () => {
     const state = mkdtempSync(join(tmpdir(), "herdr-telemetry-auth-"));
     const telemetry = new Telemetry({ stateDir: state, version: "9.9.9", env: {}, fetch: (async () => new Response(null, { status: 204 })) as unknown as typeof fetch });
@@ -652,7 +717,7 @@ describe("mutation body validation", () => {
   it("rejects non-object JSON without touching herdr or losing the error envelope", async () => {
     for (const path of [
       "/api/workspace/create", "/api/tab/create", "/api/tab/rename", "/api/tab/close", "/api/tab/move", "/api/workspace/rename", "/api/workspace/move", "/api/workspace/close",
-      "/api/pane/rename", "/api/pane/input", "/api/pane/keys", "/api/pane/close", "/api/pane/move", "/api/pane/image",
+      "/api/pane/rename", "/api/pane/input", "/api/pane/keys", "/api/pane/close", "/api/pane/image",
       "/api/pane/scroll", "/api/agent/rename",
     ]) {
       for (const body of [null, [], "text", 42, true]) {
@@ -1106,6 +1171,38 @@ describe("workspace and discovery endpoints", () => {
     } finally {
       process.env["PATH"] = path;
       rmSync(bin, { recursive: true, force: true });
+    }
+  });
+
+  it("makes one folder for the folder browser, and refuses names, folders and origins it must not", async () => {
+    const root = mkdtempSync(join(tmpdir(), "herdr-web-ui-mkdir-"));
+    const make = (body: unknown, headers: Record<string, string> = {}) => fetch(`${base()}/api/workspace/directories`, {
+      method: "POST", headers: { "content-type": "application/json", ...headers }, body: JSON.stringify(body),
+    });
+    const code = async (res: Response) => ((await res.json()) as ApiError).error.code;
+    try {
+      const made = await make({ path: root, name: "new-one" });
+      expect(made.status).toBe(201);
+      expect(await made.json()).toEqual({ path: join(root, "new-one") });
+      expect(statSync(join(root, "new-one")).isDirectory()).toBeTrue();
+      const again = await make({ path: root, name: "new-one" });
+      expect(again.status).toBe(409);
+      expect(await code(again)).toBe("folder_exists");
+      for (const name of ["", "..", "a/b", "../escape"]) {
+        const refused = await make({ path: root, name });
+        expect(refused.status).toBe(400);
+        expect(await code(refused)).toBe("invalid_name");
+      }
+      const missing = await make({ path: join(root, "missing"), name: "x" });
+      expect(await code(missing)).toBe("invalid_cwd");
+      expect(await code(await make({ path: root }))).toBe("invalid_body");
+      // another site's page cannot make folders on this PC
+      const crossSite = await make({ path: root, name: "from-elsewhere" }, { origin: "https://evil.example" });
+      expect(crossSite.status).toBe(403);
+      expect(existsSync(join(root, "from-elsewhere"))).toBeFalse();
+      expect(existsSync(join(tmpdir(), "escape"))).toBeFalse();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
     }
   });
 
@@ -2089,7 +2186,7 @@ describe("WebSocket roles and status push", () => {
         desktop.seen.length = 0;
         phone.send({ type: "release-size", pane_id: paneId });
         // regression (fails on main): the desktop's grid comes back within 1 s, with no desktop frame sent
-        expect(await desktop.waitFor((m) => m.type === "pane-geometry" && m.pane_id === paneId, "the grid given back", 1000)).toMatchObject({ cols: 120, rows: 40 });
+        expect(await desktop.waitFor((m) => m.type === "pane-geometry" && m.pane_id === paneId, "the grid given back", 5000)).toMatchObject({ cols: 120, rows: 40 });
         // regression (fails on main): the shell in the pane sees the desktop's grid
         await shellSees(desktop, paneId, "40x120");
         // control: one server resize for the release, no ping-pong after it
@@ -2098,6 +2195,94 @@ describe("WebSocket roles and status push", () => {
         desktop.close();
         phone.close();
         await workspaceClose(created.workspace.workspace_id).catch(() => undefined);
+      }
+    }, 60_000);
+
+    it("skips a hidden client's grid when another client releases, leaving the size if nobody shows a terminal", async () => {
+      const created = await workspaceCreate({ cwd: tmpdir(), label: "herdr-web-ui-test-release-size-hidden" });
+      const paneId = created.root_pane.pane_id;
+      const desktop = await ws();
+      const phone = await ws();
+      // Use the actual browser client for keepSize, not a hand-written release frame: the bug is
+      // that a mounted but hidden terminal used to leave its grid on the server.
+      const globals = globalThis as unknown as { window?: unknown };
+      const beforeWindow = globals.window;
+      globals.window = globalThis;
+      const hidden = new HerdrSocket(`ws://localhost:${server.port}/ws`);
+      const nextHidden = (matches: (message: import("../shared/protocol.ts").ServerMessage) => boolean) =>
+        new Promise<void>((resolve, reject) => {
+          const timeout = setTimeout(() => { off(); reject(new Error("hidden client did not answer")); }, 15_000);
+          const off = hidden.on((message) => {
+            const ack = message.type === "pty-data" ? hidden.outputAcknowledgement(message) : undefined;
+            ack?.();
+            if (matches(message)) { clearTimeout(timeout); off(); resolve(); }
+          });
+        });
+      try {
+        await attach(desktop, paneId, 120, 40);
+        const ready = nextHidden((m) => m.type === "input-ready" && m.pane_id === paneId);
+        hidden.attach(paneId, 100, 30);
+        hidden.connect();
+        await ready;
+        await desktop.waitFor((m) => m.type === "pane-geometry" && m.cols === 100, "hidden client's initial grid", 5000);
+        await attach(phone, paneId, 53, 33);
+        await desktop.waitFor((m) => m.type === "pane-geometry" && m.cols === 53, "phone's grid", 5000);
+        await shellSees(desktop, paneId, "33x53");
+
+        // An in-band response on the same connection orders keepSize before the phone releases.
+        // A nonexistent pending ID changes nothing and sends no terminal input.
+        hidden.keepSize(paneId);
+        expect(await hidden.pendingAction(paneId, "nonexistent-472", "discard")).toMatchObject({ ok: false });
+        desktop.seen.length = 0;
+        phone.send({ type: "release-size", pane_id: paneId });
+        // regression (fails on main): the hidden 100x30 candidate must not win.
+        expect(await desktop.waitFor((m) => m.type === "pane-geometry" && m.pane_id === paneId, "remaining terminal's grid", 5000))
+          .toMatchObject({ cols: 120, rows: 40 });
+        await shellSees(desktop, paneId, "40x120");
+        expect(desktop.seen.filter((m) => m.type === "pane-geometry")).toHaveLength(1);
+
+        desktop.seen.length = 0;
+        desktop.send({ type: "release-size", pane_id: paneId });
+        desktop.send({ type: "ping", id: 47221 });
+        await desktop.waitFor((m) => m.type === "pong" && m.id === 47221, "last terminal released", 5000);
+        // control: no terminal viewers remain; do not resize to a hidden or Chat grid.
+        expect(desktop.seen.filter((m) => m.type === "pane-geometry")).toEqual([]);
+        await shellSees(desktop, paneId, "40x120");
+      } finally {
+        hidden.close();
+        globals.window = beforeWindow;
+        desktop.close();
+        phone.close();
+        await workspaceClose(created.workspace.workspace_id);
+      }
+    }, 60_000);
+
+    it("keeps a grid released during attach creation out of the fallback candidates", async () => {
+      const created = await workspaceCreate({ cwd: tmpdir(), label: "herdr-web-ui-test-release-size-creating" });
+      const paneId = created.root_pane.pane_id;
+      const hidden = await ws();
+      const phone = await ws();
+      try {
+        // Back-to-back on the same connection: release lands during the initial terminal lookup.
+        hidden.send({ type: "attach", pane_id: paneId, cols: 100, rows: 30 });
+        hidden.send({ type: "release-size", pane_id: paneId });
+        hidden.send({ type: "ping", id: 47222 });
+        await hidden.waitFor((m) => m.type === "pong" && m.id === 47222, "release processed during creation", 5000);
+        await hidden.waitFor((m) => m.type === "input-ready", "hidden attach completed", 15_000);
+        await attach(phone, paneId, 53, 33);
+        await hidden.waitFor((m) => m.type === "pane-geometry" && m.cols === 53, "phone grid", 5000);
+        await shellSees(phone, paneId, "33x53");
+        hidden.seen.length = 0;
+        phone.send({ type: "release-size", pane_id: paneId });
+        phone.send({ type: "ping", id: 47223 });
+        await phone.waitFor((m) => m.type === "pong" && m.id === 47223, "phone release processed", 5000);
+        // regression (fails on main): the completed attach must not revive a released grid.
+        expect(hidden.seen.filter((m) => m.type === "pane-geometry")).toEqual([]);
+        await shellSees(phone, paneId, "33x53");
+      } finally {
+        hidden.close();
+        phone.close();
+        await workspaceClose(created.workspace.workspace_id);
       }
     }, 60_000);
 

@@ -7,8 +7,7 @@
  * the attribute); `[data-density="compact"]` overrides the type scale and row
  * heights. The base blocks are the amber palette, the default and the look before
  * settings load; `[data-palette]` blocks override them for the opt-in
- * charcoal and catppuccin palettes. `[data-contrast]` (after them) re-mixes the
- * text and border tokens under <html> by the Contrast step. xterm cannot read CSS custom
+ * charcoal and catppuccin palettes. xterm cannot read CSS custom
  * properties, so the --term-* group is mirrored in settings.ts `terminalTheme()`.
  * Component-scoped rules live beside their component (Sidebar.css,
  * PaneTerminal.css, ...); this file owns the app shell, the header and the
@@ -58,6 +57,12 @@
   --status-done-tint: rgba(147, 195, 107, 0.14);
   --danger-tint: rgba(255, 123, 112, 0.12);
   --danger-text: #ffd9d4;
+  /* herdr's TUI state colors, from its default theme (Catppuccin Mocha; Latte in light) */
+  --indicator-working: #f9e2af;
+  --indicator-blocked: #f38ba8;
+  --indicator-done: #94e2d5;
+  --indicator-idle: #a6e3a1;
+  --indicator-unknown: #6c7086;
   /* a note that the view is partial (a file cut short, code left plain): warning yellow */
   --notice: #e8c55c;
 
@@ -98,23 +103,7 @@
   --syntax-variable: #e0c08f;
   --syntax-meta: #b49dd6;
 
-  /* contrast (Settings → Appearance → Contrast; the [data-contrast] layer after the palette
-     blocks): the pole the text tokens are mixed toward at a step up, white here and black in
-     light, and the palette's own values of the tokens the layer re-mixes under <html>. A token
-     cannot be mixed from itself on the element whose block sets it, so these copies, made here
-     on <html>, carry the palette's values down to where the mix is made */
-  --contrast-far: #ffffff;
-  --text-base: var(--text);
-  --text-dim-base: var(--text-dim);
-  --text-strong-base: var(--text-strong);
-  --border-base: var(--border);
-  --border-strong-base: var(--border-strong);
-  --line-number-base: var(--line-number);
-  --syntax-comment-base: var(--syntax-comment);
-
-  /* type (comfortable density; compact overrides below). Settings → Appearance → Interface font and
-     Code font write --font-ui and --font-mono on <html> with a chosen list in front of these stacks
-     (lib/typography.ts keeps them verbatim); unset, the two are what they say here */
+  /* type (comfortable density; compact overrides below) */
   --font-ui: "Pretendard Variable", Pretendard, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Noto Sans KR", "Malgun Gothic", sans-serif;
   /* "JetBrains Mono Web" is the bundled face (fonts/fonts.css): after the icon font, which draws
      the private use area alone, and never in the terminal's own stack (lib/fontFamily.ts) */
@@ -170,6 +159,8 @@
   --sidebar-w: 320px;
   --control-h: 34px;
   --touch-target: 40px;
+  /* the phone header's controls: the bar (--header-h) holds them */
+  --touch-target-header: 44px;
   --keybar-h: 48px;
   --row-h: 56px;
   --chip-h: 20px;
@@ -202,9 +193,7 @@
 
   /* motion: only real state changes move (drawer, dialogs, working/reconnecting pulse) */
   --dur-fast: 120ms;
-  /* Settings → Panel motion: 0 snaps, 1 is as drawn (lib/settings.ts writes it on <html>) */
-  --motion-scale: 1;
-  --dur-base: calc(180ms * var(--motion-scale));
+  --dur-base: 180ms;
   --dur-pulse: 1600ms;
   /* one turn of a stepped spinner: it draws its steps and nothing else, so the step count is
      the frame rate and this only sets how fast it looks */
@@ -218,8 +207,8 @@
      video playing beside the app; two steps draw about one frame a second */
   --ease-pulse: steps(2, jump-none);
   /* a phone's sheet rises on the spring and drops faster than it rose */
-  --dur-sheet: calc(360ms * var(--motion-scale));
-  --dur-sheet-out: calc(240ms * var(--motion-scale));
+  --dur-sheet: 360ms;
+  --dur-sheet-out: 240ms;
 
   /* layers */
   --z-header: 4;
@@ -255,7 +244,6 @@
   --text: #2a251f;
   --text-dim: #685e52;
   --text-strong: #16120d;
-  --contrast-far: #000000;
   --accent: #8c5000;
   --accent-tint: rgba(140, 80, 0, 0.1);
   --primary: #c57d12;
@@ -270,6 +258,11 @@
   --status-blocked-tint: rgba(168, 35, 35, 0.12);
   --status-done-tint: rgba(47, 99, 23, 0.12);
   --danger-tint: rgba(168, 35, 35, 0.1);
+  --indicator-working: #df8e1d;
+  --indicator-blocked: #d20f39;
+  --indicator-done: #179299;
+  --indicator-idle: #40a02b;
+  --indicator-unknown: #9ca0b0;
   --danger-text: #8f1d1d;
   --notice: #7a5a00;
   --scrim: rgba(40, 32, 22, 0.35);
@@ -469,53 +462,6 @@
   --syntax-function: #0b59f4;
 }
 
-/* Contrast (Settings → Appearance → Contrast): text and hairlines stand out more or less than the
-   palette drew them. lib/settings.ts writes the step on <html> as data-contrast, and not at all at
-   the default, so the look before settings load is the palette's own. A step up mixes the text
-   tokens toward the pole (--contrast-far) and the hairlines toward the text; a step down mixes
-   --text and --text-strong toward --text-dim and fades the hairlines. --text-dim itself never
-   softens: it is the dimmest text, the one each palette keeps at 4.5:1 on every surface
-   (DESIGN.md), so a step down stays readable by construction. Line numbers and code comments are
-   dim text and follow it. The user bubble's edge, the popover ring in --shadow-pop and the agent
-   states keep the palette's values.
-   After the palette blocks on purpose: the mix is made on body and on a leaving sheet's copy of
-   the page (lib/sheets.ts, which carries <html>'s data- marks), never on <html> itself, where the
-   blocks set the tokens the mix reads through their *-base copies; the copy's own palette rule
-   matches at the same specificity, and the later rule wins. */
-[data-contrast="-2"] {
-  --contrast-soften: 50%;
-}
-
-[data-contrast="-1"] {
-  --contrast-soften: 25%;
-}
-
-[data-contrast="1"] {
-  --contrast-boost: 20%;
-  --contrast-border-boost: 10%;
-}
-
-[data-contrast="2"] {
-  --contrast-boost: 40%;
-  --contrast-border-boost: 20%;
-}
-
-[data-contrast="3"] {
-  --contrast-boost: 60%;
-  --contrast-border-boost: 30%;
-}
-
-[data-contrast] body,
-[data-contrast]:not(:root) {
-  --text-strong: color-mix(in oklab, color-mix(in oklab, var(--text-strong-base), var(--text-dim-base) var(--contrast-soften, 0%)), var(--contrast-far) var(--contrast-boost, 0%));
-  --text: color-mix(in oklab, color-mix(in oklab, var(--text-base), var(--text-dim-base) var(--contrast-soften, 0%)), var(--contrast-far) var(--contrast-boost, 0%));
-  --text-dim: color-mix(in oklab, var(--text-dim-base), var(--contrast-far) var(--contrast-boost, 0%));
-  --line-number: color-mix(in oklab, var(--line-number-base), var(--contrast-far) var(--contrast-boost, 0%));
-  --syntax-comment: color-mix(in oklab, var(--syntax-comment-base), var(--contrast-far) var(--contrast-boost, 0%));
-  --border: color-mix(in srgb, color-mix(in srgb, var(--border-base), transparent var(--contrast-soften, 0%)), var(--text-base) var(--contrast-border-boost, 0%));
-  --border-strong: color-mix(in srgb, color-mix(in srgb, var(--border-strong-base), transparent var(--contrast-soften, 0%)), var(--text-base) var(--contrast-border-boost, 0%));
-}
-
 [data-chat-width="narrow"] {
   --chat-w: var(--content-w);
 }
@@ -587,11 +533,6 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
-/* Settings → Text smoothing → System: the OS's own, as a browser draws without the rule above */
-[data-font-smoothing="system"] body {
-  -webkit-font-smoothing: auto;
-}
-
 button {
   font: inherit;
   color: inherit;
@@ -633,6 +574,9 @@ button {
   /* the sidebar column's width: the one the user dragged its edge to (--sidebar-user-w, written
      by App), else the density's; never more than half the window */
   --sidebar-shown-w: min(var(--sidebar-user-w, var(--sidebar-w)), 50vw);
+  /* the docked file panel's width (FileViewer.css): the one its edge was dragged to (--file-panel-user-w,
+     written by App), else min(42vw, 560px). The panel yields first to leave 320px for the pane. */
+  --file-panel-shown-w: min(max(320px, min(var(--file-panel-user-w, min(42vw, 560px)), 60vw)), calc(100vw - var(--sidebar-shown-w) - 320px));
   display: flex;
   flex-direction: column;
   height: 100%;
@@ -676,6 +620,10 @@ button {
 
 .app.sidebar-collapsed .sidebar {
   display: none;
+}
+
+.app.sidebar-collapsed {
+  --sidebar-shown-w: 0px;
 }
 
 .scrim {
@@ -893,6 +841,27 @@ button {
   flex: 0 0 auto;
 }
 
+/* From 769px the lens switch is its two words and nothing around them: no track, no glyphs, the
+   chosen lens on the hover fill. Files follows it as an action of its own, after a hairline. */
+@media (min-width: 769px) {
+  .app-header .view-switch {
+    padding: 0;
+    background: transparent;
+    border-color: transparent;
+  }
+
+  .app-header .view-switch > button svg {
+    display: none;
+  }
+}
+
+.header-divider {
+  flex: 0 0 auto;
+  width: var(--hairline);
+  height: var(--chip-h);
+  background: var(--border);
+}
+
 /* the workspace-list toggle and the palette: in the bar below 769px and beside a collapsed
    sidebar, the sidebar's own top row otherwise (further down) */
 .header-side {
@@ -975,11 +944,6 @@ button {
   display: inline-flex;
 }
 
-/* nothing to offer but the palette, which has its own button above phone width */
-.header-more.is-phone-only {
-  display: none;
-}
-
 /* alerts are off on this device: the one state of the menu worth a glance. The button's name
    and the Alerts item say it in words. */
 .header-more-dot {
@@ -1046,6 +1010,29 @@ button {
     padding: env(safe-area-inset-top, 0px) var(--space-3) 0 calc(var(--space-3) + env(safe-area-inset-left, 0px));
     border-right: var(--hairline) solid var(--border);
     background: var(--bg-panel);
+  }
+}
+
+/* Installed desktop app with the title bar folded away (manifest display_override): the header
+   takes the title bar's place, so it drags the window and leaves room for the window controls
+   Chrome draws over its left (macOS) or right edge. */
+@media (display-mode: window-controls-overlay) {
+  .app-header {
+    -webkit-app-region: drag;
+    app-region: drag;
+    padding-left: calc(var(--space-3) + env(titlebar-area-x, 0px));
+    padding-right: calc(var(--space-3) + 100vw - env(titlebar-area-x, 0px) - env(titlebar-area-width, 100vw));
+  }
+
+  .app-header :is(button, a, input, select, textarea, [tabindex]) {
+    -webkit-app-region: no-drag;
+    app-region: no-drag;
+  }
+}
+
+@media (display-mode: window-controls-overlay) and (min-width: 769px) {
+  .app:not(.sidebar-collapsed) .header-side {
+    padding-left: calc(var(--space-3) + env(titlebar-area-x, 0px));
   }
 }
 
@@ -1644,9 +1631,8 @@ button {
     display: inline-flex;
   }
 
-  /* drawer mode: the collapse toggle has nothing to collapse, and sign out is in the palette */
-  .sidebar-toggle,
-  .lock-button {
+  /* drawer mode: the collapse toggle has nothing to collapse */
+  .sidebar-toggle {
     display: none;
   }
 
@@ -1696,7 +1682,8 @@ button {
   }
 }
 
-/* the key bar (KeyBar.css) shows under the same query and carries env(safe-area-inset-bottom) itself */
+/* the key bar (KeyBar.css) shows under the same query and carries env(safe-area-inset-bottom) itself,
+   the one bar that reaches the bottom of the screen (KeyBar.tsx) */
 @media (pointer: coarse), (max-width: 768px) {
   .terminal-host:has(.key-bar) {
     padding-bottom: 0; /* no pane = no bar, and the host keeps the inset */
@@ -1719,15 +1706,29 @@ button {
   .header-desktop-only {
     display: none;
   }
-
-  .header-more.is-phone-only {
-    display: inline-flex;
-  }
 }
 
 /* just above phone width the lens labels would squeeze the pane title to a glyph: icons only */
 @media (max-width: 560px) {
   .view-switch .header-desktop-only { display: none; }
+}
+
+/* phones: every header control is a full thumb target, the lens buttons too (the track loses
+   its inset so the bar still holds them) */
+@media (max-width: 768px) {
+  .app-header .icon-button {
+    width: var(--touch-target-header);
+    height: var(--touch-target-header);
+  }
+
+  .app-header .view-switch {
+    padding: 0;
+  }
+
+  .app-header .view-switch > button {
+    min-width: var(--touch-target-header);
+    height: var(--touch-target-header);
+  }
 }
 
 /* ---------- phone: an app, not a page ---------- */

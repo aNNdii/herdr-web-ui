@@ -1,10 +1,94 @@
 import { describe, expect, it } from "bun:test";
 
 import { agentDisplayLabel, composerDelivery, composerMessage, terminalOnlyCommand, composerSendShown, composerPayload, composerModelDraw, composerStatusCompact, composerStatusHint, composerStatusWord, COMPOSER_STATUS_COMPACT_BELOW, contextLeftPercent, formatTokens, imageMention, insertLeadingMention, MAX_COMPOSER_CHARS, QUEUE_READY_STATUS, rankSlashCommands, submitNote, submitNotTyped, submitRefusal, sameMessage } from "./compose.ts";
+import { briefDescription, commandGroup, commandsForTrigger, slashCommandReplacement } from "./compose.ts";
+import { activeTrigger, applyCompletion, type ActiveTrigger } from "./mentions.ts";
+
+describe("menu rows", () => {
+  it("keeps a description's first sentence, without its full stop", () => {
+    expect(briefDescription("Drives a real browser through omowright. Use for any interactive browser task; not for a plain search.")).toBe("Drives a real browser through omowright");
+    expect(briefDescription("Explains any senpi tip in depth, including Tip: lines in the TUI. Use when the user asks about a tip.")).toBe("Explains any senpi tip in depth, including Tip: lines in the TUI");
+    expect(briefDescription("Set thinking level")).toBe("Set thinking level");
+    expect(briefDescription("Show changelog entries.")).toBe("Show changelog entries");
+    // a stop before a lowercase word, inside a version or in an ellipsis ends no sentence
+    expect(briefDescription("Fetch docs, e.g. for react. Then stop.")).toBe("Fetch docs, e.g. for react");
+    expect(briefDescription("Upgrade to v1.2 now")).toBe("Upgrade to v1.2 now");
+    expect(briefDescription("Loading...")).toBe("Loading...");
+    expect(briefDescription("\uC2A4\uD0AC\uC744 \uCC3E\uB294\uB2E4. \uADF8\uB9AC\uACE0 \uC124\uCE58\uD55C\uB2E4.")).toBe("\uC2A4\uD0AC\uC744 \uCC3E\uB294\uB2E4");
+    expect(briefDescription("\u30B9\u30AD\u30EB\u3092\u63A2\u3059\u3002\u6B21\u306B\u5165\u308C\u308B\u3002")).toBe("\u30B9\u30AD\u30EB\u3092\u63A2\u3059");
+  });
+
+  it("groups an omo skill by whose it is, and anything else by its source", () => {
+    expect(commandGroup({ name: "skill:mine", description: "", source: "skill", origin: "user" })).toBe("skill-user");
+    expect(commandGroup({ name: "skill:mass-ulw", description: "", source: "skill", origin: "bundled" })).toBe("skill-bundled");
+    expect(commandGroup({ name: "review", description: "", source: "skill" })).toBe("skill");
+    expect(commandGroup({ name: "model", description: "", source: "builtin" })).toBe("builtin");
+  });
+});
+
+describe("omo command completion", () => {
+  const builtin = { name: "model", description: "", source: "builtin" as const };
+  const skill = { name: "skill:mass-ulw", description: "", source: "skill" as const };
+  const commands = [builtin, skill];
+  const slash: ActiveTrigger = { kind: "slash", query: "", start: 0, end: 1 };
+  const dollar: ActiveTrigger = { ...slash, prefix: "$" };
+
+  it("offers only skills for dollar triggers at the start or inside a message", () => {
+    expect(commandsForTrigger(commands, "omo", dollar)).toEqual([skill]);
+    expect(commandsForTrigger(commands, "omo", { ...dollar, start: 4, end: 5 })).toEqual([skill]);
+  });
+
+  it("offers commands and skills for leading slash triggers but nothing inline", () => {
+    expect(commandsForTrigger(commands, "omo", slash)).toEqual(commands);
+    expect(commandsForTrigger(commands, "omo", { ...slash, start: 4, end: 5 })).toEqual([]);
+  });
+
+  it("matches skills by a bare name or a namespaced prefix", () => {
+    for (const query of ["mas", "skill:mas"]) {
+      expect(rankSlashCommands(commandsForTrigger(commands, "omo", dollar), query, {}, true)).toEqual([skill]);
+    }
+  });
+
+  it("inserts omo slash and dollar skills with their namespace and trailing space", () => {
+    for (const text of ["/skill:mas", "$skill:mas", "use $skill:mas"]) {
+      const trigger = activeTrigger(text, text.length, { skills: true, namespaced: true });
+      if (trigger === null) throw new Error("Expected omo skill trigger");
+      const replacement = slashCommandReplacement(skill, "omo", trigger);
+      const completed = applyCompletion(text, trigger, replacement);
+      const expected = text.replace("skill:mas", "skill:mass-ulw ");
+      expect(completed).toEqual({ text: expected, caret: expected.length });
+    }
+    expect(slashCommandReplacement(builtin, "omo", slash)).toBe("/model ");
+  });
+
+  it("keeps Claude, Codex and pi filtering and insertion unchanged", () => {
+    const claudeSkill = { name: "delegate", description: "", source: "skill" as const };
+    const codexSkill = { ...claudeSkill, trigger: "$" as const };
+    const inline = { ...slash, start: 4, end: 5 };
+    expect(commandsForTrigger([builtin, claudeSkill], "claude", slash)).toEqual([builtin, claudeSkill]);
+    expect(commandsForTrigger([builtin, claudeSkill], "claude", inline)).toEqual([claudeSkill]);
+    expect(commandsForTrigger([builtin, codexSkill], "codex", slash)).toEqual([builtin]);
+    expect(commandsForTrigger([builtin, codexSkill], "codex", dollar)).toEqual([codexSkill]);
+    expect(commandsForTrigger([builtin, codexSkill], "codex", inline)).toEqual([codexSkill]);
+    expect(commandsForTrigger([builtin, codexSkill], "codex", { ...inline, prefix: "$" })).toEqual([codexSkill]);
+    expect(commandsForTrigger(commands, "pi", slash)).toEqual(commands);
+    expect(commandsForTrigger(commands, "pi", inline)).toEqual([]);
+    expect(activeTrigger("$", 1)).toBeNull();
+    expect(slashCommandReplacement(claudeSkill, "claude", inline)).toBe("/delegate ");
+    expect(slashCommandReplacement(codexSkill, "codex", inline)).toBe("$delegate ");
+    expect(slashCommandReplacement(skill, "pi", slash)).toBe("/skill:mass-ulw ");
+  });
+});
 
 describe("composerMessage and submitNote", () => {
   it("keeps the message as written for agent.prompt: inner newlines stay, the composer's own trailing ones go", () => {
     expect(composerMessage("line one\r\nline two\n\n")).toBe("line one\nline two");
+  });
+
+  it("keeps pasted Markdown, blank lines and code indentation in one submitted message", () => {
+    const message = "# Reply\n\n- first\n- second\n\n```ts\n  run();\n```";
+    expect(composerMessage(message.replaceAll("\n", "\r\n"))).toBe(message);
+    expect(composerPayload(message, true)).toBe("\u001b[200~" + message.replaceAll("\n", "\r") + "\u001b[201~");
   });
 
   it("says why a message did not go, and never claims a lost one was sent", () => {
@@ -20,9 +104,9 @@ describe("composerMessage and submitNote", () => {
     const none = "Not sent: comments go to an agent only, and none runs in this pane now.";
     const notReady = "Not sent: the agent is not ready for a message yet. Nothing was typed. Send it again when it is ready.";
     const busy = "Not sent: the agent is busy with questions it queued. Nothing was typed. Send it again when it is ready.";
-    expect(submitNote("agent_not_found", "x", true)).toBe(none);
-    expect(submitNote("agent_not_ready", "x", true)).toBe(notReady);
-    expect(submitNote("agent_queue_busy", "x", true)).toBe(busy);
+    expect(submitNote("agent_not_found", "x", undefined, true)).toBe(none);
+    expect(submitNote("agent_not_ready", "x", undefined, true)).toBe(notReady);
+    expect(submitNote("agent_queue_busy", "x", undefined, true)).toBe(busy);
     expect(submitNote("agent_queue_busy", "x")).toBe(busy);
     // a plain queued message whose agent left, or whose input state is not known
     expect(submitNote("agent_not_found", "No agent is in front of this pane now; nothing was typed")).toBe("Not sent: No agent is in front of this pane now; nothing was typed");
@@ -64,7 +148,7 @@ describe("composerMessage and submitNote", () => {
     expect(submitRefusal("input_draft", "x")).toBe(submitNote("input_draft", "x"));
     expect(submitRefusal("agent_blocked", "x", "ㅔ")).toBe(submitNote("agent_blocked", "x"));
     // a message with comments keeps its agent-only notes
-    expect(submitRefusal("agent_not_found", "x", undefined, undefined, true)).toBe(submitNote("agent_not_found", "x", true));
+    expect(submitRefusal("agent_not_found", "x", undefined, undefined, undefined, true)).toBe(submitNote("agent_not_found", "x", undefined, true));
   });
 
   it("offers to send anyway only when the server showed the box and named no draft", () => {
@@ -299,6 +383,18 @@ describe("composer presentation helpers", () => {
   it("matches subsequences containing letters outside the basic multilingual plane", () => {
     const command = { name: "prefix:𐐨ab", description: "", source: "plugin" as const };
     expect(rankSlashCommands([command], "𐐀b", {})).toEqual([command]);
+  });
+
+  it("limits inline matching to name prefixes and segments after hyphens or colons", () => {
+    const commands = ["deploy", "tools:deploy", "safe-deploy", "redeploy", "tools_deploy", "tools.deploy"]
+      .map((name) => ({ name, description: "deployment", source: "skill" as const }));
+    expect(rankSlashCommands(commands, "DEP", {}, true).map(({ name }) => name)).toEqual(["deploy", "safe-deploy", "tools:deploy"]);
+    expect(rankSlashCommands(commands, "dply", {}, true)).toEqual([]);
+    expect(rankSlashCommands(commands, "deployment", {}, true)).toEqual([]);
+    expect(rankSlashCommands(commands, "", {}, true)).toHaveLength(6);
+    const template = { name: "template-creator", description: "Create a reusable template", source: "skill" as const };
+    expect(rankSlashCommands([template], "tmp", {})).toEqual([template]);
+    expect(rankSlashCommands([template], "creator", {}, true)).toEqual([template]);
   });
 });
 

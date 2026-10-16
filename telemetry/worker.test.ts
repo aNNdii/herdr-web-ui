@@ -2,8 +2,8 @@ import { Database } from "bun:sqlite";
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import type { TelemetrySettings } from "../shared/telemetry.ts";
-import { handle, readEvent, requestCountry, type Env } from "./worker.ts";
+import { ACTIVE_LATE_DAYS, type TelemetrySettings } from "../shared/telemetry.ts";
+import { handle, readActive, readEvent, requestCountry, type Env } from "./worker.ts";
 
 const event = {
   event: "update", install_id: "0b5f3c2e-8a51-4c47-9d0e-3f6a2b1c9e84", version: "0.4.2", previous_version: "0.4.1",
@@ -15,22 +15,21 @@ const settings: TelemetrySettings = {
   density: "comfortable",
   sidebarRows: "two",
   agentOrder: "activity",
-  agentCards: true,
-  agentPins: false,
-  quietOpenedDone: true,
   agentMarks: "mono",
+  statusIndicators: "symbols",
   palette: "catppuccin",
+  paletteLight: "amber",
+  paletteDark: "catppuccin",
   terminalFontSize: 22,
-  terminalCursorStyle: "underline",
-  terminalCursorBlink: true,
   terminalWheelSpeed: 10,
   paneClipboard: false,
   releasePaneAway: true,
-  narrowPaneFont: false,
   chatFontSize: 24,
+  uiFontSize: null,
   chatWidth: "narrow",
   enterSends: true,
   autoSendQueued: false,
+  suggestionChip: false,
   showThinking: true,
   keepScreenOn: false,
   language: "ko",
@@ -40,10 +39,8 @@ const settings: TelemetrySettings = {
   alertInApp: true,
   alertSound: false,
   showQuickReplies: true,
-  showSuggestionChip: false,
   showUsage: true,
   usageCount: "left",
-  usagePace: true,
   usageGlance: "session",
   defaultView: "terminal",
   voiceInput: "auto",
@@ -51,8 +48,8 @@ const settings: TelemetrySettings = {
   voicePolishChat: true,
   voicePolishTerminal: false,
   wrapCode: true,
-  highlightCode: false,
   markdownWidth: "full",
+  diffStyle: "split",
   terminalFontCustom: true,
   chatFontCustom: false,
   shortcutsCustom: true,
@@ -60,9 +57,7 @@ const settings: TelemetrySettings = {
   quickRepliesCustom: true,
   quickReplyCount: 12,
   usageHiddenCount: 64,
-  pageOverlapRows: 1,
-  chatPageKeys: false,
-  attachLimit: 20,
+  usageOrderCustom: true,
 };
 const now = new Date("2026-10-08T13:45:00Z");
 
@@ -122,11 +117,14 @@ describe("telemetry receiver", () => {
     const { env, rows } = fakeDb();
     const invalidSettings = [
       { ...settings, theme: "user-selected theme" },
+      { ...settings, statusIndicators: "unknown" },
       { ...settings, terminalWheelSpeed: 11 },
       { ...settings, chatFontSize: "16px" },
+      // the Turkish UI language was removed before any release sent a snapshot
+      { ...settings, language: "tr" },
       { ...settings, account: { accountId: "acct-private-42", email: "person@example.com" } },
       { ...settings, fontFamily: { value: "D2Coding" } },
-      Object.fromEntries(Object.entries(settings).filter(([key]) => key !== "agentCards")),
+      Object.fromEntries(Object.entries(settings).filter(([key]) => key !== "agentOrder")),
     ];
     for (const bad of invalidSettings) {
       expect(readEvent({ ...event, settings: bad }, now)).toBeNull();
@@ -195,15 +193,15 @@ describe("telemetry receiver", () => {
       const env = sqlite(db);
       const ids = ["11111111-2222-4333-8444-555555555555", "22222222-3333-4444-8555-666666666666", "33333333-4444-4555-8666-777777777777"];
       // The last non-null snapshot wins, even if a later event has no snapshot; the third install never reports one.
-      await send(env, { ...event, install_id: ids[0], version: "0.4.1", previous_version: "0.4.0", settings: { ...settings, theme: "light", density: "compact", agentCards: true } });
+      await send(env, { ...event, install_id: ids[0], version: "0.4.1", previous_version: "0.4.0", settings: { ...settings, theme: "light", density: "compact", wrapCode: true } });
       await send(env, { ...event, install_id: ids[0], version: "0.4.3", previous_version: "0.4.2", settings: null });
-      await send(env, { ...event, install_id: ids[1], settings: { ...settings, theme: "dark", density: "comfortable", agentCards: false } });
+      await send(env, { ...event, install_id: ids[1], settings: { ...settings, theme: "dark", density: "comfortable", wrapCode: false } });
       await send(env, { ...event, install_id: ids[2] });
       const query = /-- values of every setting[\s\S]*?\n(WITH[\s\S]+?;)/.exec(readme)![1]!;
       const values = db.query(query).all().map((row) => Object.values(row as object));
       expect(values).toContainEqual(["theme", "text", "light", 1]);
       expect(values).toContainEqual(["theme", "text", "dark", 1]);
-      expect(values).toContainEqual(["agentCards", "true", 1, 1]);
+      expect(values).toContainEqual(["wrapCode", "true", 1, 1]);
       expect(values).not.toContainEqual(["theme", "text", "dark", 2]);
       const themeQuery = /-- a focused distribution using json_extract[\s\S]*?\n(WITH[\s\S]+?;)/.exec(readme)![1]!;
       const themes = db.query(themeQuery).all().map((row) => Object.values(row as object));
@@ -249,5 +247,89 @@ describe("telemetry receiver", () => {
 
   test("an install has no previous version", () => {
     expect(readEvent({ ...event, event: "install", previous_version: null }, now)).toMatchObject({ event: "install", previous_version: null });
+  });
+});
+
+describe("telemetry receiver: active", () => {
+  const active = {
+    event: "active", day: "2026-10-08", install_id: event.install_id, version: "0.4.2",
+    os: "linux", arch: "x64", install_method: "plugin", harnesses: ["claude", "codex", "other"],
+  };
+  const postActive = (body: string, type = "application/json") =>
+    new Request("https://receiver.test/v1/active", { method: "POST", headers: { "content-type": type }, body });
+
+  test("active: readActive accepts a valid message, no harnesses, and a day ACTIVE_LATE_DAYS back", () => {
+    expect(readActive(active, now)).toEqual({
+      day: "2026-10-08", install_id: event.install_id, version: "0.4.2", os: "linux", arch: "x64", install_method: "plugin", harnesses: ["claude", "codex", "other"],
+    });
+    expect(readActive({ ...active, harnesses: [] }, now)?.harnesses).toEqual([]);
+    expect(ACTIVE_LATE_DAYS).toBe(2);
+    expect(readActive({ ...active, day: "2026-10-06" }, now)?.day).toBe("2026-10-06");
+  });
+
+  test("active: readActive refuses a day outside the window or not a date", () => {
+    const { day: _day, ...noDay } = active;
+    for (const body of [{ ...active, day: "2026-10-05" }, { ...active, day: "2026-10-09" }, { ...active, day: "2026-02-30" }, { ...active, day: "2026-10-8" }, noDay]) {
+      expect(readActive(body, now)).toBeNull();
+    }
+  });
+
+  test("active: readActive refuses bad harnesses, keys, event and install id", () => {
+    const { os: _os, ...noOs } = active;
+    for (const body of [
+      { ...active, harnesses: ["pi", "claude"] },
+      { ...active, harnesses: ["claude", "claude"] },
+      { ...active, harnesses: ["cursor"] },
+      { ...active, harnesses: "claude" },
+      { ...active, harnesses: [1] },
+      { ...active, pane_count: 3 },
+      noOs,
+      { ...active, event: "install" },
+      { ...active, install_id: "me@example.com" },
+    ]) expect(readActive(body, now)).toBeNull();
+  });
+
+  test("active: handle on /v1/active answers 204, 400, 405 and 415", async () => {
+    const { env, rows } = fakeDb();
+    expect((await handle(from(postActive(JSON.stringify(active)), { country: "KR" }), env, now)).status).toBe(204);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.query).toContain("INSERT INTO active");
+    expect(rows[0]!.values).toEqual(["2026-10-08", event.install_id, "0.4.2", "linux", "x64", "plugin", "KR", JSON.stringify(["claude", "codex", "other"])]);
+    for (const body of [
+      "not json",
+      JSON.stringify({ ...active, harnesses: ["cursor"] }),
+      JSON.stringify({ ...active, harnesses: ["pi", "claude"] }),
+      JSON.stringify({ ...active, event: "install" }),
+      // an install/update event is not an active message
+      JSON.stringify(event),
+    ]) expect((await handle(postActive(body), env, now)).status).toBe(400);
+    expect((await handle(new Request("https://receiver.test/v1/active"), env, now)).status).toBe(405);
+    expect((await handle(postActive(JSON.stringify(active), "text/plain"), env, now)).status).toBe(415);
+    expect((await handle(postActive(JSON.stringify({ ...active, pad: "x".repeat(9000) })), env, now)).status).toBe(413);
+    // an active message is not an event either
+    expect((await handle(post(JSON.stringify(active)), env, now)).status).toBe(400);
+    expect(rows).toHaveLength(1);
+  });
+
+  test("active: the upsert keeps one row per install and day, with the latest set, under the visit's day", async () => {
+    const db = new Database(":memory:");
+    db.exec(readFileSync(join(import.meta.dir, "schema.sql"), "utf8"));
+    const env: Env = { DB: { prepare: (query) => ({ bind: (...values) => ({ run: async () => db.prepare(query).run(...(values as (string | null)[])) }) }) } };
+    const send = (body: object, at: Date, country?: string) => handle(from(postActive(JSON.stringify(body)), country ? { country } : undefined), env, at);
+    const rowsOf = () => db.query("SELECT day, install_id, version, country, harnesses FROM active ORDER BY day").all();
+
+    expect((await send({ ...active, harnesses: ["claude"] }, now, "KR")).status).toBe(204);
+    // later the same day a new kind appears: the row is replaced, and a message without a country keeps it
+    expect((await send({ ...active, version: "0.4.3", harnesses: ["claude", "codex"] }, now)).status).toBe(204);
+    expect(rowsOf()).toEqual([{ day: "2026-10-08", install_id: event.install_id, version: "0.4.3", country: "KR", harnesses: '["claude","codex"]' }]);
+
+    expect((await send({ ...active, day: "2026-10-09", harnesses: [] }, new Date("2026-10-09T10:00:00Z"), "KR")).status).toBe(204);
+    expect(rowsOf()).toHaveLength(2);
+
+    // delivered five minutes after midnight, the message is still yesterday's visit
+    const other = "7c1d2a90-4b3e-4f5a-8c6d-9e0f1a2b3c4d";
+    expect((await send({ ...active, install_id: other, day: "2026-10-09", harnesses: ["pi"] }, new Date("2026-10-10T00:05:00Z"))).status).toBe(204);
+    expect(db.query("SELECT day, harnesses FROM active WHERE install_id = ?").all(other)).toEqual([{ day: "2026-10-09", harnesses: '["pi"]' }]);
+    expect(db.query("SELECT COUNT(*) AS n FROM events").get()).toEqual({ n: 0 });
   });
 });

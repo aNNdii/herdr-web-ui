@@ -401,10 +401,9 @@ const cases: Record<string, Case> = {
     await toggle.waitFor();
     assert.equal(await toggle.getAttribute("aria-pressed"), "false", "the mode starts off");
     assert.equal(await toggle.getAttribute("aria-label"), "Comment mode");
-    const find = page.locator(".chat-frame-body > .chat-find-open");
-    const [toggleBox, findBox] = [await toggle.boundingBox(), await find.boundingBox()];
-    assert.ok(toggleBox !== null && findBox !== null && toggleBox.x + toggleBox.width <= findBox.x && Math.abs(toggleBox.y - findBox.y) <= 1, `the toggle sits left of Find (${JSON.stringify({ toggleBox, findBox })})`);
-    // the transcript starts below the floating buttons
+    const [toggleBox, frameBox] = [await toggle.boundingBox(), await page.locator(".chat-frame-body").boundingBox()];
+    assert.ok(toggleBox !== null && frameBox !== null && frameBox.x + frameBox.width - (toggleBox.x + toggleBox.width) <= 24 && toggleBox.y - frameBox.y <= 16, `the toggle sits at the chat's top right (${JSON.stringify({ toggleBox, frameBox })})`);
+    // the transcript starts below the floating toggle
     const firstTop = async (): Promise<number> => page.locator(".chat-view").evaluate((node) => {
       node.scrollTop = 0;
       return Math.min(...[...node.querySelectorAll("[data-chat-row], .chat-older, .chat-endcap")].map((row) => row.getBoundingClientRect().top));
@@ -424,7 +423,7 @@ const cases: Record<string, Case> = {
     assert.equal(await popoverOf(page).count(), 0, "the mode off, a drag opens nothing");
     assert.equal(await page.evaluate(() => window.getSelection()?.toString() ?? ""), "paragraph about the state", "it stays a selection, to copy");
     assert.equal(await page.locator(".comment-pin").count(), 0, "no pin anywhere");
-    console.log("PASS chat-mode: the toggle sits left of Find above the transcript; the mode off, a drag only selects");
+    console.log("PASS chat-mode: the toggle sits at the chat's top right above the transcript; the mode off, a drag only selects");
 
     await toggle.click();
     await eventually("the mode on", async () => (await toggle.getAttribute("aria-pressed")) === "true");

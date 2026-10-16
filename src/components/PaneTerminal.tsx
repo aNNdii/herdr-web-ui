@@ -1,4 +1,4 @@
-import { useCallback, useContext, useEffect, useId, useLayoutEffect, useMemo, useReducer, useRef, useState, useSyncExternalStore } from "react";
+import { useCallback, useContext, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, useSyncExternalStore } from "react";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
@@ -10,7 +10,7 @@ import { HerdrSocket, type SubmitDelivery, type SubmitOptions, type SubmitResult
 import { MachineSession } from "../lib/machineSession.ts";
 import { useMachineSessions } from "../lib/machineSessionContext.tsx";
 import { ViewportIntentGate } from "../lib/viewportIntent.ts";
-import { PanePresentedContext, PaneShownContext, PaneSubmitContext } from "../lib/paneSubmitContext.ts";
+import { PaneCachedContext, PanePresentedContext, PaneFollowContext, PaneShownContext, PaneSubmitContext } from "../lib/paneSubmitContext.ts";
 import { disposeAfterPendingFrame } from "../lib/terminalDispose.ts";
 import { clipboardKey, hasModifiers, physicalKey, terminalChord, navigationSequence, keyFromData, ctrlEnterSequence, mirroredCtrlEnterKey, modifyOtherKeysLevel, NO_STICKY_MODIFIERS, type StickyModifiers } from "../lib/keys.ts";
 import { keyBarInputSequence, type KeyBarKeyItem } from "../lib/keyBar.ts";
@@ -20,6 +20,7 @@ import { heldAgentOnly, heldMessageText, messageQueues } from "../lib/messageQue
 import { pendingMessages } from "../lib/pendingMessages.ts";
 import { heldCountShown, heldOpenAtFold, heldOpenOnFocus, heldRefocusDue, heldRowError, heldRowsFold, heldRowsHidden, heldToggleShown, SHORT_PHONE_QUERY } from "../lib/heldRows.ts";
 import { arrangeNotices, dismissNotice, NO_DISMISSALS, settleDismissed, type DismissedNotices } from "../lib/composerNotices.ts";
+import { hermesCtrlCTooSoon, stopKey } from "../lib/hermesStop.ts";
 import { type DraftRefusal, MAX_COMPOSER_CHARS, QUEUE_READY_STATUS, agentDisplayLabel, composerDelivery, composerMessage, composerPayload, submitNote, submitNotTyped, submitRefusal } from "../lib/compose.ts";
 import { afterRead, afterSend, afterSettled, composerLift, greetingMemory, rememberGreeting, greetingFits, greetingFolder, roomOverComposer, showsGreeting, type ChatRead } from "../lib/greeting.ts";
 import { DETACHED, usePaneBranch } from "../lib/paneBranch.ts";
@@ -30,7 +31,6 @@ import { composerDrafts } from "../lib/composerDraft.ts";
 import { appendQuote, formatTerminalQuote } from "../lib/terminalQuote.ts";
 import { matchHerdrWidths } from "../lib/terminalWidths.ts";
 import { useMachineApi, useMachineId } from "../lib/machineContext.tsx";
-import { PaneAwayContext } from "../lib/paneAwayContext.ts";
 import { paneStorageId } from "../../shared/machines.ts";
 import { KeyBar } from "./KeyBar.tsx";
 import { TerminalInput } from "./TerminalInput.tsx";
@@ -46,14 +46,14 @@ import { PendingMessages } from "./PendingMessages.tsx";
 import type { AgentStatus, ClientRole, ConversationMetadata, InteractivePrompt, PlanSummary, ServerMessage } from "../../shared/protocol.ts";
 import type { PaneControls, PaneView } from "../lib/actions.ts";
 import { usePaneLane } from "../lib/chatLane.ts";
-import { useSettings, terminalTheme, type Palette, type ResolvedTheme, type TerminalCursorStyle } from "../lib/settings.ts";
+import { useSettings, terminalTheme, type Palette, type ResolvedTheme } from "../lib/settings.ts";
 import { loadFontStack, TERMINAL_FONT_STACK, terminalFontStack } from "../lib/fontFamily.ts";
 import { useT } from "../lib/i18n.ts";
 import { isAppShortcut } from "../lib/shortcuts.ts";
 import { plainPageDirection } from "../lib/pageScroll.ts";
 import { keyboardHoldsGrid, keyboardUp } from "../lib/keyboard.ts";
 import { OpenFileContext } from "../lib/filePaths.ts";
-import { fileUriPath, hyperlinkFilter, isWebLink, terminalFileLinkProvider } from "../lib/terminalFileLinks.ts";
+import { fileUriPath, hyperlinkFilter, isWebLink, openWebLink, terminalFileLinkProvider } from "../lib/terminalFileLinks.ts";
 import { adjustTerminalGlyphs } from "../lib/terminalGlyphs.ts";
 import { terminalLabel } from "../lib/terminalLabel.ts";
 import { useMediaQuery } from "../lib/useMediaQuery.ts";
@@ -75,9 +75,12 @@ const RELEASE_AFTER_MS = 1000;
 const inUse = (): boolean => document.visibilityState === "visible" && document.hasFocus();
 
 export interface PaneTerminalProps {
-  onOpenDiff?: (target: import("../lib/repoDiff.ts").RepoDiffTarget) => void;
   /** The pane this terminal attaches to; null renders the placeholder. */
   paneId: string | null;
+  /** A restored pane keeps its ID but gets a new terminal after herdr restarts. */
+  terminalId?: string | null;
+  /** null while the PC identity loads, before the first attach's fixed-grid frame arrives. */
+  mirrored?: boolean | null;
   /**
    * herdr's reason it could not restore the selected pane (0.9.3+): the pane has no
    * terminal to attach, so App passes a null paneId and the placeholder says why.
@@ -114,10 +117,6 @@ export interface PaneTerminalProps {
   terminalFontSize: number;
   /** one of several panes drawn side by side: under 80 columns its font shrinks to reach them */
   split?: boolean;
-  /** xterm cursorStyle (settings); a program's own DECSCUSR still changes it, as before this setting existed */
-  terminalCursorStyle: TerminalCursorStyle;
-  /** xterm cursorBlink (settings) */
-  terminalCursorBlink: boolean;
   /** mouse reports sent per wheel event (settings): 1 is xterm's own one report */
   terminalWheelSpeed: number;
   /** fonts tried before the built-in stack (settings); "" keeps the built-in one */
@@ -137,18 +136,13 @@ export interface PaneTerminalProps {
 }
 
 
-/** Whether this device types in the terminal's input line or straight into the grid: remembered per device. */
-const DIRECT_TYPING_KEY = "herdr-web-ui:direct-typing";
-
-function storedDirectTyping(): boolean {
-  try { return window.localStorage.getItem(DIRECT_TYPING_KEY) === "1"; } catch { return false; }
-}
-
 /** The last refused Send now note per pane, kept across that pane's mounts (see queueError). */
 const heldRowNotes = new Map<string, { owner: string; id: string; text: string }>();
 
 export function PaneTerminal({
   paneId,
+  terminalId = null,
+  mirrored = false,
   restoreError = null,
   agent = null,
   title = null,
@@ -167,8 +161,6 @@ export function PaneTerminal({
   autoSelected = false,
   terminalFontSize,
   split = false,
-  terminalCursorStyle,
-  terminalCursorBlink,
   terminalWheelSpeed,
   terminalFontFamily,
   theme,
@@ -177,7 +169,6 @@ export function PaneTerminal({
   onRoleAck,
   onConnectionChange,
   onServerMessage,
-  onOpenDiff,
 }: PaneTerminalProps) {
   const t = useT();
   const activeRef = useRef(active);
@@ -192,12 +183,16 @@ export function PaneTerminal({
   const submitRetention = useContext(PaneSubmitContext);
   const presented = useContext(PanePresentedContext);
   const presentedRef = useRef(presented); presentedRef.current = presented;
+  const cached = useContext(PaneCachedContext);
+  const cachedRef = useRef(cached); cachedRef.current = cached;
   // a split tab's pane a phone keeps behind the one it shows sizes nothing: the pty is shared with
   // every device, and a PC drawing the split would see it at the phone's size (#819)
   const shown = useContext(PaneShownContext);
   const shownRef = useRef(shown); shownRef.current = shown;
-  const sizesPty = (): boolean => presentedRef.current && shownRef.current;
-  const awayReleased = useContext(PaneAwayContext);
+  // the split half following the other half's grid of the same tab sizes nothing either
+  const follow = useContext(PaneFollowContext);
+  const followRef = useRef(follow); followRef.current = follow;
+  const sizesPty = (): boolean => presentedRef.current && shownRef.current && !followRef.current;
   const { answerPanePrompt, uploadPaneImage } = useMachineApi();
   const uploadFileRef = useRef(uploadPaneImage);
   uploadFileRef.current = uploadPaneImage;
@@ -205,10 +200,8 @@ export function PaneTerminal({
   const [findOpen, setFindOpen] = useState(false);
   const [terminal, setTerminal] = useState<Terminal | null>(null);
   const [searchState, setSearchState] = useState<TerminalSearchState | null>(null);
-  const viewportId = useId();
   const viewportIntent = useMemo(() => new ViewportIntentGate(), [machineId, paneId]);
   const viewportSearching = useSyncExternalStore(viewportIntent.subscribe, viewportIntent.isSearching, viewportIntent.isSearching);
-  const [mouseReporting, setMouseReporting] = useState(false);
   const findOpenRef = useRef(findOpen);
   findOpenRef.current = findOpen;
   const lastFindRequest = useRef(findRequest);
@@ -273,6 +266,8 @@ export function PaneTerminal({
   const setLineComposing = useCallback((active: boolean) => { lineComposingRef.current = active; setLineComposingState(active); }, []);
   const compositionCommitPendingRef = useRef(false);
   const barKeyRef = useRef<{ key: string; chord: string | null } | null>(null);
+  /** set while the composer's Stop types its ESC, so it goes out as a Stop (ClientMessage `input.stop`) */
+  const stopKeyRef = useRef(false);
   const modifiersRef = useRef<StickyModifiers>(NO_STICKY_MODIFIERS);
   const [modifiers, setModifiers] = useState<StickyModifiers>(NO_STICKY_MODIFIERS);
   const clearModifiers = useCallback(() => {
@@ -285,10 +280,13 @@ export function PaneTerminal({
   const observeRef = useRef(false);
   // a mirrored pane (no terminal attach on its PC): the grid is the pane's own in herdr, adopted like an observer's
   const fixedGridRef = useRef(false);
+  const mirroredRef = useRef(mirrored); mirroredRef.current = mirrored;
   // the pty's grid as the server last said it for this pane (pane-geometry), whoever set it
   const sharedGridRef = useRef<{ cols: number; rows: number } | null>(null);
   // takes the pty back to this grid when another device left it at its own (the effect below sets it)
   const reassertIfStaleRef = useRef<() => void>(() => undefined);
+  // draws the grid again as adopted or not (data-adopted-grid), keeping the cursor's row in sight
+  const followCursorRef = useRef<() => void>(() => undefined);
   // out of use, the tab let go of its pane (no attach) so herdr's own TUI has it back; it attaches
   // again when the user is back. The ref is what the socket handlers and the pane switch read
   const releasedRef = useRef(false);
@@ -299,10 +297,13 @@ export function PaneTerminal({
   const watchingRef = useRef(false);
   const [watching, setWatchingState] = useState(false);
   const setWatching = useCallback((next: boolean) => { watchingRef.current = next; setWatchingState(next); }, []);
-  // the mount effect's watch, for the pane switch: a released tab moving on to the next pane watches that one
-  const watchRef = useRef<(pane: string) => void>(() => {});
+  // the mount effect's initial-attach decision, also used for a replacement pane
+  const deferAttachRef = useRef<(pane: string) => boolean>(() => false);
   // the mount effect's release, for the queue below: a tab that kept its pane for a message lets go once it went
   const releaseRef = useRef<() => void>(() => {});
+  const presentationRef = useRef<() => void>(() => {});
+  // A cache release resumes from the existing screen, not the observer's replacement screen.
+  const cachedReleaseRef = useRef(false);
   // the mount effect's leave, for the pane switch: a tab out of use from the start (a reload behind
   // another app) or moving on to the next pane there lets go of it too
   const leaveRef = useRef<() => void>(() => {});
@@ -349,13 +350,14 @@ export function PaneTerminal({
   // Settings → Use alongside herdr's own window: off (the default), a tab out of use keeps its pane and its size
   const releaseAwayRef = useRef(settings.releasePaneAway);
   releaseAwayRef.current = settings.releasePaneAway;
-  const narrowFont = split && settings.narrowPaneFont;
+  const narrowFont = split;
   const narrowFontRef = useRef(narrowFont);
   narrowFontRef.current = narrowFont;
   const narrowFontFitted = useRef(narrowFont);
   // Settings → Chat width, Default: the lane follows this pane, on the stack its columns share
   usePaneLane(stackRef);
-  const directTyping = settings.terminalInputMode === "direct" || (settings.terminalInputMode === "auto" && (!coarse || storedDirectTyping()));
+  // every device starts typing straight into the grid; the input line is a choice (key bar or Settings)
+  const directTyping = settings.terminalInputMode !== "line";
   const inputLine = !directTyping && !chatView;
   const inputLineRef = useRef(inputLine);
   inputLineRef.current = inputLine;
@@ -536,8 +538,9 @@ export function PaneTerminal({
     const linkPressed = (event: MouseEvent): boolean => event.button === 0 && !term.hasSelection();
     const term = new Terminal({
       convertEol: false,
-      cursorStyle: terminalCursorStyle,
-      cursorBlink: terminalCursorBlink,
+      // a program's own DECSCUSR still changes the cursor
+      cursorStyle: "block",
+      cursorBlink: true,
       // xterm keeps no scrollback: the attach stream lives in the alternate screen and herdr
       // owns scrollback (wheel and touch go to it). With scrollback on, the fit addon reserves
       // a scrollbar column - 15px by fallback wherever scrollbars are overlays - and the last
@@ -548,12 +551,16 @@ export function PaneTerminal({
       // a chosen family follows in the font effect below, once its faces have loaded
       fontFamily: TERMINAL_FONT_STACK,
       theme: terminalTheme(theme, palette),
+      // a program's own colors suit one background (Claude Code's question titles are #ffffff, near
+      // 1:1 on a light palette): xterm moves a foreground under 4.5:1 toward black or white. Dim text
+      // needs half that, and box, block and powerline glyphs keep their color.
+      minimumContrastRatio: 4.5,
       linkHandler: {
         activate: (event, uri) => {
           if (!linkPressed(event)) return;
           const path = fileUriPath(uri);
           if (path !== null) openFileRef.current?.(path);
-          else if (isWebLink(uri)) window.open(uri, "_blank", "noopener,noreferrer");
+          else if (isWebLink(uri)) openWebLink(uri);
         },
         allowNonHttpProtocols: true,
       },
@@ -565,6 +572,9 @@ export function PaneTerminal({
     // them (btop refuses a narrower screen), and returns to the user's size once it is wide enough.
     const fitGrid = fit.fit.bind(fit);
     fit.fit = (): void => {
+      // Every local fit (lens, font, resume or initial attach) shares this entry point.
+      // A following half keeps the adopted PTY grid, even when its viewport changes.
+      if (followRef.current) return;
       const base = baseFontRef.current;
       const colsAt = (size: number): number | null => {
         term.options.fontSize = size;
@@ -578,7 +588,7 @@ export function PaneTerminal({
     term.loadAddon(fit);
     matchHerdrWidths(term);
     // the same policy as the linkHandler above: an http(s) address or nothing (S10)
-    term.loadAddon(new WebLinksAddon((_event, uri) => { if (isWebLink(uri)) window.open(uri, "_blank", "noopener,noreferrer"); }));
+    term.loadAddon(new WebLinksAddon((_event, uri) => { if (isWebLink(uri)) openWebLink(uri); }));
     term.registerLinkProvider(terminalFileLinkProvider(() => term.buffer.active, (path, event) => { if (linkPressed(event)) openFileRef.current?.(path); }));
     term.open(host);
     let compositionEndTimer: number | null = null;
@@ -697,7 +707,8 @@ export function PaneTerminal({
     // drag pans it. Until the user pans, the view keeps the cursor's row in sight: the top of
     // the grid while the row fits there, else the bottom rows, where a prompt sits. A mirror
     // has no cursor; xterm's own rests on the last row with text, which serves the same.
-    const adopted = (): boolean => observeRef.current || fixedGridRef.current;
+    // the split's other half drawing the active half's tab follows the grid that half gives the pty
+    const adopted = (): boolean => observeRef.current || fixedGridRef.current || followRef.current;
     // The soft keyboard takes the bottom of the screen, not the pane: a fit to what is left above
     // it would size the shared pty to that strip, and every other viewer of the pane, herdr's own
     // window included, would reflow twice per keyboard (#1045). While the keyboard is up, a host
@@ -718,6 +729,7 @@ export function PaneTerminal({
       const max = host.scrollHeight - host.clientHeight;
       host.scrollTop = cursorBottom <= host.clientHeight ? 0 : cursorBottom - row >= max ? max : cursorBottom - host.clientHeight;
     };
+    followCursorRef.current = () => { panned = false; followCursor(); };
     /** before a fit: true when the keyboard holds the grid, and the fit waits (`force`: it was to re-assert the grid) */
     const keyboardHolds = (force: boolean): boolean => {
       if (!keyboardHoldsGrid(keyboardUp(), host.clientWidth, fittedWidth)) return false;
@@ -1075,6 +1087,7 @@ export function PaneTerminal({
     pendingEpochRef.current = session.epoch;
     socketRef.current = socket;
     let outputGeneration = 0;
+    let deferredAttach = false;
     const off = session.on((message, sent) => {
       onServerMessageRef.current?.(message);
       pendingScopeRef.current = session.scope;
@@ -1089,6 +1102,9 @@ export function PaneTerminal({
         setEnded(false);
         term.options.disableStdin = observeRef.current || heldRef.current;
       }
+      // A provisional watch must not strand an initial/reconnected pane on an older bridge.
+      // An ordinary opt-in release still keeps its existing paused fallback.
+      if (message.type === "snapshot" && deferredAttach && !socket.canWatch()) resume();
       if (message.type === "pending-messages" && sent) {
         redrawGreeting();
         onChatSuggestion(message.pane_id, null);
@@ -1120,7 +1136,6 @@ export function PaneTerminal({
             return;
           }
           setOutputReady(true);
-          setMouseReporting(term.modes.mouseTrackingMode !== "none" && !fixedGridRef.current);
           followCursor();
           const lines: string[] = [];
           const buffer = term.buffer.active;
@@ -1189,7 +1204,7 @@ export function PaneTerminal({
         // chat lens entered later must draw its hidden screen for that grid, not this device's
         sharedGridRef.current = { cols: message.cols, rows: message.rows };
         // the chat lens adopts the shared grid too: the screen it reads (a masked prompt) is drawn for it
-        if (!observeRef.current && !fixedGridRef.current && !chatViewRef.current) {
+        if (!observeRef.current && !fixedGridRef.current && !followRef.current && !chatViewRef.current) {
           if (!keyboardHeld) return;
           // a grid held under the keyboard draws the pane's own grid (an attach made under it adopted
           // the pane's size, another device may have sized it): the catch-up fit takes the pane back
@@ -1323,8 +1338,14 @@ export function PaneTerminal({
     };
     host.addEventListener("keydown", onCommandArrow);
     const onData = term.onData((data) => {
+      // the split half following the other half's grid of the same tab draws it only: the active
+      // half's terminal answers the program's queries (a second answer would reach it as typing),
+      // and a press or key here makes this half the active one before anything is typed
+      if (followRef.current) return;
       const barKey = barKeyRef.current;
       barKeyRef.current = null;
+      const stopKey = stopKeyRef.current;
+      stopKeyRef.current = false;
       const physicalChord = typedChord;
       typedChord = null;
       // a modified Enter (Shift+Enter's newline, Ctrl+Enter's "send now") is decided on before its
@@ -1337,7 +1358,9 @@ export function PaneTerminal({
       if (commandBackspace && data === "\x7f") data = "\x15";
       commandBackspace = false;
       const current = paneRef.current;
-      if (!current || observeRef.current || heldRef.current) return;
+      // Hiding a cached pane blurs xterm, which may commit its pending IME text.
+      // That abandoned input must reach neither the old PTY nor its held draft.
+      if (!current || !presentedRef.current || !shownRef.current || observeRef.current || heldRef.current) return;
       // while a masked prompt is on screen, what is typed goes to the program or nowhere: never
       // into a draft, which is kept in the clear and offered back for review
       const secret = secretRef.current !== null;
@@ -1389,7 +1412,7 @@ export function PaneTerminal({
         }
         return;
       }
-      if (socket.sendInput(current, input)) return;
+      if (socket.sendInput(current, input, stopKey && input === "\u001b")) return;
       if (secret) {
         const t = tRef.current;
         setInputError(t("Not sent: the terminal is not ready, and a password is never held for later."));
@@ -1715,18 +1738,23 @@ export function PaneTerminal({
     const release = (): void => {
       cancelLeave();
       const current = paneRef.current;
-      if (!current || !(releaseAwayRef.current || hiddenOnTouch()) || releasedRef.current || inUse() || embedded || fixedGridRef.current || endedRef.current) return;
+      if (!current || embedded || mirroredRef.current || fixedGridRef.current) return;
+      if (cachedRef.current && releasedRef.current) {
+        if (watchingRef.current) { socket.unwatch(current); setWatching(false); }
+        // Caching stops the watch, but does not turn an away release into a cache-only release.
+        return;
+      }
+      if (releasedRef.current || (!cachedRef.current
+        && (!(releaseAwayRef.current || hiddenOnTouch()) || inUse() || endedRef.current))) return;
       if (queueWaits(current)) {
         queueHeld = true;
         return;
       }
       socket.detach(current);
       // The server's detach receipt holds pending input on this still-live PC connection.
-      // Only an actual release marks the canvas. A queue-held pane never transfers that
-      // ownership or skips the next pane's normal initial attach/release delay.
-      if (awayReleased) awayReleased.current = true;
       setReleased(true);
-      watch(current);
+      cachedReleaseRef.current = cachedRef.current;
+      if (!cachedRef.current) watch(current);
     };
     // the pane's screen starts again from the view, as on a pane switch; the view's first frame is whole
     const watch = (pane: string): void => {
@@ -1739,8 +1767,27 @@ export function PaneTerminal({
       modifyOtherKeysRef.current = 0;
       setWatching(socket.watch(pane, term.cols, term.rows));
     };
+    // keep_size prevents resizing an existing attach, but a fresh sidecar still sizes the pane.
+    // The client cannot distinguish those cases atomically, so both watch until the user returns.
+    const deferAttach = (pane: string): boolean => {
+      deferredAttach = false;
+      if (inUse() || embedded || mirroredRef.current || fixedGridRef.current || queueWaits(pane) || !socket.canWatch()) return false;
+      cancelLeave();
+      deferredAttach = true;
+      setReleased(true);
+      cachedReleaseRef.current = false;
+      // The local roster can arrive before /api/health identifies a mirror. Wait for that
+      // identity rather than briefly starting an observer on a PC with no attach sidecar.
+      if (!cachedRef.current && mirroredRef.current !== null) watch(pane);
+      return true;
+    };
+    deferAttachRef.current = deferAttach;
+    const offBeforeReplay = socket.onBeforeReplay(() => {
+      const pane = paneRef.current;
+      if (!pane || releasedRef.current) return;
+      if (deferAttach(pane)) socket.detach(pane);
+    });
     releaseRef.current = () => { if (queueHeld) release(); };
-    watchRef.current = watch;
     // a window resized while watched: the view is drawn for a grid, so it starts again at the new one
     const onWatchedResize = term.onResize(({ cols, rows }) => {
       const current = paneRef.current;
@@ -1750,6 +1797,7 @@ export function PaneTerminal({
     });
     const resume = (): void => {
       if (!presentedRef.current) return;
+      deferredAttach = false;
       setReleased(false);
       const current = paneRef.current;
       if (!current) return;
@@ -1762,13 +1810,17 @@ export function PaneTerminal({
       // the pane's screen starts again from the new attach, as on a pane switch
       const generation = ++outputGeneration;
       // Reset in stream order: synchronous reset would let old queued writes draw afterward.
-      term.write("\x1bc", () => {
-        if (disposed || paneRef.current !== current || generation !== outputGeneration) return;
+      if (!cachedReleaseRef.current) {
+        term.write("\x1bc", () => {
+          if (disposed || paneRef.current !== current || generation !== outputGeneration) return;
+          modifyOtherKeysRef.current = 0;
+        });
         modifyOtherKeysRef.current = 0;
-      });
-      modifyOtherKeysRef.current = 0;
+      }
+      cachedReleaseRef.current = false;
+      setInputReady(false);
       setOutputReady(false);
-      if (!observeRef.current && !chatViewRef.current && !keyboardHolds(true)) {
+      if (!observeRef.current && !chatViewRef.current && shownRef.current && !keyboardHolds(true)) {
         try {
           fit.fit();
           fitted();
@@ -1778,14 +1830,17 @@ export function PaneTerminal({
       }
       const away = !inUse();
       // under the keyboard the attach adopts the pane's size (keep_size) and the catch-up fit takes it
-      socket.attach(current, term.cols, term.rows, chatViewRef.current || away || !shownRef.current || keyboardHeld);
+      socket.attach(current, term.cols, term.rows, chatViewRef.current || away || !shownRef.current || followRef.current || keyboardHeld);
       if (away) leave();
     };
-    // out of use, a reconnect attaches at the size the pane has instead of taking it
-    // (keepSize, as under the chat lens), until the tab lets go of the pane
+    // Existing attaches keep their grid while away. New connections watch instead, except
+    // for queued input, mirrors, embedded pages and bridges without watch support.
     const leave = (): void => {
+      if (cachedRef.current) { release(); return; }
       const current = paneRef.current;
-      if (current && !observeRef.current && !fixedGridRef.current) socket.keepSize(current);
+      // A visible but unfocused window still shows the terminal and can receive its grid back.
+      // Blur changes only reconnect policy; hiding the document also releases its server grid.
+      if (current && !observeRef.current && !fixedGridRef.current) socket.keepSize(current, document.visibilityState === "hidden");
       if (releaseAwayRef.current && releaseTimer === null && !releasedRef.current) releaseTimer = window.setTimeout(() => {
         if (paneRef.current === current) release();
       }, RELEASE_AFTER_MS);
@@ -1807,7 +1862,6 @@ export function PaneTerminal({
     reattachRef.current = reattach;
     const back = (): void => {
       if (!presentedRef.current) return;
-      if (inUse() && awayReleased) awayReleased.current = false;
       cancelLeave();
       // A pane that kept its attach while put away (a queued message, a mirror) stopped because its
       // frozen page sent no ACKs, not because this device is too slow: coming back attaches again,
@@ -1815,6 +1869,16 @@ export function PaneTerminal({
       if (stalledRef.current && socket.stoppedWhileHidden && inUse()) reattach();
       else if (releasedRef.current) resume();
       else refit();
+    };
+    presentationRef.current = () => {
+      if (cachedRef.current) release();
+      else if (presentedRef.current && releasedRef.current) {
+        if (inUse() || mirroredRef.current) back();
+        else if ((cachedReleaseRef.current || deferredAttach && !watchingRef.current) && paneRef.current) {
+          if (!deferAttach(paneRef.current)) back();
+        }
+        else if (paneRef.current && !watchingRef.current) watch(paneRef.current);
+      }
     };
     // A phone or tablet put away lets go of the pane at once, whatever the setting: its page can
     // freeze before a timer runs, and its attach would keep herdr's own window at the phone's size.
@@ -1829,8 +1893,8 @@ export function PaneTerminal({
     // Another device can size the pty while this window keeps its focus (a phone used beside a
     // PC left in front): no focus event comes back here, so a click or key in this terminal
     // takes the pane back to this window's grid.
-    // Only input meant for the terminal itself: a press or key in the find bar, on the scrollbar
-    // or the key bar, a right-click for the pane menu, a held key's repeats or an IME composition
+    // Only input meant for the terminal itself: a press or key in the find bar or the key bar,
+    // a right-click for the pane menu, a held key's repeats or an IME composition
     // must not resize the pty under the other device.
     // A phone's own input paths sit outside the grid (the input line, its Send and Enter, a key the
     // key bar sends, not a press on it), so they call this before they send: the reply is then
@@ -1846,7 +1910,8 @@ export function PaneTerminal({
       // an IME's first key comes before compositionstart, with isComposing still false (keyCode 229)
       if (event instanceof KeyboardEvent && (event.repeat || event.isComposing || event.keyCode === 229 || composingRef.current || compositionCommitPendingRef.current)) return;
       if (event instanceof PointerEvent && event.button !== 0) return;
-      reassertIfStale();
+      if (releasedRef.current) back();
+      else reassertIfStale();
     };
     // a click or a tap is the user here, whatever the window says about its focus
     const onPointer = (event: PointerEvent): void => {
@@ -1882,12 +1947,14 @@ export function PaneTerminal({
       selectionChange.dispose();
       if (releaseTimer !== null) window.clearTimeout(releaseTimer);
       releaseRef.current = () => {};
+      presentationRef.current = () => {};
       leaveRef.current = () => {};
       cancelLeaveRef.current = () => {};
       reattachRef.current = () => {};
       keyboardHoldsRef.current = () => false;
       fittedRef.current = () => {};
-      watchRef.current = () => {};
+      deferAttachRef.current = () => false;
+      offBeforeReplay();
       onWatchedResize.dispose();
       stopWindowWatch();
       window.removeEventListener("pointerdown", onPointer, { capture: true });
@@ -1931,15 +1998,6 @@ export function PaneTerminal({
     const term = termRef.current;
     if (term) term.options.theme = terminalTheme(theme, palette);
   }, [theme, palette]);
-
-  // the cursor's shape and blink follow too; a program's own DECSCUSR still overrides them until
-  // the next change here, as it already could when they were fixed
-  useEffect(() => {
-    const term = termRef.current;
-    if (!term) return;
-    term.options.cursorStyle = terminalCursorStyle;
-    term.options.cursorBlink = terminalCursorBlink;
-  }, [terminalCursorStyle, terminalCursorBlink]);
 
   // the font follows too, and a font change moves the grid. xterm measures the cell (and the DOM
   // renderer its glyph widths) when fontFamily or fontSize changes, and setting the same value
@@ -2040,14 +2098,41 @@ export function PaneTerminal({
     if (term && sizesPty() && inUse()) socketRef.current?.resize(pane, term.cols, term.rows, true);
   }, [shown]);
 
-  // Reset synchronously on pane changes: old composition timers must never see the new pane.
+  // the split's other half took this tab's grid: this half lets the pty go and draws it at that grid;
+  // made the active half, it fits its own screen and takes the pty, as a pane shown again does
+  const wasFollowing = useRef(follow);
+  useEffect(() => {
+    if (wasFollowing.current === follow) return;
+    wasFollowing.current = follow;
+    const pane = paneRef.current;
+    const term = termRef.current;
+    if (!pane || !term || observeRef.current || fixedGridRef.current) return;
+    if (follow) {
+      socketRef.current?.keepSize(pane);
+      const shared = sharedGridRef.current;
+      if (shared && (term.cols !== shared.cols || term.rows !== shared.rows)) term.resize(shared.cols, shared.rows);
+      followCursorRef.current();
+      return;
+    }
+    followCursorRef.current();
+    if (chatViewRef.current || keyboardHoldsRef.current(true)) return;
+    try {
+      fitRef.current?.fit();
+      fittedRef.current();
+    } catch {
+      return;
+    }
+    if (sizesPty() && inUse()) socketRef.current?.resize(pane, term.cols, term.rows, true);
+  }, [follow]);
+
+  // Reset on a pane or terminal replacement: a herdr restart can keep the pane ID.
+  // Old composition timers must never see the new terminal.
   useLayoutEffect(() => {
     const socket = socketRef.current;
     const term = termRef.current;
     const fit = fitRef.current;
     if (!socket || !term) return;
     setEnded(false);
-    setMouseReporting(false);
     setInputReady(false);
     setInputError(null);
     setComposing(false);
@@ -2084,18 +2169,15 @@ export function PaneTerminal({
       }
       // Keep connection proof until the server confirms the detach as held.
     };
-    // A fresh keyed terminal inherits a prior release only within this PC's canvas and
-    // while the browser remains away. Initial inactive loads still attach with keep_size
-    // and get their normal release delay; no queued input or connection state is inherited.
-    // a phone put away releases whatever the setting (#748), so its replacement inherits that too
-    const releasing = releaseAwayRef.current || (coarseRef.current && document.visibilityState === "hidden");
-    if (awayReleased && (inUse() || !releasing)) awayReleased.current = false;
-    if (releasing && !inUse() && awayReleased?.current) setReleased(true);
-    // A tab that let go watches its replacement until the user returns.
-    if (releasedRef.current) {
-      watchRef.current(paneId);
+    // A fresh background pane must not acquire size ownership even with the release setting off.
+    // This also covers a replacement pane: no prior release or input ownership is inherited.
+    setReleased(false);
+    // A restored terminal in a cached tab waits until that tab is presented again.
+    if (cachedRef.current) {
+      setReleased(true);
       return leavePane;
     }
+    if (deferAttachRef.current(paneId)) return leavePane;
     // under the keyboard (a pane picked while typing) the fit waits for it to go, and the attach adopts
     // the pane's size meanwhile
     const held = keyboardHoldsRef.current(true);
@@ -2107,20 +2189,20 @@ export function PaneTerminal({
         /* not laid out yet; the ResizeObserver will follow up */
       }
     }
-    // out of use (the pane closed in herdr and the app moved on to the next one, or a reload behind
-    // another app), the attach adopts the pane's size; the refit takes it once the user is here
+    // A pane exempt from watching still asks to keep an existing attachment's size while away.
     const away = !inUse();
-    socket.attach(paneId, term.cols, term.rows, chatViewRef.current || away || !shownRef.current || held);
+    socket.attach(paneId, term.cols, term.rows, chatViewRef.current || away || !shownRef.current || followRef.current || held);
     // no blur or hidden comes for a tab already out of use: it lets go of this pane after a moment too
     if (away) leaveRef.current();
     // the chat lens covers the grid and its composer takes the keyboard: focusing the hidden
     // grid sent the keys straight to the pane, and showed a phone's IME text mid-screen
     if (activeRef.current && !chatViewRef.current && !autoSelected && !coarseRef.current && !modalOpen() && !findOpenRef.current) term.focus();
     return leavePane;
-  }, [paneId]);
+  }, [paneId, terminalId]);
 
   // the message the tab kept its pane for has gone (or was held): out of use, it lets go now
   useEffect(() => { releaseRef.current(); }, [pending]);
+  useEffect(() => { presentationRef.current(); }, [cached, presented, mirrored]);
 
 
   // A sibling already mounted in the split canvas becomes the keyboard target only on an
@@ -2195,7 +2277,7 @@ export function PaneTerminal({
   // keeps its text (never-queue); a message the server could not deliver keeps it too,
   // with the reason. Bracketed-paste wrapping follows the pane program's mode. `agentOnly`: a
   // message with comments, refused rather than typed into a pane whose agent is gone
-  const submitComposerMessage = useCallback((text: string, { delivery = "immediate", agentOnly = false, clearDraft, sendAnyway = false }: SubmitOptions = {}): Promise<SubmitResult> | null => {
+  const submitComposerMessage = useCallback((text: string, { delivery = "immediate", agentOnly = false, clearDraft, sendAnyway = false, resendId, generation }: SubmitOptions = {}): Promise<SubmitResult> | null => {
     const term = termRef.current;
     const socket = socketRef.current;
     const session = sessionRef.current;
@@ -2205,7 +2287,7 @@ export function PaneTerminal({
     if (draftHeldForRef.current === pane) return Promise.resolve({ ok: false, code: "held_input", message: "send or discard the held input first" });
     // not the scope itself: a message sent right after a reconnect leaves before the snapshot that names it
     const epoch = session.epoch;
-    const sent = socket.submit(pane, composerMessage(text), composerPayload(text, term.modes.bracketedPasteMode), { delivery, agentOnly, clearDraft, sendAnyway });
+    const sent = socket.submit(pane, composerMessage(text), composerPayload(text, term.modes.bracketedPasteMode), { delivery, agentOnly, clearDraft, sendAnyway, resendId, generation });
     if (sent === null) return null;
     const releaseSubmit = submitRetention?.retain(pane);
     const submission = delivery !== "immediate" ? { pane, socket, epoch } : null;
@@ -2249,8 +2331,8 @@ export function PaneTerminal({
 
   const sendComposerText = useCallback((text: string, options: SubmitOptions = {}): false | Promise<true | string> => {
     const result = submitComposerMessage(text, options);
-    return result === null ? false : result.then((answer) => answer.ok ? true : submitNote(answer.code, answer.message, options.agentOnly === true));
-  }, [submitComposerMessage]);
+    return result === null ? false : result.then((answer) => answer.ok ? true : submitNote(answer.code, answer.message, agent, options.agentOnly === true));
+  }, [submitComposerMessage, agent]);
 
   // the terminal's input line: the text typed like the keyboard would, into an agent's open
   // menu too, then Enter after the server's gap; several lines go as one paste
@@ -2315,12 +2397,38 @@ export function PaneTerminal({
 
   // the composer's stop button: Escape interrupts the agent's current turn in every
   // supported TUI (Claude Code, omp, codex) without killing the process the way ^C would
+  // Hermes' Stop is one Ctrl+C per turn (hermesStop.ts): a second one would quit it
+  const hermesStopSentRef = useRef(false);
+  // when this pane last sent Hermes a Ctrl+C: status flicker or a quick new turn resets the
+  // guard above, so a second Ctrl+C inside Hermes' 2 s force-quit window is refused by time
+  const hermesCtrlCAtRef = useRef<number | null>(null);
+  // a turn waiting on an approval (blocked) is still the same turn
+  useEffect(() => { if (agentStatus !== "working" && agentStatus !== "blocked") hermesStopSentRef.current = false; }, [agentStatus]);
+  useEffect(() => { hermesStopSentRef.current = false; hermesCtrlCAtRef.current = null; }, [paneId, agent]);
   const abortTurn = useCallback(() => {
     const term = termRef.current;
     const socket = socketRef.current;
     if (!term || !socket || !socket.connected) return;
-    term.input("\u001b");
-  }, []);
+    const now = Date.now();
+    const key = stopKey(agent, () => {
+      const buffer = term.buffer.active;
+      return Array.from({ length: term.rows }, (_, row) => buffer.getLine(buffer.viewportY + row)?.translateToString(true) ?? "");
+    }, hermesStopSentRef.current, hermesCtrlCAtRef.current, now);
+    if (key === null) {
+      const t = tRef.current;
+      if (hermesStopSentRef.current) return;
+      setInputError(hermesCtrlCTooSoon(hermesCtrlCAtRef.current, now)
+        ? t("Not stopped: Hermes got Ctrl+C under 2 seconds ago, and a second one would quit it. Try again in a moment.")
+        : t("Not stopped: Hermes does not show a turn to interrupt. Check the terminal."));
+      return;
+    }
+    if (key === "\u0003") {
+      hermesStopSentRef.current = true;
+      hermesCtrlCAtRef.current = now;
+    }
+    stopKeyRef.current = true;
+    try { term.input(key); } finally { stopKeyRef.current = false; }
+  }, [agent]);
 
   // While the agent runs, append to its held messages. Each requires an explicit send.
   // a question in Codex's queue leaves the composer alone: Codex keeps working, and a
@@ -2481,61 +2589,67 @@ export function PaneTerminal({
       if (sendAnyway && delivery !== "immediate") return t("Not sent: the agent started working since. Check the terminal, then send again.");
       const agentOnly = comments.length > 0;
       const result = submitComposerMessage(composeWithComments(comments, text), { delivery, agentOnly, ...(delivery === "immediate" && clearDraft !== undefined ? { clearDraft } : {}), sendAnyway });
-      return result === null ? false : result.then((answer) => answer.ok ? true : submitRefusal(answer.code, answer.message, answer.draft, answer.box, agentOnly));
+      return result === null ? false : result.then((answer) => answer.ok ? true : submitRefusal(answer.code, answer.message, answer.draft, answer.box, agent, agentOnly));
     },
     [agent, agentStatus, answerPanePrompt, answering, heldByOpenQueue, submitComposerMessage, queueStore, machineId, settings.autoSendQueued],
   );
 
   const actOnPending = useCallback(async (id: string, action: "steer" | "discard"): Promise<void> => {
-    const owner = queueOwner, pane = paneId;
-    const socket = socketRef.current, scope = pendingScopeRef.current;
-    if (owner === null || pane === null || paneRef.current !== pane) return;
-    // what another tab saved since: a copy it is sending again is not confirmed here either
-    pendingMessages.refresh(owner);
-    const message = pendingMessages.read(owner).find((item) => item.id === id);
-    if (!message || message.state === "sending") return;
-    if (action === "steer" && (message.state === "uncertain" || !socket?.connected || heldRef.current || secretRef.current !== null || observeRef.current || ended || heldByOpenQueue || answering !== null)) return;
-    if (message.serverOwned && !pendingMessages.isOwned(owner, id, scope)) return;
-    // keys held back in the terminal draft would run in front of the message: the server pastes a
-    // server-owned row's text and sends Enter without looking for a partial line (only Claude's box
-    // is checked there). The row stays as it is, so Send now after the draft is settled, or Discard, still works.
-    if (action === "steer" && draftHeldForRef.current === pane) {
-      pendingMessages.fail(owner, id, { code: "held_input", message: "send or discard the held input first" }, false);
-      return;
-    }
-    if (!pendingMessages.begin(owner, id)) return;
-    try {
-      if (message.serverOwned) {
-        const result = socket?.pendingAction(pane, id, action);
-        if (!result) {
-          pendingMessages.fail(owner, id, { code: "disconnected", message: t("Not confirmed. Check the terminal before sending again.") }, true);
-          return;
-        }
-        // as a composer send: the pane keeps its connection and lease until the receipt settles
-        const releaseSubmit = submitRetention?.retain(pane);
-        const answer = await result.finally(() => releaseSubmit?.());
-        if (!answer.ok) pendingMessages.fail(owner, id, { code: answer.code, message: answer.message }, answer.code === "pending_not_found" || !submitNotTyped(answer));
-        // Only the matching server removal receipt removes an authoritative item.
-      } else if (action === "discard") {
-        pendingMessages.removeCopy(owner, id);
-      } else if (message.state === "held") {
-        if (!pendingMessages.unconfirm(owner, id)) {
-          pendingMessages.fail(owner, id, { code: "unsaved", message: t("Queue could not be saved. Keep this tab open or copy the messages before reloading.") }, false);
-          return;
-        }
-        // a copy kept only the text: one that quotes (comments) still goes to an agent only
-        const result = submitComposerMessage(message.text, { agentOnly: hasQuotedLine(message.text) });
-        if (!result) {
-          pendingMessages.fail(owner, id, { code: "disconnected", message: t("Not sent. Reconnect and try again.") }, false);
-          return;
-        }
-        const answer = await result;
-        if (answer.ok) pendingMessages.removeCopy(owner, id);
-        else pendingMessages.fail(owner, id, { code: answer.code, message: answer.message }, !submitNotTyped(answer));
+    const perform = async (): Promise<void> => {
+      const owner = queueOwner, pane = paneId;
+      const socket = socketRef.current, scope = pendingScopeRef.current;
+      if (owner === null || pane === null || paneRef.current !== pane) return;
+      // what another tab saved since: a copy it is sending again is not confirmed here either
+      pendingMessages.refresh(owner);
+      const message = pendingMessages.read(owner).find((item) => item.id === id);
+      if (!message || message.state === "sending") return;
+      if (action === "steer" && (message.state === "uncertain" || !socket?.connected || heldRef.current || secretRef.current !== null || observeRef.current || ended || heldByOpenQueue || answering !== null)) return;
+      if (message.serverOwned && !pendingMessages.isOwned(owner, id, scope)) return;
+      // keys held back in the terminal draft would run in front of the message: the server pastes a
+      // server-owned row's text and sends Enter without looking for a partial line (only Claude's box
+      // is checked there). The row stays as it is, so Send now after the draft is settled, or Discard, still works.
+      if (action === "steer" && draftHeldForRef.current === pane) {
+        pendingMessages.fail(owner, id, { code: "held_input", message: "send or discard the held input first" }, false);
+        return;
       }
-    } catch {
-      pendingMessages.fail(owner, id, { code: "disconnected", message: t("Not confirmed. Check the terminal before sending again.") }, true);
-    } finally { pendingMessages.end(owner, id); }
+      if (!pendingMessages.begin(owner, id)) return;
+      try {
+        if (message.serverOwned) {
+          const result = socket?.pendingAction(pane, id, action, message.resendGeneration ?? 0);
+          if (!result) {
+            pendingMessages.fail(owner, id, { code: "disconnected", message: t("Not confirmed. Check the terminal before sending again.") }, true);
+            return;
+          }
+          // as a composer send: the pane keeps its connection and lease until the receipt settles
+          const releaseSubmit = submitRetention?.retain(pane);
+          const answer = await result.finally(() => releaseSubmit?.());
+          if (!answer.ok) pendingMessages.fail(owner, id, { code: answer.code, message: answer.message }, answer.code === "pending_not_found" || !submitNotTyped(answer),
+            action === "steer" ? message.resendGeneration ?? 0 : undefined);
+          // Only the matching server removal receipt removes an authoritative item.
+        } else if (action === "discard") {
+          pendingMessages.removeCopy(owner, id);
+        } else if (message.state === "held") {
+          if (!pendingMessages.unconfirm(owner, id)) {
+            return;
+          }
+          // a copy kept only the text: one that quotes (comments) still goes to an agent only
+          const result = submitComposerMessage(message.text, { agentOnly: hasQuotedLine(message.text), resendId: id, generation: message.resendGeneration ?? 0 });
+          if (!result) {
+            pendingMessages.fail(owner, id, { code: "disconnected", message: t("Not sent. Reconnect and try again.") }, false);
+            return;
+          }
+          const answer = await result;
+          if (answer.ok) pendingMessages.removeCopy(owner, id);
+          else pendingMessages.fail(owner, id, { code: answer.code, message: answer.message }, !submitNotTyped(answer), message.resendGeneration ?? 0);
+        }
+      } catch {
+        pendingMessages.fail(owner, id, { code: "disconnected", message: t("Not confirmed. Check the terminal before sending again.") }, true);
+      } finally { pendingMessages.end(owner, id); }
+    };
+    // Web Locks reduce contention where supported; the bridge's stable resend ID is the
+    // authority on LAN HTTP and when two tabs have already read the same held copy.
+    if (navigator.locks) await navigator.locks.request(`pending:${queueOwner}:${id}`, perform);
+    else await perform();
   }, [answering, ended, heldByOpenQueue, paneId, queueOwner, submitComposerMessage, submitRetention]);
 
 
@@ -2543,7 +2657,7 @@ export function PaneTerminal({
   const uploadImage = useCallback((file: File) => uploadPaneImage(paneId ?? "", file), [paneId]);
 
   useEffect(() => {
-    if (!active || !paneId || !settings.chatPageKeys) return;
+    if (!active || !paneId) return;
     const onPage = (event: KeyboardEvent) => {
       const direction = plainPageDirection(event);
       if (direction === null || event.defaultPrevented || !activeRef.current || !presentedRef.current || !chatViewRef.current || modalOpen()
@@ -2556,7 +2670,7 @@ export function PaneTerminal({
     };
     window.addEventListener("keydown", onPage, true);
     return () => window.removeEventListener("keydown", onPage, true);
-  }, [active, paneId, settings.chatPageKeys]);
+  }, [active, paneId]);
 
   const sendApplicationPage = useCallback((direction: -1 | 1) => {
     const pane = paneRef.current, socket = socketRef.current;
@@ -2571,6 +2685,15 @@ export function PaneTerminal({
   useLayoutEffect(() => {
     if (!controls || !active || !paneId) return;
     const current: PaneControls = {
+      focusInput: () => {
+        if (!activeRef.current || !presentedRef.current || modalOpen() || observeRef.current) return;
+        const stack = stackRef.current;
+        const secret = stack?.querySelector<HTMLInputElement>(".secret-input input");
+        if (secret) { secret.focus({ preventScroll: true }); return; }
+        const input = stack?.querySelector<HTMLTextAreaElement>(chatViewRef.current ? ".composer-text" : ".terminal-input-text");
+        if (input) input.focus({ preventScroll: true });
+        else if (!chatViewRef.current && !heldRef.current && !endedRef.current) termRef.current?.focus();
+      },
       scrollPage: (direction) => {
         if (activeRef.current && presentedRef.current && !modalOpen()) pageScroll.current?.(direction);
       },
@@ -2721,14 +2844,14 @@ export function PaneTerminal({
             visible grid carries the pane's name: a screen reader announces which pane
             this is. No tabIndex: xterm's helper textarea takes the keyboard here on attach, so a
             stop on the wrapper would only be an empty one ahead of it. */}
-        <div className={`pane-terminal${paneId === null ? " is-idle" : ""}${!chatView && paneId !== null ? " has-viewport-tools" : ""}`} ref={hostRef} id={viewportId} data-mouse-reporting={mouseReporting && !observing && !held && !secretActive && connected && !chatView ? "" : undefined} role={chatView ? undefined : "region"} aria-roledescription={chatView ? undefined : t("Terminal")} aria-label={chatView ? undefined : terminalName} />
+        <div className={`pane-terminal${paneId === null ? " is-idle" : ""}`} ref={hostRef} role={chatView ? undefined : "region"} aria-roledescription={chatView ? undefined : t("Terminal")} aria-label={chatView ? undefined : terminalName} />
         <span className="terminal-font-size" ref={pinchBadgeRef} hidden aria-hidden="true" />
-        {paneId !== null && <TerminalViewportTools key={paneId} viewportIntent={viewportIntent} terminal={terminal} paneId={paneId} viewportId={viewportId}
+        {paneId !== null && <TerminalViewportTools key={paneId} viewportIntent={viewportIntent} terminal={terminal} paneId={paneId}
           pageScroll={chatView ? undefined : pageScroll}
           onApplicationPage={sendApplicationPage}
           enabled={presented && connected && outputReady && !chatView && !held && !ended && !released && !unsupported}
           interactive={!observing && !secretActive && !viewportSearching} search={searchState} onError={setInputError} />}
-        {presented && paneId !== null && chatView && (
+        {paneId !== null && chatView && (
           <RenderBoundary resetKey={paneId} fallback={(retry) => (
             <div className="chat-view"><div className="chat-empty" role="alert">
               <p>{t("The chat can't be shown. The terminal still works.")}</p>
@@ -2741,9 +2864,8 @@ export function PaneTerminal({
           <ChatView
             key={paneId}
             paneId={paneId}
-            cwd={cwd}
-            onOpenDiff={onOpenDiff}
             active={active}
+            visible={presented && shown}
             pageScroll={pageScroll}
             refreshKey={chatRefresh}
             invalidationKey={chatInvalidation}
@@ -2809,7 +2931,7 @@ export function PaneTerminal({
               aria-label={t("Queued message {n}", { n: index + 1 })}
               maxLength={MAX_COMPOSER_CHARS}
               disabled={queueStore.isSending(message.id)}
-              spellCheck={false} autoCapitalize="off" autoCorrect="off"
+              spellCheck autoCapitalize="sentences" autoCorrect="on"
               onChange={(event) => { queueStore.edit(queueOwner, message.id, event.target.value); }}
             />
             <div className="composer-queue-actions">
@@ -2856,6 +2978,7 @@ export function PaneTerminal({
         messages={pending.map((message) => !message.serverOwned || pendingMessages.isOwned(queueOwner, message.id, pendingScopeRef.current)
           ? message : { ...message, serverOwned: false, state: "uncertain" as const })}
         connected={connected}
+        agent={agent}
         blocked={held || secretActive || ended || heldByOpenQueue || answering !== null}
         unsaved={pendingMessages.isUnsaved(queueOwner)}
         isBusy={(id) => pendingMessages.isBusy(queueOwner, id)}

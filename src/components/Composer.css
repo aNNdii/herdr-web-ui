@@ -725,6 +725,18 @@
   cursor: default;
 }
 
+.composer-send[aria-busy="true"] {
+  opacity: 1;
+}
+
+.composer-send-progress {
+  animation: composer-send-spin var(--dur-spin) steps(8) infinite;
+}
+
+@keyframes composer-send-spin {
+  to { transform: rotate(360deg); }
+}
+
 @media (hover: hover) {
   .composer-send:hover:not(:disabled) {
     --composer-action-fill: var(--primary-hover);
@@ -817,6 +829,17 @@
 
 .composer-menu-group {
   display: contents;
+}
+
+/* an omo row's one sentence keeps to the right half of a wide menu, cut short there, so the names
+   read as one column instead of each being pushed against its description */
+.composer-menu .menu-item[data-brief] .menu-item-hint {
+  max-width: 55%;
+}
+
+/* whose an omo skill is: yours in the accent, the ones omo ships dimmed like any other icon */
+.composer-menu .menu-item[data-origin="user"] svg {
+  color: var(--accent);
 }
 
 .composer-menu .menu-item {
@@ -1046,6 +1069,18 @@
     text-overflow: clip;
     line-height: 1.35;
   }
+
+  /* an omo row's description is one sentence already: one line under the name, cut if it must */
+  .composer-menu .menu-item[data-brief] .menu-item-hint {
+    max-width: none;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+  }
+
+  /* under the icon, not under the row's left edge */
+  .composer-menu .menu-item[data-origin] .menu-item-hint {
+    padding-left: calc(16px + var(--space-2));
+  }
 }
 
 @media (pointer: coarse) {
@@ -1071,6 +1106,10 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .composer-send-progress {
+    animation: none;
+  }
+
   .composer-surface,
   .composer-action::before,
   .composer-resize::before {
