@@ -59,6 +59,8 @@ function segmenter(locale: string | undefined, granularity: "word" | "grapheme")
  * granularity in `locale`: a German compound is one word. Where the offset is on no word (white space, punctuation, an
  * emoji), that one character: its whole grapheme, so an emoji with a skin tone or a letter with its combining mark is
  * never split. Where the browser has no `Intl.Segmenter` (Firefox before 125, Safari before 14.1), `fallbackWordBounds`.
+ * So it is where a segmenter's answer holds white space the offset is not on: JavaScriptCore's ICU in Bun 1.4.2 takes
+ * " 👍🏽" (a space, then an emoji with a skin tone) for one grapheme, and no word or character ever spans a space.
  */
 export function wordBounds(text: string, offset: number, locale?: string): [start: number, end: number] {
   if (typeof Intl.Segmenter !== "function") return fallbackWordBounds(text, offset);
@@ -66,9 +68,10 @@ export function wordBounds(text: string, offset: number, locale?: string): [star
   const at = Math.max(0, Math.min(offset, text.length - 1));
   const around = (granularity: "word" | "grapheme"): Intl.SegmentData | undefined => segmenter(locale, granularity).segment(text).containing(at);
   const word = around("word");
-  if (word !== undefined && word.isWordLike === true) return [word.index, word.index + word.segment.length];
-  const grapheme = around("grapheme");
-  return grapheme === undefined ? [at, at + 1] : [grapheme.index, grapheme.index + grapheme.segment.length];
+  const segment = word !== undefined && word.isWordLike === true ? word : around("grapheme");
+  if (segment === undefined) return [at, at + 1];
+  if (/\s/u.test(segment.segment) && !/\s/u.test(text[at]!)) return fallbackWordBounds(text, offset);
+  return [segment.index, segment.index + segment.segment.length];
 }
 
 /** A letter, a digit, a combining mark or an underscore: part of a word. */
