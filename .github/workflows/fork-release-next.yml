@@ -1,0 +1,74 @@
+name: Fork next release
+# Releases each push to next as vX.Y.Z-next.N (docs/fork.md; scripts/fork/next-release.ts): X.Y.Z
+# is the upstream version in package.json, N counts that version's next releases. The fork's
+# installs update from these tags alone (server/updater.ts), so a tag is created only after CI
+# passed on its exact commit, and never by hand. NEXT_AUTO_RELEASE 'false' leaves pushes
+# unreleased; Run workflow on next still releases.
+on:
+  push:
+    branches: [next]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: fork-release-next
+  cancel-in-progress: false
+jobs:
+  preflight:
+    if: >-
+      github.repository != 'devswha/herdr-web-ui' && github.ref == 'refs/heads/next' &&
+      (github.event_name == 'workflow_dispatch' || vars.NEXT_AUTO_RELEASE != 'false')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      tag: ${{ steps.plan.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: ./.github/actions/setup-ci
+      - name: Choose the tag
+        id: plan
+        env:
+          GH_REPO: ${{ github.repository }}
+        run: |
+          plan=$(bun scripts/fork/next-release.ts --sha "$GITHUB_SHA")
+          tag=$(jq -r '.tag // empty' <<<"$plan")
+          if [ -z "$tag" ]; then
+            echo "::notice::$(jq -r '.reason' <<<"$plan")"
+          else
+            echo "Releasing $GITHUB_SHA as $tag." >> "$GITHUB_STEP_SUMMARY"
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+  validate:
+    needs: preflight
+    if: needs.preflight.outputs.tag != ''
+    uses: ./.github/workflows/ci.yml
+  publish:
+    needs: [preflight, validate]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: ./.github/actions/setup-ci
+      - name: Publish the validated commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          PLANNED_TAG: ${{ needs.preflight.outputs.tag }}
+        run: |
+          git fetch origin next --tags
+          # still on next, and no release took the commit or the tag while CI ran
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/next
+          plan=$(bun scripts/fork/next-release.ts --sha "$GITHUB_SHA")
+          tag=$(jq -r '.tag // empty' <<<"$plan")
+          if [ "$tag" != "$PLANNED_TAG" ]; then
+            echo "::error::The release changed while CI ran (planned $PLANNED_TAG, now ${tag:-none}); run the workflow again."
+            exit 1
+          fi
+          jq -r '.notes' <<<"$plan" > "$RUNNER_TEMP/notes.md"
+          gh release create "$tag" --target "$GITHUB_SHA" --title "herdr web ui $tag" --notes-file "$RUNNER_TEMP/notes.md"

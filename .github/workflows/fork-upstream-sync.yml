@@ -1,0 +1,102 @@
+name: Fork upstream sync
+# The fork's daily sync with upstream (docs/fork.md):
+# - main mirrors upstream's main by fast-forward, never by force;
+# - a merge of upstream's main into next with no conflict becomes a pull request from
+#   sync/upstream-auto (merged by itself when NEXT_SYNC_AUTOMERGE is 'true'), and the next release
+#   follows from that push to next (fork-release-next.yml);
+# - a merge that conflicts opens or updates one issue labelled upstream-sync with the files, for a
+#   sync by hand on sync/upstream-main-next, which this workflow never touches.
+# Upstream's tags are never fetched or pushed: the fork's installs follow its own vX.Y.Z-next.N tags.
+# Scheduled runs come from the default branch, so the fork's default branch is next.
+on:
+  schedule:
+    - cron: '23 4 * * *'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: fork-upstream-sync
+  cancel-in-progress: false
+jobs:
+  sync:
+    if: github.repository != 'devswha/herdr-web-ui'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      # a token of the fork's owner: GITHUB_TOKEN can neither push upstream's workflow changes nor
+      # open a pull request whose CI runs
+      GH_TOKEN: ${{ secrets.FORK_SYNC_TOKEN }}
+      GH_REPO: ${{ github.repository }}
+      AUTOMERGE: ${{ vars.NEXT_SYNC_AUTOMERGE }}
+    steps:
+      - name: Require the sync token
+        run: |
+          if [ -z "$GH_TOKEN" ]; then
+            echo '::error::Set the FORK_SYNC_TOKEN repository secret (docs/fork.md).'
+            exit 1
+          fi
+      - uses: actions/checkout@v7
+        with:
+          ref: next
+          fetch-depth: 0
+          token: ${{ secrets.FORK_SYNC_TOKEN }}
+      - uses: ./.github/actions/setup-ci
+      - name: Read where main and next stand
+        id: status
+        run: |
+          bun scripts/fork/upstream-sync.ts status --fetch --json > "$RUNNER_TEMP/status.json"
+          cat "$RUNNER_TEMP/status.json"
+          bun scripts/fork/upstream-sync.ts status >> "$GITHUB_STEP_SUMMARY"
+      - name: Mirror upstream's main into main
+        run: |
+          status="$RUNNER_TEMP/status.json"
+          if [ "$(jq -r '.main.fastForward' "$status")" != true ]; then
+            echo '::warning::main has commits upstream does not; it is left as it is.'
+          elif [ "$(jq -r '.main.behind' "$status")" -gt 0 ]; then
+            git push origin refs/remotes/upstream/main:refs/heads/main
+          fi
+      - name: Merge upstream's main into next
+        run: |
+          status="$RUNNER_TEMP/status.json"
+          open_issue=$(gh issue list --label upstream-sync --state open --json number --jq '.[0].number // empty')
+          if [ "$(jq -r '.merge == null' "$status")" = true ]; then
+            echo 'next already holds upstream main.'
+            if [ -n "$open_issue" ]; then gh issue close "$open_issue" --comment 'next holds upstream main again.'; fi
+            exit 0
+          fi
+          message=$(jq -r '.merge.message' "$status")
+          if [ "$(jq -r '.merge.clean' "$status")" = true ]; then
+            tree=$(jq -r '.merge.tree' "$status")
+            commit=$(git -c user.name='herdr-web-ui fork sync' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' \
+              commit-tree "$tree" -p origin/next -p upstream/main -m "$message")
+            git push --force origin "$commit:refs/heads/sync/upstream-auto"
+            {
+              echo "Merges upstream's main ($(jq -r '.upstream.sha' "$status" | cut -c1-12)) into next. Git merged it without a conflict;"
+              echo 'CI still has to pass. Opened by the Fork upstream sync workflow (docs/fork.md).'
+            } > "$RUNNER_TEMP/body.md"
+            pr=$(gh pr list --head sync/upstream-auto --base next --state open --json number --jq '.[0].number // empty')
+            if [ -z "$pr" ]; then
+              gh pr create --base next --head sync/upstream-auto --title "$message" --body-file "$RUNNER_TEMP/body.md"
+            else
+              gh pr edit "$pr" --title "$message" --body-file "$RUNNER_TEMP/body.md"
+            fi
+            if [ "$AUTOMERGE" = true ]; then
+              gh pr merge sync/upstream-auto --auto --merge || echo '::warning::Auto-merge is not available; merge the pull request by hand (docs/fork.md).'
+            fi
+            if [ -n "$open_issue" ]; then gh issue close "$open_issue" --comment 'The merge has no conflict any more: see the sync/upstream-auto pull request.'; fi
+          else
+            {
+              echo "Merging upstream's main ($(jq -r '.upstream.sha' "$status" | cut -c1-12), $(jq -r '.merge.commits' "$status") commits) into next conflicts in:"
+              echo
+              jq -r '.merge.conflicts[] | "- `" + . + "`"' "$status"
+              echo
+              echo 'Sync by hand on sync/upstream-main-next (docs/fork.md, "Syncing by hand"). This issue closes itself once next holds upstream main.'
+            } > "$RUNNER_TEMP/body.md"
+            title="Upstream sync: $(jq -r '.merge.conflicts | length' "$status") files conflict"
+            if [ -z "$open_issue" ]; then
+              gh label create upstream-sync --color FBCA04 --description 'The fork needs a sync with upstream by hand' --force
+              gh issue create --label upstream-sync --title "$title" --body-file "$RUNNER_TEMP/body.md"
+            else
+              gh issue edit "$open_issue" --title "$title" --body-file "$RUNNER_TEMP/body.md"
+            fi
+          fi

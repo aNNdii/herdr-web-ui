@@ -1,0 +1,20 @@
+#!/bin/sh
+# The fork's pre-push hook (docs/fork.md): the fork's installs update from its release tags alone
+# (server/updater.ts), so no v* or remote-v* tag is pushed to the fork by hand. That includes
+# upstream's own vX.Y.Z tags, which `git fetch upstream` brings in and `git push --tags` would carry
+# over, moving every fork install onto plain upstream. The Fork next release workflow makes the
+# fork's tags. Install: cp scripts/fork/pre-push "$(git rev-parse --git-common-dir)/hooks/pre-push"
+remote_url=$2
+case "$remote_url" in
+  *aNNdii/herdr-web-ui*) ;;
+  *) exit 0 ;;
+esac
+blocked=0
+while read -r _local_ref _local_sha remote_ref _remote_sha; do
+  case "$remote_ref" in
+    refs/tags/v*|refs/tags/remote-v*)
+      echo "pre-push: refusing to push $remote_ref to the fork: releases are tagged by the Fork next release workflow (docs/fork.md)." >&2
+      blocked=1 ;;
+  esac
+done
+exit "$blocked"
