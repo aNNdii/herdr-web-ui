@@ -17,8 +17,10 @@ This page is the fork's own: upstream has no copy of it, so it never conflicts.
 ## Releases
 
 Every push to `next` is released as `vX.Y.Z-next.N` by
-[`fork-release-next.yml`](../.github/workflows/fork-release-next.yml), after CI passed on that exact
-commit. `X.Y.Z` is the upstream version in `package.json`; `N` counts that version's next releases
+[`fork-release-next.yml`](../.github/workflows/fork-release-next.yml), after `bun run check fast`
+passed on that exact commit. That is CI's Fast checks job without its Release guards, which hold
+upstream's releases to upstream's remote bundle tags and telemetry Worker deploy and so can never
+pass in the fork; the browser and integration lanes run on the pull requests into `next`. `X.Y.Z` is the upstream version in `package.json`; `N` counts that version's next releases
 from 1 ([`scripts/fork/next-release.ts`](../scripts/fork/next-release.ts) picks the tag and writes
 the notes). git's version sort puts `v0.4.11-next.2` after upstream's `v0.4.11` and before `v0.4.12`,
 which is the order the fork's installs follow (`RELEASE_TAG` in `server/updater.ts`).
@@ -92,8 +94,11 @@ On GitHub (Settings of the fork):
 - **Variables → Actions:** `NEXT_SYNC_AUTOMERGE=true` to merge clean syncs without a click (needs
   **General → Allow auto-merge** and a ruleset on `next` requiring the CI checks);
   `NEXT_AUTO_RELEASE=false` to release only on demand.
-- **Actions:** disable upstream's **Website** workflow, which deploys upstream's site after CI on
-  `main`, and **Release**, which tags plain `vX.Y.Z` versions.
+- **Actions:** keep **CI** and the two fork workflows; disable upstream's **Website** (deploys
+  upstream's site after CI on `main`), **Release** (tags plain `vX.Y.Z` versions, which would move
+  every fork install onto plain upstream), **Remote PC bundles** (builds and publishes upstream's
+  `remote-v*` bundles) and **Windows install** (installs upstream's latest release every week):
+  `gh workflow disable <file> -R aNNdii/herdr-web-ui`, `gh workflow enable` to undo.
 
 Locally, once per clone:
 

@@ -1,9 +1,13 @@
 name: Fork next release
 # Releases each push to next as vX.Y.Z-next.N (docs/fork.md; scripts/fork/next-release.ts): X.Y.Z
 # is the upstream version in package.json, N counts that version's next releases. The fork's
-# installs update from these tags alone (server/updater.ts), so a tag is created only after CI
-# passed on its exact commit, and never by hand. NEXT_AUTO_RELEASE 'false' leaves pushes
-# unreleased; Run workflow on next still releases.
+# installs update from these tags alone (server/updater.ts), so a tag is created only after the
+# fast checks passed on its exact commit, and never by hand. NEXT_AUTO_RELEASE 'false' leaves
+# pushes unreleased; Run workflow on next still releases.
+# The gate is CI's Fast checks job (`bun run check fast`: workflow syntax, generated types,
+# typecheck, build, unit tests) without its Release guards, which hold upstream's own releases to
+# upstream's remote bundle tags and telemetry Worker deploy, which the fork can never meet. The
+# browser and integration lanes run on the pull requests into next, not again here.
 on:
   push:
     branches: [next]
@@ -41,9 +45,23 @@ jobs:
           fi
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
   validate:
+    name: Fast checks
     needs: preflight
     if: needs.preflight.outputs.tag != ''
-    uses: ./.github/workflows/ci.yml
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      CHECK_DIR: ${{ github.workspace }}/.ci
+      UNIT_TEST_WORKERS: 4
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+      - uses: ./.github/actions/setup-ci
+        with:
+          node: 'true'
+      - run: bun install --frozen-lockfile
+      - run: bun run check fast
   publish:
     needs: [preflight, validate]
     runs-on: ubuntu-24.04
