@@ -20,12 +20,9 @@ export interface ChatTimelineProps<Row extends ChatTimelineRow> {
   /** A turn works and motion is welcome: following the end glides. */
   smoothFollow: boolean;
   memories: Map<string, ChatRowMemory>;
-  outputChanged: () => void;
   header: ReactNode;
   footer: ReactNode;
   label: string;
-  matchKey: string | null;
-  finding: boolean;
   onScroll: () => void;
   renderRow: (row: Row, index: number) => ReactNode;
 }
@@ -38,7 +35,7 @@ export interface ChatTimelineProps<Row extends ChatTimelineRow> {
  * first child (the transcript the highlights watch); a reply's cards or counts are its row's own (ChatComments.tsx
  * `ReplyMargin`), placed past the row's right edge in the free space beside the transcript, which never moves for them.
  */
-export function ChatTimeline<Row extends ChatTimelineRow>({ rows, scope, source, scroller, listRef, following, smoothFollow, memories, outputChanged, header, footer, label, matchKey, finding, onScroll, renderRow }: ChatTimelineProps<Row>) {
+export function ChatTimeline<Row extends ChatTimelineRow>({ rows, scope, source, scroller, listRef, following, smoothFollow, memories, header, footer, label, onScroll, renderRow }: ChatTimelineProps<Row>) {
   const [selectionKeys, setSelectionKeys] = useState<string[]>([]);
   const [focusKey, setFocusKey] = useState<string | null>(null);
   useLayoutEffect(() => {
@@ -49,7 +46,7 @@ export function ChatTimeline<Row extends ChatTimelineRow>({ rows, scope, source,
   const rowKeys = useMemo(() => rows.map((row) => row.key), [rows]);
   const positions = useMemo(() => new Map(rowKeys.map((key, index) => [key, index])), [rowKeys]);
   const pinned = useMemo(() => [...new Set(focusKey === null ? selectionKeys : [...selectionKeys, focusKey])], [selectionKeys, focusKey]);
-  const extraData = useMemo(() => ({ renderRow, matchKey }), [renderRow, matchKey]);
+  const extraData = useMemo(() => ({ renderRow }), [renderRow]);
   const attachList = useCallback((instance: LegendListRef | null) => {
     listRef.current = instance;
     const node = instance?.getScrollableNode();
@@ -143,17 +140,17 @@ export function ChatTimeline<Row extends ChatTimelineRow>({ rows, scope, source,
   const rendered = useCallback(({ item, index }: { item: Row; index: number }) => {
     let memory = memories.get(item.key);
     if (!memory) {
-      memory = { toggles: new Map(), outputs: new Map(), outputChanged };
+      memory = { toggles: new Map(), outputs: new Map() };
       memories.set(item.key, memory);
     }
     return <ChatRowMemoryContext.Provider value={memory}>
-      <div data-chat-row={item.key} data-chat-match={item.key === matchKey ? "" : undefined} className={item.beforeUser ? "chat-virtual-row is-before-user" : "chat-virtual-row"}>{renderRow(item, index)}</div>
+      <div data-chat-row={item.key} className={item.beforeUser ? "chat-virtual-row is-before-user" : "chat-virtual-row"}>{renderRow(item, index)}</div>
     </ChatRowMemoryContext.Provider>;
-  }, [memories, outputChanged, renderRow, matchKey]);
+  }, [memories, renderRow]);
 
   return <LegendList
     ref={attachList}
-    className={finding ? "chat-view chat-view-virtual chat-view-with-find" : "chat-view chat-view-virtual"}
+    className="chat-view chat-view-virtual"
     contentContainerClassName="chat-transcript chat-transcript-virtual"
     role="log"
     aria-live="polite"
@@ -172,7 +169,7 @@ export function ChatTimeline<Row extends ChatTimelineRow>({ rows, scope, source,
     initialScrollAtEnd
     maintainVisibleContentPosition
     alwaysRender={{ keys: pinned }}
-    ListHeaderComponent={<div className={finding ? "chat-virtual-header chat-virtual-header-with-find" : "chat-virtual-header"}>{header}</div>}
+    ListHeaderComponent={<div className="chat-virtual-header">{header}</div>}
     ListFooterComponent={<div className="chat-virtual-footer">{footer}</div>}
     onScroll={onScroll}
     onLoad={() => { if (following.current) listRef.current?.scrollToEnd({ animated: false }); }}

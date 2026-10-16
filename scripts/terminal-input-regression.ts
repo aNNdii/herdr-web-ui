@@ -74,7 +74,12 @@ export async function checkTerminalInput(browser: Browser, origin: string, pane:
     assert.equal(await page.locator(".key-bar").isVisible(), false, "a desktop shows no key bar under the terminal");
     // a phone keyboard's autocorrect would swap a flag or path for a dictionary word before Send
     assert.deepEqual(await line.evaluate((box) => [box.getAttribute("autocorrect"), box.getAttribute("spellcheck"), box.getAttribute("autocapitalize")]), ["off", "false", "off"]);
-    assert.equal(await page.getByRole("button", { name: "Type straight into the terminal", exact: true }).count(), 0);
+    assert.equal(await page.getByRole("button", { name: "Input line", exact: true }).count(), 0);
+    await page.locator(".pane-frame.is-current").focus();
+    const beforeFocus = sent.length;
+    await page.keyboard.press("ControlOrMeta+Shift+E");
+    assert.equal(await line.evaluate(node => node === document.activeElement), true, "the input shortcut focuses the terminal line");
+    assert.equal(sent.length, beforeFocus, "focus does not submit or send terminal input");
 
     // A liveness probe refuses input without a frame to say so: on a quiet pane the 1 s poll reads
     // it, so the terminal shows it waits instead of looking ready while typing goes to the draft.
@@ -394,6 +399,10 @@ export async function checkTerminalInput(browser: Browser, origin: string, pane:
     await page.locator(".xterm-helper-textarea").waitFor();
     await until(() => !!ready);
     const before = sent.length;
+    await page.locator(".pane-frame.is-current").focus();
+    await page.keyboard.press("ControlOrMeta+Shift+E");
+    assert.equal(await page.locator(".xterm-helper-textarea").evaluate(node => node === document.activeElement), true, "the input shortcut also focuses direct terminal input before readiness");
+    assert.equal(sent.length, before, "focus sends no input before readiness");
     const heldNotice = page.getByText("Input held until the terminal is ready:", { exact: true });
     const leftOut = page.getByText("An Enter or line break was left out: Send never presses Enter.", { exact: true });
     // Enter on a terminal that is not ready, with nothing held, separates nothing: no notice.
@@ -576,7 +585,7 @@ export async function checkTerminalInput(browser: Browser, origin: string, pane:
     assert.equal(sent.length, switchBefore, "old composition cannot cross a pane reset");
     assert.equal(await page.locator(".draft-text").count(), 0, "old commit cannot enter the new pane's held draft");
     // A late end after reset is stale, not a second attempt to send the abandoned input.
-    await page.locator(".xterm-helper-textarea").dispatchEvent("compositionend", { data: "한" });
+    await page.locator(".pane-frame.is-current .xterm-helper-textarea").dispatchEvent("compositionend", { data: "한" });
     await page.waitForTimeout(75);
     assert.equal(sent.length, switchBefore);
     console.log("PASS xterm composition: local preedit, delayed multi-commit burst, punctuation order, Korean final-consonant movement, pane-reset cancellation");

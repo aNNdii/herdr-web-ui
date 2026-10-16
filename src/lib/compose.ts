@@ -12,6 +12,7 @@
 import type { AgentStatus, SlashCommand } from "../../shared/protocol.ts";
 import { knownStatus, STATUS_WORD } from "./status.ts";
 import { t } from "./i18n.ts";
+import type { ActiveTrigger } from "./mentions.ts";
 
 /** This cap keeps one composer message inside a single WS frame. */
 export const MAX_COMPOSER_CHARS = 20_000;
@@ -65,12 +66,12 @@ export type DraftRefusal = { note: string; draft: string } | { note: string; any
 /**
  * submitNote, or a DraftRefusal when the server named a draft it can clear (SubmitResult's `draft`)
  * or showed a box it could not tell empty (`box`; empty when it could not read one whole).
- * `agentOnly` as in submitNote.
+ * `agent` and `agentOnly` as in submitNote.
  */
-export function submitRefusal(code: string, message: string, draft?: string, box?: string, agentOnly = false): string | DraftRefusal {
+export function submitRefusal(code: string, message: string, draft?: string, box?: string, agent?: string | null, agentOnly = false): string | DraftRefusal {
   if (code === "input_draft" && draft) return { note: t("Not sent: Claude Code's input box in the terminal already holds “{draft}”.", { draft }), draft };
   if (code === "input_draft" && box) return { note: t("Not sent: Claude Code's input box in the terminal may not be empty. It shows “{box}”.", { box }), anyway: true };
-  return submitNote(code, message, agentOnly);
+  return submitNote(code, message, agent, agentOnly);
 }
 
 /** The same message as typed, however a terminal wrapped or indented it: equal once all whitespace is gone. */
@@ -81,10 +82,11 @@ export function sameMessage(a: string, b: string): boolean {
 
 /**
  * Why a composer message did not go (SubmitResult's code): the composer keeps the text and says this.
+ * `agent`: the pane's agent, which names the input an input_draft refusal is about (Claude Code's when unknown).
  * `agentOnly`: the message was sent to an agent only (it carries comments), so a missing or not-ready
  * agent is why it did not go; without it, those codes read as the bridge's own message.
  */
-export function submitNote(code: string, message: string, agentOnly = false): string {
+export function submitNote(code: string, message: string, agent?: string | null, agentOnly = false): string {
   if (code === "submit_partial") return t("Not confirmed: the terminal draft was cleared or may have changed. Your message stayed here. Check the terminal before sending again.");
   if (code === "agent_blocked") return t("Not sent: the agent is waiting for an answer in the terminal. Answer it first.");
   if (code === "read_only") return t("Not sent: this view only watches the pane.");
@@ -94,6 +96,7 @@ export function submitNote(code: string, message: string, agentOnly = false): st
   if (code === "agent_queue_busy") return t("Not sent: the agent is busy with questions it queued. Nothing was typed. Send it again when it is ready.");
   // a remote PC's bridge from upstream's bundle cannot keep a message from a shell (src/lib/ws.ts)
   if (code === "agent_only_unsupported") return t("Not sent: update this PC to send comments.");
+  if (code === "input_draft" && agent === "hermes") return t("Not sent: Hermes' input in the terminal is not empty. Send or clear it there, then send this message.");
   if (code === "input_draft") return t("Not sent: Claude Code's input box in the terminal is not empty. Send or clear it there, then send this message.");
   if (code === "pending_input_unsupported") return t("Update this PC to send messages in the next turn. Your draft stayed here.");
   if (code === "submit_timeout") return t("Not sent: it waited too long behind an earlier message, and nothing was typed. Send it again.");
@@ -261,14 +264,15 @@ export function agentDisplayLabel(agent: string | null): string {
  * tried against each word of the name before it falls back to a substring, a run of letters in
  * order (`brst`), and the description.
  */
-function slashMatchTier(command: SlashCommand, needle: string): number | null {
+function slashMatchTier(command: SlashCommand, needle: string, prefixOnly: boolean): number | null {
   if (needle === "") return 0;
   const name = command.name.toLocaleLowerCase();
   if (name.startsWith(needle)) return 0;
   const first = name.indexOf(needle);
   for (let position = first; position >= 0; position = name.indexOf(needle, position + 1)) {
-    if (position === 0 || /[:\-_./]/u.test(name[position - 1]!)) return 1;
+    if ((prefixOnly ? /[:-]/u : /[:\-_./]/u).test(name[position - 1]!)) return 1;
   }
+  if (prefixOnly) return null;
   if (first >= 0) return 2;
   let at = 0;
   for (const letter of name) {
@@ -278,19 +282,62 @@ function slashMatchTier(command: SlashCommand, needle: string): number | null {
   return needle.length >= 2 && command.description.toLocaleLowerCase().includes(needle) ? 4 : null;
 }
 
+/** Commands the agent can invoke at this position, before query ranking. */
+export function commandsForTrigger(commands: readonly SlashCommand[], agent: string | null, trigger: ActiveTrigger): SlashCommand[] {
+  return commands.filter((command) => {
+    if (agent === "omo") {
+      return trigger.prefix === "$" ? command.source === "skill" : trigger.start === 0;
+    }
+    const prefix = command.trigger ?? "/";
+    if (trigger.start === 0) return prefix === (trigger.prefix ?? "/");
+    // Claude honours a skill mention as permission to invoke it; Codex names skills with `$`.
+    // pi expands /skill:name only at message start, and builtins are whole-message commands.
+    return command.source === "skill" && (agent === "claude" ? prefix === "/" : agent === "codex" && prefix === "$");
+  });
+}
+
+/**
+ * A menu row's description down to its first sentence: a skill's goes on to say when to use it
+ * and when not, which is for the agent, and on a phone it ran to five lines a row. A full stop
+ * ends a sentence only before a capital (or a letter with no case) or as `\u3002`, so `e.g. foo`
+ * and `v1.2` keep their text.
+ */
+export function briefDescription(description: string): string {
+  const text = description.trim();
+  const end = /[.!?](?=\s+[\p{Lu}\p{Lo}"'(])|\u3002/u.exec(text);
+  return (end ? text.slice(0, end.index) : text).replace(/(?<!\.)[.\u3002]$/u, "");
+}
+
+/** Where a bare `/` or `$` lists a command: an omo skill under whose it is, yours before omo's. */
+export const COMMAND_GROUPS = ["builtin", "user", "project", "skill-user", "skill", "skill-bundled", "plugin"] as const;
+export type CommandGroup = (typeof COMMAND_GROUPS)[number];
+
+export function commandGroup(command: SlashCommand): CommandGroup {
+  if (command.source === "skill" && command.origin !== undefined) return command.origin === "user" ? "skill-user" : "skill-bundled";
+  return command.source;
+}
+
+/** omo's inline skills use the typed `$`, while other agents use the command's wire trigger. */
+export function slashCommandReplacement(command: SlashCommand, agent: string | null, trigger: ActiveTrigger): string {
+  const prefix = agent === "omo" ? trigger.prefix ?? "/" : command.trigger ?? "/";
+  return `${prefix}${command.name} `;
+}
+
 /**
  * Filter commands by what was typed - prefix first, then a word of the name, a substring, letters
  * in order, the description - and within a match kind prefer the commands the user selects most.
+ * Away from line starts, `prefixOnly` excludes fuzzy matches that could rewrite paths such as `/tmp`.
  */
 export function rankSlashCommands(
   commands: readonly SlashCommand[],
   query: string,
   usage: Readonly<Partial<Record<string, number>>>,
+  prefixOnly = false,
 ): SlashCommand[] {
   const needle = query.toLocaleLowerCase();
   const ranked: { command: SlashCommand; tier: number }[] = [];
   for (const command of commands) {
-    const tier = slashMatchTier(command, needle);
+    const tier = slashMatchTier(command, needle, prefixOnly);
     if (tier !== null) ranked.push({ command, tier });
   }
   return ranked

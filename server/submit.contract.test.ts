@@ -1,10 +1,11 @@
 import { afterAll, beforeAll, describe, expect, it, spyOn } from "bun:test";
 import { chmodSync, copyFileSync, existsSync, mkdtempSync, readFileSync, rmSync, watch, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { createServer, SUBMIT_DEADLINE_MS, SUBMIT_DELAY_MS } from "./index.ts";
 import { herdrRpc } from "./herdr/client.ts";
 import * as herdr from "./herdr/client.ts";
+import { PtySession } from "./pty/session.ts";
 
 /**
  * Contract test for the composer's "submit" frame, against the real herdr server.
@@ -36,6 +37,7 @@ let agent: Recorder;
 let codex: Recorder;
 let codexApproval: Recorder;
 let claudeQueue: Recorder;
+let hermes: Recorder;
 
 const chunks = (recorder: Recorder): Chunk[] =>
   readFileSync(recorder.log, "utf8").split("\n").filter(Boolean).map((line) => JSON.parse(line) as Chunk);
@@ -156,6 +158,8 @@ beforeAll(async () => {
   chmodSync(join(root, "claude"), 0o755);
   copyFileSync(process.execPath, join(root, "codex"));
   chmodSync(join(root, "codex"), 0o755);
+  copyFileSync(process.execPath, join(root, "hermes"));
+  chmodSync(join(root, "hermes"), 0o755);
   shell = await recorder("shell", process.execPath);
   agent = await recorder("agent", join(root, "claude"));
   await herdrRpc("pane.report_agent", { pane_id: agent.pane, source: "manual", agent: "claude", state: "idle" });
@@ -169,6 +173,8 @@ beforeAll(async () => {
   // the same text in a pane whose agent is not Codex
   claudeQueue = await recorder("claude-queue", join(root, "claude"), `${queue}› Ask Codex to do anything\n`);
   await herdrRpc("pane.report_agent", { pane_id: claudeQueue.pane, source: "manual", agent: "claude", state: "blocked" });
+  hermes = await recorder("hermes", join(root, "hermes"));
+  await herdrRpc("pane.report_agent", { pane_id: hermes.pane, source: "manual", agent: "hermes", state: "idle" });
 }, 30_000);
 
 afterAll(async () => {
@@ -178,6 +184,53 @@ afterAll(async () => {
 });
 
 describe("WebSocket submit", () => {
+  it("rejects a held-copy resend combined with Send anyway before reserving or replaying its id", async () => {
+    const socket = await Socket.connect();
+    const from = chunks(shell).length;
+    const frame = { type: "submit", pane_id: shell.pane, text: "combined-copy-541", payload: "combined-copy-541", resend_id: "combined-contract-541" };
+    try {
+      socket.send({ ...frame, id: 550, send_anyway: true });
+      expect(await socket.result(550)).toMatchObject({ ok: false, code: "invalid_delivery" });
+      expect(typed(shell, from)).toBe("");
+      socket.send({ ...frame, id: 551 });
+      expect(await socket.result(551)).toMatchObject({ ok: true });
+      socket.send({ ...frame, id: 552, send_anyway: true });
+      expect(await socket.result(552)).toMatchObject({ ok: false, code: "invalid_delivery" });
+      const barrier = new Promise<void>((resolve, reject) => {
+        const watcher = watch(dirname(shell.log), () => {
+          if (typed(shell, from).includes("combination-barrier541")) { clearTimeout(timer); watcher.close(); resolve(); }
+        });
+        const timer = setTimeout(() => { watcher.close(); reject(new Error("combination recorder barrier timed out")); }, 5000);
+      });
+      socket.send({ type: "submit", id: 553, pane_id: shell.pane, text: "combination-barrier541", payload: "combination-barrier541" });
+      expect(await socket.result(553)).toMatchObject({ ok: true });
+      await barrier;
+      expect(typed(shell, from).split("combined-copy-541").length - 1).toBe(1);
+    } finally { socket.close(); }
+  }, 30_000);
+
+  it("regression: sends one held-copy resend across two connections", async () => {
+    const first = await Socket.connect(), second = await Socket.connect();
+    const from = chunks(shell).length;
+    try {
+      const frame = { type: "submit", pane_id: shell.pane, text: "held-copy-541", payload: "held-copy-541", resend_id: "held-copy-regression-541" };
+      first.send({ ...frame, id: 541 });
+      second.send({ ...frame, id: 542 });
+      expect(await first.result(541)).toMatchObject({ ok: true });
+      expect(await second.result(542)).toMatchObject({ ok: true });
+      // The recorder processing a later serialized message proves all preceding bytes arrived.
+      const barrier = new Promise<void>((resolve, reject) => {
+        const timer = setTimeout(() => { watcher.close(); reject(new Error("recorder barrier timed out")); }, 5000);
+        const watcher = watch(dirname(shell.log), () => {
+          if (typed(shell, from).includes("barrier541")) { clearTimeout(timer); watcher.close(); resolve(); }
+        });
+      });
+      second.send({ type: "submit", id: 543, pane_id: shell.pane, text: "barrier541", payload: "barrier541" });
+      expect(await second.result(543)).toMatchObject({ ok: true });
+      await barrier;
+      expect(typed(shell, from).split("held-copy-541").length - 1).toBe(1);
+    } finally { first.close(); second.close(); }
+  }, 30_000);
   for (const failure of ["read", "menu", "clear", "keys", "send"] as const) {
     it(`reports a partial outcome for a ${failure} failure after clearing starts`, async () => {
       const socket = await Socket.connect();
@@ -493,6 +546,56 @@ describe("WebSocket submit", () => {
       expect(sendKeys).not.toHaveBeenCalled();
     } finally {
       sendKeys.mockRestore();
+      sendText.mockRestore();
+      prompt.mockRestore();
+      screen.scroll.mockRestore();
+      screen.read.mockRestore();
+      socket.close();
+    }
+  }, 30_000);
+
+  // Hermes 0.21.5's input rows (herdr pane read --source visible --format ansi): typed text, and the classic CLI's italic hint
+  const hermesScreen = (input: string) => `● ❯ an earlier message\r\n────────\r\n${input}\r\n────────`;
+  const HERMES_TYPED = "\u001b[0m\u001b[38;5;230m❯ \u001b[0mReply with only the word";
+  const HERMES_HINT = "\u001b[0m\u001b[38;5;230m❯ \u001b[0m\u001b[3m\u001b[38;5;136mType / to browse commands, or Ctrl+P for the palette\u001b[0m";
+
+  it("refuses an immediate Hermes chat send over text typed into its input, typing nothing", async () => {
+    const socket = await Socket.connect();
+    const screen = mockClaudeInput(hermes.pane, hermesScreen(HERMES_TYPED));
+    const prompt = spyOn(herdr, "agentPrompt").mockResolvedValue(undefined);
+    const sendText = spyOn(herdr, "paneSendText").mockResolvedValue(undefined);
+    const sendKeys = spyOn(herdr, "paneSendKeys").mockResolvedValue(undefined);
+    try {
+      socket.send({ type: "submit", id: 31, pane_id: hermes.pane, text: "PINEAPPLE", payload: "PINEAPPLE" });
+      const refused = await socket.result(31);
+      expect(refused).toMatchObject({ ok: false, code: "input_draft", message: "Hermes' input in the terminal is not empty (a draft, or an input that could not be read); send or clear it there, then send this message" });
+      // nothing to clear or send anyway: those are Claude's
+      expect(refused.draft).toBeUndefined();
+      expect(refused.box).toBeUndefined();
+      expect(prompt).not.toHaveBeenCalled();
+      expect(sendText).not.toHaveBeenCalled();
+      expect(sendKeys).not.toHaveBeenCalled();
+    } finally {
+      sendKeys.mockRestore();
+      sendText.mockRestore();
+      prompt.mockRestore();
+      screen.scroll.mockRestore();
+      screen.read.mockRestore();
+      socket.close();
+    }
+  }, 30_000);
+
+  it("sends an immediate Hermes chat message when its input shows only Hermes' own hint", async () => {
+    const socket = await Socket.connect();
+    const screen = mockClaudeInput(hermes.pane, hermesScreen(HERMES_HINT));
+    const prompt = spyOn(herdr, "agentPrompt").mockResolvedValue(undefined);
+    const sendText = spyOn(herdr, "paneSendText").mockResolvedValue(undefined);
+    try {
+      socket.send({ type: "submit", id: 32, pane_id: hermes.pane, text: "PINEAPPLE", payload: "PINEAPPLE" });
+      expect(await socket.result(32)).toMatchObject({ ok: true, pane_id: hermes.pane });
+      expect(prompt).toHaveBeenCalledWith(hermes.pane, "PINEAPPLE");
+      expect(sendText).not.toHaveBeenCalled();
+    } finally {
       sendText.mockRestore();
       prompt.mockRestore();
       screen.scroll.mockRestore();
@@ -1193,17 +1296,67 @@ describe("WebSocket submit", () => {
 
   it("sends a message typed right after a Stop only once the Stop reached the pane", async () => {
     const socket = await Socket.connect();
+    const originalWrite = PtySession.prototype.write;
+    const originalSendText = herdr.paneSendText;
+    let releaseStop: (() => void) | undefined;
+    // A busy sidecar can still hold a pty ESC when the later RPC paste reaches herdr.
+    // Force that interleaving without a clock: a pty ESC goes out only after the paste.
+    const write = spyOn(PtySession.prototype, "write").mockImplementation(function (this: PtySession, text) {
+      if (text === "\u001b") {
+        releaseStop = () => { originalWrite.call(this, text); };
+        return true;
+      }
+      return originalWrite.call(this, text);
+    });
+    const sendText = spyOn(herdr, "paneSendText").mockImplementation(async (...args) => {
+      const result = await originalSendText(...args);
+      if (args[0] === shell.pane && args[1] === "after") releaseStop?.();
+      return result;
+    });
     try {
-      socket.send({ type: "attach", pane_id: shell.pane, cols: 100, rows: 30 });
-      await socket.waitFor((message) => message.type === "pty-data" && message.pane_id === shell.pane);
-      await Bun.sleep(300);
+      await attached(socket, shell.pane);
       const from = chunks(shell).length;
-      socket.send({ type: "input", pane_id: shell.pane, text: "\u001b" });
+      socket.send({ type: "input", pane_id: shell.pane, text: "\u001b", stop: true });
       socket.send({ type: "submit", id: 8, pane_id: shell.pane, text: "after", payload: "after" });
-      await socket.result(8);
+      expect(await socket.result(8)).toMatchObject({ ok: true });
       await received(shell, from, 1);
       expect(typed(shell, from)).toBe("\u001bafter\r");
     } finally {
+      write.mockRestore();
+      sendText.mockRestore();
+      socket.close();
+    }
+  }, 30_000);
+
+  it("keeps a terminal ESC in order with the typing around it", async () => {
+    const socket = await Socket.connect();
+    await attached(socket, shell.pane);
+    const originalWrite = PtySession.prototype.write;
+    const originalSendText = herdr.paneSendText;
+    const held: Array<() => void> = [];
+    const flush = () => { for (const write of held.splice(0)) write(); };
+    // Hold the pty's writes as a busy sidecar would: they go out once all three frames were
+    // written, or once something sent through herdr meanwhile reached the pane ahead of them.
+    const write = spyOn(PtySession.prototype, "write").mockImplementation(function (this: PtySession, text) {
+      held.push(() => { originalWrite.call(this, text); });
+      if (held.length === 3) flush();
+      return true;
+    });
+    const sendText = spyOn(herdr, "paneSendText").mockImplementation(async (...args) => {
+      const result = await originalSendText(...args);
+      if (args[0] === shell.pane) flush();
+      return result;
+    });
+    try {
+      const from = chunks(shell).length;
+      socket.send({ type: "input", pane_id: shell.pane, text: "x" });
+      socket.send({ type: "input", pane_id: shell.pane, text: "\u001b" });
+      socket.send({ type: "input", pane_id: shell.pane, text: "y\r" });
+      await received(shell, from, 1);
+      expect(typed(shell, from)).toBe("x\u001by\r");
+    } finally {
+      write.mockRestore();
+      sendText.mockRestore();
       socket.close();
     }
   }, 30_000);

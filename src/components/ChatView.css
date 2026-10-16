@@ -1141,6 +1141,9 @@
 
 .markdown-file {
   display: inline;
+  -webkit-user-select: text;
+  user-select: text;
+  -webkit-touch-callout: default;
   padding: 0;
   border: 0;
   background: none;
@@ -1525,3 +1528,13 @@
 .chat-abandoned { margin: var(--space-2) 0; }
 .chat-abandoned > summary { font-style: italic; }
 .chat-abandoned-note { margin: var(--space-2) 0 0; color: var(--text-dim); }
+
+/* the comment mode's toggle (CommentModeToggle.tsx), floating at the chat's top right over the transcript, whose header
+   leaves room for it (ChatTimeline.css) */
+.chat-comments-toggle {
+  position: absolute;
+  top: var(--space-2);
+  right: var(--space-3);
+  z-index: var(--z-popover);
+  background: var(--bg-panel);
+}

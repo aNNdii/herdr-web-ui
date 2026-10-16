@@ -17,10 +17,6 @@
   overflow-anchor: none;
 }
 
-.chat-view.chat-view-with-find {
-  top: 0;
-}
-
 .chat-transcript.chat-transcript-virtual {
   width: min(calc(100% - 2 * var(--space-4)), var(--chat-w));
   display: block;
@@ -40,18 +36,13 @@
   padding-bottom: calc(var(--space-3) + var(--space-5));
 }
 
-.chat-virtual-row[data-chat-match] {
-  background: var(--accent-tint);
-}
-
-/* the transcript starts below the floating comment-mode toggle and Find (ChatFind.css) */
 .chat-virtual-header {
-  padding-top: calc(var(--space-2) + var(--control-h) + var(--space-2) + var(--header-over, 0px));
+  padding-top: calc(var(--space-4) + var(--header-over, 0px));
 }
 
-/* the find bar takes the buttons' place, but the room under them stays: opening or closing Find moves no message */
-.chat-virtual-header-with-find {
-  padding-top: calc(var(--space-2) + var(--control-h) + var(--space-2));
+/* the transcript starts below the floating comment-mode toggle (ChatView.css `.chat-comments-toggle`) while it shows */
+.chat-frame-body:has(> .chat-comments-toggle) .chat-virtual-header {
+  padding-top: calc(var(--space-2) + var(--control-h) + var(--space-2) + var(--header-over, 0px));
 }
 
 .chat-virtual-footer {

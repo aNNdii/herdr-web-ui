@@ -42,8 +42,11 @@ listens on while it runs, so a run that died holds none. `CHECK_MAX_RUNS` sets h
 the default is one per eight cores, from 1 to 2. The contract and browser tests are bound by
 timing, so more runs side by side make them fail each other: on a 32-core PC three at once
 already lost Chromium screenshots in the browser lane, so raise it only to look for such failures. A run that finds every slot taken
-names the holders and exits. So does a second run in the same checkout, even with slots free:
-runs in one checkout share `dist/` and the generated types. The
+names the holders and exits, or, with `CHECK_WAIT_SECONDS` (0 to 7200), waits that long for one
+first, as CI's herdr-backed lanes do. A second run in the same checkout exits at once, even with
+slots free: runs in one checkout share `dist/` and the generated types. A checkout is its real
+path, plus `RUNNER_NAME` when that is set: the self-hosted runners of one PC share a loopback and
+all check out to the same path. The
 generated-types check (`bun run generate:types --check`) is read-only, but `test:unit` includes
 `scripts/generate-protocol-types.test.ts`, which rewrites the generated file while it runs. Fast
 checks and the browser lane also build into `dist/`; avoid overlapping runs that write to the same
@@ -100,6 +103,8 @@ bun scripts/key-bar-customization-demo-regression.ts # mobile key layout, saved 
 bun scripts/key-bar-hold-repeat-regression.ts # phone touch key-bar taps, holds (arrows and editing keys), swipes and sticky Ctrl on demo fixtures
 bun scripts/settings-pages-demo-regression.ts # every Settings page on a 390px and a 320px phone, and Back stepping out of the dialog
 bun scripts/chat-browser-qa.ts  # chat lens end to end
+bun scripts/pane-input-focus-demo-regression.ts # the input focus shortcut against fictional panes
+bun scripts/shortcut-exact-modifiers-demo-regression.ts # recording exact-modifier chords: confirm, refusals, dispatch
 bun scripts/output-browser-qa.ts # terminal output flow control end to end
 bun scripts/math-browser-qa.ts  # chat math: KaTeX loads with the first expression
 bun scripts/recent-folders-regression.ts # owned workspaces: PC-scoped history, reload, three chips on one row that fill Directory, pending and failures
@@ -131,11 +136,13 @@ bun scripts/droplet-demo-regression.ts        # real-app alerts below the header
 bun scripts/chat-greeting-demo-regression.ts  # an empty chat's greeting: centred on a desktop, docked on a phone
 bun scripts/composer-fit-demo-regression.ts   # one Send/Stop control, pending Send now actions, context/label fit and Chat font sizing
 bun scripts/held-rows-demo-regression.ts      # held messages: the fold under an approval card, its button, a row's error
-bun scripts/sidebar-activity-demo-regression.ts # Agents order Activity and Quiet opened finishes: blocked pinned, recency, an opened DONE drawn as ready
+bun scripts/sidebar-activity-demo-regression.ts # Agents order Activity and pins: blocked pinned, recency, Pin agent / Unpin agent and Pin workspace / Unpin workspace from a right-click and the context-menu key, and the ⋯ on a phone
 bun scripts/prompt-dock-demo-regression.ts    # the prompt card docked over the input card: its place, its height on a short phone, the grip, a typed pick
 bun scripts/plugin-actions-demo-regression.ts # a plugin action that ends after the server stopped waiting: the late failure said, a traceback's height on a phone with its keyboard up
 bun scripts/font-swap-demo-regression.ts      # the app's faces arriving late on a slow link: a reader at the end of a chat stays there, a tab strip the user scrolled stays put
-bun scripts/narrow-pane-demo-regression.ts    # a split pane under 80 columns: the smaller font, its setting, a zoom, and a pane no font can bring to 80
+bun scripts/narrow-pane-demo-regression.ts    # a split pane under 80 columns: the smaller font, a zoom, and a pane no font can bring to 80
+bun scripts/omo-skill-menu-demo-regression.ts # an OmO pane's `/` and `$` skill menu and its skill chips at 1280 and 390px, screenshots in evidence/omo-skill-menu/
+bun scripts/install-state-demo-regression.ts  # Install app against a real CDP install on a throwaway profile and HOME: the help or the prompt before, gone in the app window and a tab of its origin, back after uninstall
 ```
 
 `FILE_VIEWER_CASE=landscape-notch` selects a viewer case; `FILE_VIEWER_CSS=/path/to/before.css` compares another stylesheet. These checks use Chromium mobile emulation and synthetic safe-area/keyboard geometry; they cannot verify actual iOS Safari keyboard dismissal or notch insets. The existing `bun scripts/file-viewer-regression.ts` separately checks history with an owned herdr pane. `bun scripts/file-viewer-comments-regression.ts` checks comments on files and on chat replies with an owned herdr pane (the code view's room after a commented line and its chunks of lines, with a copy across them exact, wrap on and off; the comment mode's header toggle and ⊕, field and cards under the lines on a desktop, with the keyboard's ⊕; the field in a frame of its own; long press or tap, bottom sheet or field under the line and hint on phones and tablets; the comment mode in the Markdown preview, its Comment button and its field over a selection, wherever the selection starts or ends; its cards and counts in the free space right of the text, which never moves for them, edited, deleted and read-only; overlapping comments whose fills add up, in every palette; Escape with a comment open, the phone's sheet, the composer's walk, into the preview too: a folded block unfolded, the comment marked or its count's field open, the dialog where its text is not drawn; on phones and tablets the app's own touch selection with its handles and Comment, the comment sheet with its paging and read-only form, and counts sized for a finger). It runs in Chromium only; `FILE_COMMENTS_CASE=header` (a comma-separated list of `chat`, `code-room`, `code-inline`, `code-mode`, `code-touch`, `preview-mode`, `preview`, `preview-select`, `preview-button`, `preview-overlap`, `preview-cards`, `preview-counts`, `preview-walk`, `preview-touch`, `preview-touch-wide`, `header`, `composer`, `form-phone`) runs only those cases. `bun scripts/block-comments-regression.ts` checks comments on chat replies with an owned herdr pane, on the Markdown comment layer the preview has (the comment mode's toggle beside Find, shared with the file viewer; the Comment button and the field over a selection, cut to one answer part and never the user's bubble; cards right of the transcript from a reply's virtualized row (the text never moving, nothing clipping them), the row growing when they run past its text, and counts at the edge of a narrow pane or a phone; a row scrolled out of the list's window and back; the composer's walk, its dialog and the file comments after; a send with a field open; the app's touch selection and sheet on a phone; the Settings page Comments and its switch; a whole-block comment stored before selections); `BLOCK_COMMENTS_CASE=walk` (a comma-separated list of `chat-mode`, `chat-select`, `chat-button`, `chat-cards`, `chat-counts`, `chat-virtual`, `walk`, `walk-counts`, `walk-one-margin`, `chat-span`, `acknowledged`, `chat-touch`, `touch-setting`, `setting`, `legacy`) runs only those cases. The original `scripts/mobile-viewport-regression.ts` exports `checkMobileViewport` for the real-app `bun run test:ui` suite; it also checks the command palette and xterm focus transitions. The demo runners build the real client into a temporary directory, inject the committed fictional-session transport and serve it only on loopback; they do not use a live herdr session or download website media. Run on its own, each builds the client itself (`scripts/demo-build.ts`); the browser lane builds it once and names the directory in `HERDR_DEMO_BUILD`, and each runner copies that instead. They exercise real-app viewport and alert geometry, but not live herdr connectivity.
@@ -153,6 +160,55 @@ cannot be confirmed, the message is uncertain and must be checked in the termina
 retried automatically. The restart gate waits for the interrupted turn's readiness followed
 by the new turn's working/ready cycle. If Codex never exposes that cycle, remaining messages
 are held for explicit review.
+
+## GJC parent-turn status
+
+GJC status follows the native transcript bound to that pane, rather than a provider child's stale status or session ID. A user message, tool result or tool call keeps the parent turn working; an explicit final answer ends it. Native background-result, monitor and scheduled-task notifications start another turn, and an open `ask` waits for input.
+
+This is parent-turn state, not a count of live background jobs. GJC's job manager keeps that live state in memory, so historical job starts are not treated as proof that a job still runs. Missing or unreadable native evidence leaves herdr's status in charge; interrupted old turns are not successful completions. The isolated `scripts/gjc-status-browser-regression.ts` fixture exercises the real server and browser without invoking a provider or touching existing sessions.
+
+## OmO runtime recognition
+
+A pane runs OmO when its foreground processes prove it. The first proof is the program
+itself (`isOmoProcess`): omo's own binary, the omo-ai script a JS runtime runs, the
+claude-sdk child, or a hoisted senpi entry loading omo-ai's plugin.
+
+A launcher whose own argv says nothing — a renamed entrypoint, a profile wrapper — is
+recognized only by native session ownership, verified read-only on every lookup
+(`omoProcessIdentity`):
+
+- its environment as it was at `exec` resolves to an OmO store: an explicit
+  `OMO_CODING_AGENT_DIR` entry (an empty value still means the default), or no entry at
+  all so the store stays the default `~/.omo/agent`. A store moved only by
+  `SENPI_CODING_AGENT_DIR` or `PI_CODING_AGENT_DIR` is not an OmO identity;
+- the OS reports a live start time for the exact pid, and the store's
+  `sessions/<cwd-slug>/session-holders/` keeps a holder record naming that pid, a
+  matching `processStartedAtMs` and the process's own cwd.
+
+An environment marker alone, an argv mention, a stale or reused pid, a foreign cwd or
+an unreadable start never identify a custom OmO, and a custom runtime never falls back
+to cwd/time inference, file mtimes or launch hints — only its current holders bind it,
+so `/new` reports the pending held id and releasing a holder never resurrects an older
+transcript. Binding is per owning store: a held or reported session id, a pending check
+and an open descriptor match only inside the canonical stores that pane's own processes
+resolved, so the same id in two stores stays two independent sessions and two panes
+claiming one file fail closed. A held claim survives a missing or unreadable session
+file with its store scope intact — a broken header never resolves to another store's
+same-id file, and a holder whose own store cannot be resolved claims nothing.
+
+The folder a pane binds is the one its OmO processes actually run in: a process-reported
+cwd wins over the pane's `foreground_cwd`/`cwd`, which count only when no process reports
+(`omoTranscriptsOfCwd`, `omoSessionForPane` and `omoPanes` resolve it the same way, and
+same-cwd peers are the panes resolving to that folder, not the ones sharing a stale pane
+cwd). A pane whose holders run in two different cwds is ambiguous and selects nothing.
+
+The process evidence lives in `/proc`: a launcher argv does not identify is verifiable
+only where `/proc/<pid>/environ` and `/proc/<pid>/cwd` (or a reported process cwd) are
+readable — Linux today; on macOS or Windows such a launcher stays unrecognized until
+its argv is added to `isOmoProcess`. A custom launcher must therefore set the store in
+the child's environment before `exec` (`OMO_CODING_AGENT_DIR=… my-launcher`): a
+variable the process sets only in-process later may never appear in
+`/proc/<pid>/environ`, which reports the environment the kernel recorded at `exec`.
 
 ## Conversation refresh
 
@@ -364,7 +420,7 @@ after changing the staged session. Files, images, push and remote PCs are not pa
    fragments; then add the `by @login` credits; a fragment merged later must be moved into the
    version by hand, since the release workflow refuses while one is left), and tells the release
    in [release-summaries.json](../release-summaries.json) the way a game's patch notes do: under
-   the version, for each of `en`, `ko`, `ja`, `zh` and `tr`, the lists `new`, `improved` and `fixed` (a list with nothing to say is left out), each a few lines of
+   the version, for each language in `SUMMARY_LANGUAGES` (`shared/update.ts`: `en`, `ko`, `ja` and `zh`), the lists `new`, `improved` and `fixed` (a list with nothing to say is left out), each a few lines of
    plain text, 90 characters at most, the same number of lines in every language. It is what
    an install shows before and after the update, with the changelog section folded under it,
    so a line names what changes for the people who use the app and leaves out PR numbers and
@@ -543,7 +599,12 @@ under `docs/`, ends in `.md` or `.txt`, is the root `LICENSE` or sits under
 main push validation instead of calling CI again.
 
 The runner is an ephemeral Docker container that runs one job and exits. Containers have no CPU
-quota or total-memory limit; concurrent slots share the host's available resources. Its image ships Bun,
+quota or total-memory limit; concurrent slots share the host's available resources. The
+runners of one PC share one network namespace (a container of its own, not the host's), so
+`check.ts`'s slots bound the Integration and both Browser regression jobs of every runner
+together: `ci.yml` runs each of them through `bun run check` with `CHECK_MAX_RUNS` and
+`CHECK_WAIT_SECONDS`, and a job that finds the slots taken waits for one. A check run on the host
+itself is not in that namespace and does not count against it. Its image ships Bun,
 Node 22, checksum-pinned herdr, Playwright Chromium and its system libraries, ffmpeg, git, the
 checksum-pinned GitHub CLI (`gh`) for deployment and release publishing, curl, jq, unzip,
 xz-utils and CA certificates, with no sudo. Self-hosted setup verifies the prepared tools and
@@ -574,10 +635,12 @@ continues after `main` pushes.
 
 Repository protection should require PRs and all three checks on `main`—**Fast checks**,
 **Integration and browser**, and **Native Windows install** (GitHub App ID `15368`)—including for
-administrators, with branches up to date before merging and every review thread resolved. Force
-pushes and branch deletion are disabled. Human approvals are optional for this maintainer-led
+administrators. Branch protection does not require branches to be up to date before merging and
+does not enforce resolved review threads; resolve every review thread before merging anyway, as a
+practice. Force pushes and branch deletion are disabled. Human approvals are optional for this maintainer-led
 project; external contributions still need maintainer review. CodeRabbit is advisory, not a required
-check.
+check. It reviews a pull request once when it opens and not on later pushes;
+comment `@coderabbitai review` on the final head before merging and wait for it.
 Release tags must not be moved or deleted. These GitHub settings are separate from files
 in the checkout.
 

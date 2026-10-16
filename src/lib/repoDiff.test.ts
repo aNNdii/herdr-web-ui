@@ -44,12 +44,11 @@ describe("repository diff words", () => {
 });
 
 describe("repository diff layout", () => {
-  it("colors a patch within the source bounds, for a colorable language, when the setting is on", () => {
+  it("colors a patch within the source bounds, for a colorable language", () => {
     const patch = "diff --git a/src/a.ts b/src/a.ts\n--- a/src/a.ts\n+++ b/src/a.ts\n@@ -1 +1 @@\n-const a = 1;\n+const a = 2;\n";
-    expect(diffColorable(true, "src/a.ts", patch)).toBe(true);
-    expect(diffColorable(false, "src/a.ts", patch)).toBe(false);
-    expect(diffColorable(true, "notes.unknownext", patch)).toBe(false);
-    expect(diffColorable(true, "src/a.ts", `${patch}${"+x\n".repeat(VIRTUAL_HIGHLIGHT_LINES)}`)).toBe(false);
+    expect(diffColorable("src/a.ts", patch)).toBe(true);
+    expect(diffColorable("notes.unknownext", patch)).toBe(false);
+    expect(diffColorable("src/a.ts", `${patch}${"+x\n".repeat(VIRTUAL_HIGHLIGHT_LINES)}`)).toBe(false);
   });
 
   it("draws one column on a narrow screen whatever the setting says", () => {
@@ -80,5 +79,11 @@ describe("repository diff history entry", () => {
     expect(diffTargetFromState({ "herdr-web-ui:repo-diff": { machineId: "local", path: "a", scope: "branches" } })).toBeNull();
     expect(diffTargetFromState({ "herdr-web-ui:repo-diff": { ...target, paneId: 7 } })).toBeNull();
     expect(diffTargetFromState({ "herdr-web-ui:repo-diff": { ...target, path: undefined } })).toBeNull();
+  });
+
+  it("releases only the diff when another viewer takes its entry", () => {
+    const state = diffTargetState({ marker: "kept" }, target);
+    expect(diffTargetState(state, null)).toEqual({ marker: "kept" });
+    expect(diffTargetFromState(state)).toEqual(target);
   });
 });

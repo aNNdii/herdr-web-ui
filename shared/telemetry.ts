@@ -3,7 +3,9 @@
  * notice in the app; nothing is sent before that notice was shown (and a grace period after it,
  * server/telemetry.ts NOTICE_GRACE_MS), and nothing between an install and an update. An event
  * also carries the browser's latest allowlisted settings snapshot; no raw user-entered values or
- * account identifiers are included.
+ * account identifiers are included. Once per UTC day a browser visits, a separate active message
+ * (POST /v1/active on the receiver) names the install and the kinds of coding agents running, from
+ * TELEMETRY_HARNESSES only.
  *
  *  GET  /api/telemetry  -> TelemetryStatus, no-store
  *  POST /api/telemetry  { enabled?: boolean, notice_seen?: true, notice_version?: number, settings?: TelemetrySettings } -> TelemetryStatus
@@ -18,9 +20,10 @@ export type TelemetryEventName = "install" | "update";
 
 /**
  * The notice's wording as a number: an install that saw an older one sees the notice again, and
- * sends nothing until it has (3: events now carry an allowlisted settings snapshot).
+ * sends nothing until it has (3: events now carry an allowlisted settings snapshot; 4: a daily
+ * active message with the harness kinds).
  */
-export const NOTICE_VERSION = 3;
+export const NOTICE_VERSION = 4;
 
 /**
  * Current setting values safe to report. Only finite enums, booleans and bounded numbers are
@@ -33,35 +36,34 @@ export interface TelemetrySettings {
   density: "compact" | "comfortable";
   sidebarRows: "one" | "two";
   agentOrder: "workspace" | "activity";
-  agentCards: boolean;
-  agentPins: boolean;
-  quietOpenedDone: boolean;
   agentMarks: "color" | "mono";
-  palette: "amber" | "report" | "charcoal" | "catppuccin" | "lilac" | "forest";
+  statusIndicators: "classic" | "dots" | "symbols";
+  palette: "amber" | "charcoal" | "catppuccin";
+  /** the pair System mode switches between */
+  paletteLight: "amber" | "charcoal" | "catppuccin";
+  paletteDark: "amber" | "charcoal" | "catppuccin";
   terminalFontSize: number;
-  terminalCursorStyle: "block" | "bar" | "underline";
-  terminalCursorBlink: boolean;
   terminalWheelSpeed: number;
   paneClipboard: boolean;
   releasePaneAway: boolean;
-  narrowPaneFont: boolean;
   chatFontSize: number | null;
+  /** null: the size the screen chose */
+  uiFontSize: number | null;
   chatWidth: "narrow" | "default" | "wide" | "full";
   enterSends: boolean;
   autoSendQueued: boolean;
+  suggestionChip: boolean;
   showThinking: boolean;
   keepScreenOn: boolean;
-  language: "system" | "en" | "zh" | "ja" | "ko" | "tr";
+  language: "system" | "en" | "zh" | "ja" | "ko";
   alertsOn: boolean;
   alertInput: boolean;
   alertDone: "off" | "long" | "always";
   alertInApp: boolean;
   alertSound: boolean;
   showQuickReplies: boolean;
-  showSuggestionChip: boolean;
   showUsage: boolean;
   usageCount: "used" | "left";
-  usagePace: boolean;
   usageGlance: "week" | "session";
   defaultView: "auto" | "chat" | "terminal";
   voiceInput: "auto" | "on" | "off";
@@ -69,8 +71,8 @@ export interface TelemetrySettings {
   voicePolishChat: boolean;
   voicePolishTerminal: boolean;
   wrapCode: boolean;
-  highlightCode: boolean;
   markdownWidth: "readable" | "full";
+  diffStyle: "unified" | "split";
   terminalFontCustom: boolean;
   chatFontCustom: boolean;
   shortcutsCustom: boolean;
@@ -78,11 +80,8 @@ export interface TelemetrySettings {
   quickRepliesCustom: boolean;
   quickReplyCount: number;
   usageHiddenCount: number;
-  /** paging shortcuts (#811): lines kept between pages, and plain PageUp/PageDown while composing */
-  pageOverlapRows: number;
-  chatPageKeys: boolean;
-  /** files one paste, pick or drop may attach (#863) */
-  attachLimit: number;
+  /** the usage meters' accounts were put in an order of the user's own */
+  usageOrderCustom: boolean;
 }
 
 /** The browser's full, non-sensitive snapshot. */
@@ -102,41 +101,39 @@ const nullableIntegerBetween = (min: number, max: number) => (value: unknown): b
   value === null || integerBetween(min, max)(value);
 
 // This explicit shared schema must track the producer without importing frontend code at runtime.
+const PALETTES = ["amber", "charcoal", "catppuccin"] as const;
 const TELEMETRY_SETTINGS_VALIDATORS = {
   terminalInputMode: oneOf(["auto", "line", "direct"]),
   theme: oneOf(["dark", "light", "system"]),
   density: oneOf(["compact", "comfortable"]),
   sidebarRows: oneOf(["one", "two"]),
   agentOrder: oneOf(["workspace", "activity"]),
-  agentCards: booleanValue,
-  agentPins: booleanValue,
-  quietOpenedDone: booleanValue,
   agentMarks: oneOf(["color", "mono"]),
-  palette: oneOf(["amber", "report", "charcoal", "catppuccin", "lilac", "forest"]),
+  statusIndicators: oneOf(["classic", "dots", "symbols"]),
+  palette: oneOf(PALETTES),
+  paletteLight: oneOf(PALETTES),
+  paletteDark: oneOf(PALETTES),
   terminalFontSize: integerBetween(10, 22),
-  terminalCursorStyle: oneOf(["block", "bar", "underline"]),
-  terminalCursorBlink: booleanValue,
   terminalWheelSpeed: integerBetween(1, 10),
   paneClipboard: booleanValue,
   releasePaneAway: booleanValue,
-  narrowPaneFont: booleanValue,
   chatFontSize: nullableIntegerBetween(11, 24),
+  uiFontSize: nullableIntegerBetween(11, 20),
   chatWidth: oneOf(["narrow", "default", "wide", "full"]),
   enterSends: booleanValue,
   autoSendQueued: booleanValue,
+  suggestionChip: booleanValue,
   showThinking: booleanValue,
   keepScreenOn: booleanValue,
-  language: oneOf(["system", "en", "zh", "ja", "ko", "tr"]),
+  language: oneOf(["system", "en", "zh", "ja", "ko"]),
   alertsOn: booleanValue,
   alertInput: booleanValue,
   alertDone: oneOf(["off", "long", "always"]),
   alertInApp: booleanValue,
   alertSound: booleanValue,
   showQuickReplies: booleanValue,
-  showSuggestionChip: booleanValue,
   showUsage: booleanValue,
   usageCount: oneOf(["used", "left"]),
-  usagePace: booleanValue,
   usageGlance: oneOf(["week", "session"]),
   defaultView: oneOf(["auto", "chat", "terminal"]),
   voiceInput: oneOf(["auto", "on", "off"]),
@@ -144,8 +141,8 @@ const TELEMETRY_SETTINGS_VALIDATORS = {
   voicePolishChat: booleanValue,
   voicePolishTerminal: booleanValue,
   wrapCode: booleanValue,
-  highlightCode: booleanValue,
   markdownWidth: oneOf(["readable", "full"]),
+  diffStyle: oneOf(["unified", "split"]),
   terminalFontCustom: booleanValue,
   chatFontCustom: booleanValue,
   shortcutsCustom: booleanValue,
@@ -153,9 +150,7 @@ const TELEMETRY_SETTINGS_VALIDATORS = {
   quickRepliesCustom: booleanValue,
   quickReplyCount: integerBetween(0, 12),
   usageHiddenCount: integerBetween(0, 64),
-  pageOverlapRows: integerBetween(0, 100),
-  chatPageKeys: booleanValue,
-  attachLimit: integerBetween(1, 50),
+  usageOrderCustom: booleanValue,
 } satisfies Record<keyof TelemetrySettings, (value: unknown) => boolean>;
 
 /** Every key the Worker (telemetry/worker.ts) accepts in a snapshot, and requires. */
@@ -184,6 +179,43 @@ export function telemetrySettings(value: unknown): TelemetrySettings | null {
   }
 }
 export type InstallMethod = "plugin" | "managed" | "source";
+
+/** Harness kinds an active message may name: the supported agents (shared/supported-agents.ts) and "other". A literal list, not an import, so the Worker's copy only changes with a deploy. */
+export const TELEMETRY_HARNESSES = ["agy", "claude", "codex", "devin", "gjc", "grok", "hermes", "omo", "omp", "opencode", "other", "pi"] as const;
+export type TelemetryHarness = typeof TELEMETRY_HARNESSES[number];
+
+/** The harness a pane's herdr agent counts as: null for no agent, "other" for one not in the list. */
+export function harnessOf(agent: string | null | undefined): TelemetryHarness | null {
+  if (!agent) return null;
+  return agent !== "other" && (TELEMETRY_HARNESSES as readonly string[]).includes(agent) ? agent as TelemetryHarness : "other";
+}
+
+/** A sorted, duplicate-free array of TELEMETRY_HARNESSES values, or null. Empty is valid. */
+export function telemetryHarnesses(value: unknown): TelemetryHarness[] | null {
+  if (!Array.isArray(value)) return null;
+  const clean: TelemetryHarness[] = [];
+  for (const [index, item] of value.entries()) {
+    if (typeof item !== "string" || !(TELEMETRY_HARNESSES as readonly string[]).includes(item)) return null;
+    if (index > 0 && !(value[index - 1] < item)) return null;
+    clean.push(item as TelemetryHarness);
+  }
+  return clean;
+}
+
+/** One install's activity for one UTC day, exactly as sent to /v1/active. `day` is the UTC date (YYYY-MM-DD) of the browser visit, not of delivery. */
+export interface TelemetryActive {
+  event: "active";
+  day: string;
+  install_id: string;
+  version: string;
+  os: string;
+  arch: string;
+  install_method: InstallMethod;
+  harnesses: TelemetryHarness[];
+}
+
+/** How many days back a late delivery may still name: the visit day and the two before the receiver's today. */
+export const ACTIVE_LATE_DAYS = 2;
 
 /**
  * One event, exactly as it is sent. The receiver keeps these fields, the day and the country the
@@ -214,4 +246,6 @@ export interface TelemetryStatus {
   notice_seen: boolean;
   /** what the next event would be, as it would be sent; null when there is nothing left to send for this version */
   next: TelemetryEvent | null;
+  /** the active message today's visits send, as it would be sent; harnesses seen so far today (empty and day = today before a visit) */
+  active: TelemetryActive;
 }
