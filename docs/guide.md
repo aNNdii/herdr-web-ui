@@ -156,12 +156,12 @@ Every agent herdr runs shows up with its live status, terminal and alerts. The c
 | **Claude Code** | Native transcript, resolved through herdr | ✓ approvals, questions, plan and menu picks, and the `/model` list (picked for the session) |
 | **Codex** | Native rollout, with tool results and commentary/final phases | ✓ approvals and questions, including queued ones, and the `/model` lists (picked for the session) |
 | **omp** | Native session file | ✓ |
-| **omo** | Native session file, found through the pane's process tree | — use Terminal |
+| **omo** | Native session file, found through the pane's process tree | ✓ the `/model` list (picked for the session); other menus — use Terminal |
 | **gjc** | Native session file identified by GJC's SDK broker and the pane's process | — use Terminal |
 | **pi** | Native session file, resolved through herdr; after `/tree`, the branch in play | ✓ its dialogs: a question, a confirmation, an answer typed in |
 | **OpenCode** | Native session in OpenCode 2's own database, resolved through herdr: `~/.local/share/opencode/opencode.db` (`%USERPROFILE%\.local\share\opencode\opencode.db` on Windows), or where the server's `XDG_DATA_HOME` or `OPENCODE_DB` puts it | — use Terminal |
 | **Devin CLI** | Native SQLite session, showing the active branch when herdr or the live process explicitly identifies the session; otherwise terminal text | — use Terminal |
-| **Grok** | Linux native update log with exact process/session evidence, on the `grok-1.0.50-linux-x86_64` build only; other builds use Terminal. See [Grok setup and limits](grok-chat.md). | — use Terminal |
+| **Grok** | Linux native update log. Any Grok executable named `grok` or `grok-…` whose one held session matches Herdr; macOS, Windows, and an ambiguous hold use Terminal. See [Grok setup and limits](grok-chat.md). | — use Terminal |
 | **Hermes** | Native SQLite session store | — use Terminal |
 | **Antigravity (agy)** | **Experimental; macOS untested.** Native ledger, selected by the running process’s held conversation lock. Linux native-tested; Windows uses terminal text. See [Agy behavior and limits](agy-chat.md). | — use Terminal |
 | **Anything else** | The terminal's text | — use Terminal |
@@ -218,7 +218,7 @@ A pane's plan is the task list a Claude Code agent keeps (`TaskCreate` / `TaskUp
 | **Manage sessions** | Start an agent in a folder you type or pick with **Browse**. In New workspace, Browse filters the currently loaded folders as you type (case-insensitive); opening a folder updates Directory, so **Start** uses that path even without **Use this folder** (which closes Browse), and a folder under home stays written as `~/…`. **New folder** (the folder-plus button in Browse's bar) makes a folder inside the one shown and opens it. It does not search subfolders or folders beyond the displayed 500. Add a tab to a workspace (as herdr's prefix+c), switch tabs from the strip over the pane, rename workspaces from their ⋯/right-click menu and panes from their own menu, reorder workspaces (drag a row, or on a phone long-press it and drag; Alt+Up/Down moves a focused row one step), and jump anywhere from the command palette. |
 | **Speak instead of typing** | A mic beside Attach in the composer and beside Send in the terminal input line. Hold to talk or tap twice; the words land at the caret and are never sent by themselves. See [Voice input](#voice-input). |
 | **Watch your plan limits** | Beside Settings, how much of each AI subscription signed in on the PC is used, or what is left: the week's or the session's limit per account, and every limit with its reset time on a tap. See [Subscription usage](#subscription-usage). |
-| **Make it yours** | English, Korean, Japanese or Simplified Chinese, following the browser or chosen in Settings. Dark, light or system theme (with separate Light and Dark palettes under System), compact density, interface size, terminal and chat fonts and sizes (Chromium lists the installed fonts to pick from), a resizable composer, Enter behavior and thinking visibility. |
+| **Make it yours** | English, Korean, Japanese or Simplified Chinese, following the browser or chosen in Settings. Dark, light or system mode, with a dark theme and a light theme picked from Amber, Charcoal, Catppuccin and herdr's built-in themes, compact density, interface size, terminal and chat fonts and sizes (Chromium lists the installed fonts to pick from), a resizable composer, Enter behavior and thinking visibility. |
 
 Every agent has the same chat controls on desktop and phones: Stop while it works with an empty
 draft, Send when you type, and Send at rest. With a draft in the box, Escape stops the agent. Sending during work adds a message bubble above the
@@ -416,7 +416,23 @@ The `map` block goes in the `http` section. `proxy_read_timeout` keeps an idle t
 
 Both examples drop a `Tailscale-User-Login` header a visitor sends. That header is how `tailscale serve` names your own login, and on a PC that runs Tailscale the server trusts it from any proxy on this PC, so a public proxy must not pass a visitor's copy on. With a token set the server asks for the token whatever that header says, so a proxy that does pass it on gives a visitor nothing.
 
-To check it, open `https://herdr.example.com/api/session` from another device without signing in: it must answer 401.
+**If the proxy already signs people in** (basic auth, Authelia, oauth2-proxy, Cloudflare Access and the like), let it hand the app the token, so nobody signs in twice and Settings stops warning that this address is open. Set `HERDR_WEB_TOKEN`, then have the proxy send it on every request it lets through, the terminal's `/ws` connection included. In Caddy, inside `reverse_proxy`:
+
+```caddyfile
+		header_up Authorization "Bearer {env.HERDR_WEB_TOKEN}"
+```
+
+In nginx, inside `location /`:
+
+```nginx
+        proxy_set_header Authorization "Bearer <your token>";
+```
+
+The proxy's own sign-in is then the only one: anyone it lets through gets in, and nobody needs to pair a device. Settings then offers no **Sign out**: the proxy would send the token again with the next request, so signing out is done at the proxy. Keep the app's port closed to everything but the proxy, as `HOST=127.0.0.1` does.
+
+To check the app's gate, request its `/api/session` directly without a token: it must answer 401.
+If the proxy signs people in, also check that a signed-out visitor cannot reach the app through
+the public address.
 
 [Portal](https://github.com/gosuda/portal-tunnel) gives this PC a public HTTPS address with no account and no domain of your own. From v2.6.1, its `--http-route` does all four things and can drop a header a visitor sends; the plain `portal expose 7317` sends no `X-Forwarded-Proto`, so the app's own requests are refused (`invalid_origin`).
 
@@ -440,7 +456,7 @@ Portal prints `service ready at https://<name>-<address>.<relay>:443`, where `<a
 
 At startup, the app waits for any recorded Portal process to stop before answering requests. If `portal/state.json` under `HERDR_WEB_STATE_DIR` is damaged, or the recorded process cannot be identified or stopped, requests fail closed rather than risk exposing a server restarted without a token. Check the server log. After confirming that this app's Portal process has stopped, repair or remove only `portal/state.json` and restart the app. Keep `portal/identity.json` to preserve the address; never discard the state record while its tunnel may still be running. Servers on different ports need separate state directories to control their own Portal addresses.
 
-**Sign out** in Settings → Devices clears, after asking once, this browser's token and device cookies; terminal sessions and agents keep running. It is shown for token or device authentication, not automatic local or Tailscale access.
+**Sign out** in Settings → Devices clears, after asking once, this browser's token and device cookies; terminal sessions and agents keep running. It is shown when this browser signed in with the token or as a paired device, not when a proxy sends the token in the `Authorization` header (sign out at the proxy) or for automatic local or Tailscale access.
 
 If `devices.json` under `HERDR_WEB_STATE_DIR` (default `~/.config/herdr-web-ui`) is corrupt or unreadable, the server keeps unrecognized external clients out and preserves the file. Local access and the owner's trusted Tailscale login without a configured token, and a valid token, still work. Settings → Phone & devices and the server log explain the error. Restore a valid registry from backup or fix its permissions, then restart; pairing and device changes remain disabled until it is repaired.
 
@@ -475,6 +491,7 @@ Observe connections cannot take a pane, and a displaced bridge never takes it ba
 | `HERDR_WEB_HERDR_BIN` | `herdr` | herdr executable used for terminal attach |
 | `HERDR_WEB_APP_NAME` | unset (`herdr`) | The name the installed app has on a phone or computer, for example the PC's name. Each PC installs as an app of its own, and without it they are all called `herdr`. An app already installed takes the new name when the browser next updates it, usually within a day or two, without a reinstall. Keep it short: a home screen cuts a long label |
 | `HERDR_WEB_PASTE_DIR` | `<pane cwd>/.herdr-web-ui` | Where pasted and attached files are saved: an absolute path or `~/…`. Set it to keep them out of your projects; an agent may then ask before reading one. It covers the panes of this server's PC; a remote PC keeps the default |
+| `HERDR_WEB_MEDIA_ROOTS` | unset | Folders besides its own that a rendered HTML page may play a video or sound from, through a symlink beside it or a `../` link: absolute paths separated by `:` (`;` on Windows), for example a network share where recordings are kept. Any page can then find out which files exist there. Unset, a page plays its large videos only from its own folder, so a page that came with its own symlinks cannot find out which of this PC's files exist. A large video plays from an address made for that render: it works only from the device's network address that opened the page, for 30 minutes (reload the page after that), and stops when that device is revoked or signs out. The page's own script can read that address and share it, so for those 30 minutes anyone behind the same network address can play that file too |
 | `CODEX_HOME` | `~/.codex` | Where Codex sessions are read |
 
 ## Updates

@@ -44,7 +44,7 @@ export interface TextFileViewProps {
  */
 export function TextFileView({ path, blocks, lines, virtual, selectable, onOpen, sourceRef, previewRef, markedLine }: TextFileViewProps) {
   const t = useT();
-  const { settings, resolvedTheme } = useSettings();
+  const { settings, resolvedEntry } = useSettings();
   // the app hands a new onOpen on every render (each poll): read it from a ref, so the context
   // value changes only with the file, and the memoized Markdown and its links are left alone
   const onOpenRef = useRef(onOpen);
@@ -58,7 +58,7 @@ export function TextFileView({ path, blocks, lines, virtual, selectable, onOpen,
     if (virtual === null) return <CodeLines ref={sourceRef as RefObject<HTMLPreElement | null>} className="file-viewer-text" lines={lines} open={null} lineNumbers wrap={settings.wrapCode} markedLine={markedLine} firstLine={1} chunked />;
     if (selectable) return <textarea ref={sourceRef as RefObject<HTMLTextAreaElement | null>} className="file-viewer-select-source" readOnly value={virtual.text} aria-label={t("File source")} spellCheck={false} />;
     return <Suspense fallback={<p className="file-viewer-note">{t("Opening…")}</p>}>
-      <VirtualSource name={path} text={virtual.text} colored={virtual.colored} wrap={settings.wrapCode} theme={resolvedTheme} markedLine={markedLine} />
+      <VirtualSource name={path} text={virtual.text} colored={virtual.colored} wrap={settings.wrapCode} theme={resolvedEntry.mode} markedLine={markedLine} />
     </Suspense>;
   })();
   return <div className={virtual !== null && blocks === null ? "file-viewer-content file-viewer-content-virtual" : "file-viewer-content"}>

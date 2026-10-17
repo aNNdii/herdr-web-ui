@@ -1,6 +1,6 @@
 import { describe, expect, it, beforeAll, afterAll } from "bun:test";
 import { Database } from "bun:sqlite";
-import { appendFileSync, chmodSync, copyFileSync, mkdirSync, mkdtempSync, existsSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { appendFileSync, chmodSync, copyFileSync, mkdirSync, mkdtempSync, existsSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { ConversationMonitor } from "./conversation-monitor.ts";
@@ -62,7 +62,8 @@ describe("Grok conversation API", () => {
     writeFileSync(events, "");
     // A native stand-in owns the fd evidence and only sleeps; no model or user's store.
     const executable = join(root, "grok");
-    copyFileSync("/bin/sleep", join(root, "grok-1.0.50-linux-x86_64")); symlinkSync("grok-1.0.50-linux-x86_64", executable); chmodSync(executable, 0o755);
+    const nativeExecutable = join(root, "grok-1.0.52-linux-x86_64");
+    copyFileSync("/bin/sleep", nativeExecutable); symlinkSync("grok-1.0.52-linux-x86_64", executable); chmodSync(executable, 0o755);
     const created = await workspaceCreate({ cwd: root, label: "herdr-web-ui-test-grok-api" });
     let app: ReturnType<typeof createServer> | undefined;
     try {
@@ -85,6 +86,9 @@ describe("Grok conversation API", () => {
       expect(body.source).toBe("grok-transcript");
       expect(body.activity).toBe("working");
       expect(body.turns[0].parts[0].text).toBe("fictional prompt");
+      // An update can unlink the running binary: /proc/<pid>/exe gains " (deleted)".
+      unlinkSync(nativeExecutable);
+      expect((await (await fetch(url)).json()).source).toBe("grok-transcript");
       expect((await fetch(url, { headers: { "if-none-match": first.headers.get("etag")! } })).status).toBe(304);
       const ref = body.turns[1].parts[0].output_ref;
       const outputUrl = `http://127.0.0.1:${app.port}/api/pane/conversation/tool-output?${new URLSearchParams({ pane_id: paneId, ref })}`;
@@ -3159,7 +3163,11 @@ describe("pairing and identity", () => {
     const at = (headers: Record<string, string> = {}) => fetch(`http://127.0.0.1:${secured.port}/api/health?scope=bridge`, { headers }).then((r) => r.json() as Promise<{ auth: HealthAuth }>).then((b) => b.auth);
     try {
       expect(await at()).toMatchObject({ authenticated: false, reason: "token_required" });
-      expect(await at({ authorization: "Bearer t0k3n" })).toMatchObject({ authenticated: true, via: "token" });
+      expect(await at({ authorization: "Bearer wrong" })).toEqual({ required: true, authenticated: false, reason: "token_required" });
+      expect(await at({ authorization: "Bearer t0k3n" })).toMatchObject({ authenticated: true, via: "token", bearer: true });
+      // a token held in the sign-in cookie is one signing out can clear
+      expect(await at({ cookie: "herdr_web_token=t0k3n" })).toEqual({ required: false, authenticated: true, via: "token", role: "drive" });
+      expect(await at({ cookie: "herdr_web_token=t0k3n", authorization: "Bearer wrong" })).toEqual({ required: false, authenticated: true, via: "token", role: "drive" });
       // another proxy on this PC can pass a visitor's copy of the login header on: the token is asked for anyway
       expect(await at(proxied(OWNER))).toMatchObject({ authenticated: false, reason: "token_required" });
       expect(await at(proxied("someone@example.com"))).toMatchObject({ authenticated: false, reason: "token_required" });

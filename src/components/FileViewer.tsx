@@ -29,6 +29,7 @@ import { lineRequest, readBudget, shownSource, sourceLayout, virtualHighlightabl
 import { canHighlight, countLines, languageForPath, LINE_ELEMENT_LIMIT, normalizeCode } from "../lib/highlight.ts";
 import { useLocale, useT } from "../lib/i18n.ts";
 import { useSettings } from "../lib/settings.ts";
+import { useAnnouncedText } from "../lib/useAnnouncedText.ts";
 import { MAX_INLINE_IMAGE_BYTES, markdownImagePreview } from "../lib/markdownImages.ts";
 import { nativeModalOver, useFocusTrap } from "../lib/useFocusTrap.ts";
 import { previewHosts, type MarkdownBlock } from "../lib/markdown.ts";
@@ -462,14 +463,21 @@ export function FileViewer({ path: asked, paneId, machineId: machineProp, paneFo
   const imagePreview = useCallback((src: string) => markdownImagePreview(
     src, shownPath, (target) => fetchFileInfo(target, paneId), (target, download) => fileUrl(target, paneId, download),
   ), [shownPath, paneId, fetchFileInfo, fileUrl]);
+  // "Opening…" while the file's info, or a text's content or preview, is on its way. The note is in the
+  // viewer from its first render, clipped while empty (never display: none), and its words land a frame
+  // after it (lib/useAnnouncedText.ts)
+  const opening = directory === null && error === null && candidates === null
+    && (info === null || (info.kind === "text" && (!htmlPage || source) && (loaded === null || (view === "markdown" && preview.status !== "ready"))));
+  const openingWords = useAnnouncedText(opening ? t("Opening…") : null);
+  const openingNote = <p className={openingWords === null ? "visually-hidden" : "file-viewer-note"} role="status">{openingWords}</p>;
   const body = (() => {
     if (directory !== null) return <DirectoryBrowser key={directory} start={directory} onOpenFile={onOpen ?? setPath} />;
     if (error !== null) return <p className="file-viewer-note" role="alert">{error === "missing" ? t("No readable file at this path.") : t("The file could not be opened.")}</p>;
     if (candidates !== null) return <div className="file-viewer-choices">
-      <p className="file-viewer-note">Several files are named {target.path.split("/").pop()}:</p>
+      <p className="file-viewer-note">{t("Several files are named {name}:", { name: target.path.split("/").pop() ?? target.path })}</p>
       <ul>{candidates.map((candidate) => <li key={candidate}><button type="button" className="btn btn-ghost" onClick={() => setPath(candidate + path.slice(target.path.length))}>{candidate}</button></li>)}</ul>
     </div>;
-    if (info === null) return <p className="file-viewer-note">{t("Opening…")}</p>;
+    if (info === null) return null;
     switch (info.kind) {
       case "image":
         return info.size > MAX_INLINE_IMAGE_BYTES
@@ -489,7 +497,7 @@ export function FileViewer({ path: asked, paneId, machineId: machineProp, paneFo
         return <>
           {htmlPage && !docked && modes}
           {loaded === null || (view === "markdown" && preview.status !== "ready")
-          ? <p className="file-viewer-note">{t("Opening…")}</p>
+          ? null
           // a text the renderer cannot draw fails here, not the app: the header (Show source, Open raw file,
           // Close) stays, and a Preview that fails offers its source
           : <RenderBoundary key={view} resetKey={loaded} fallback={() => view === "markdown"
@@ -502,7 +510,7 @@ export function FileViewer({ path: asked, paneId, machineId: machineProp, paneFo
           </RenderBoundary>}
         </>;
       default:
-        return <p className="file-viewer-note">{info.mime}, {formatBytes(info.size)}. This file can't be shown here; download it instead.</p>;
+        return <p className="file-viewer-note">{t("This file can't be previewed here. Download it to open it.")} <span className="file-viewer-note-meta">{info.mime}, {formatBytes(info.size)}</span></p>;
     }
   })();
 
@@ -593,7 +601,7 @@ export function FileViewer({ path: asked, paneId, machineId: machineProp, paneFo
   // view's layer mark it), the place the preview's margin and field over a selection and the code view's cards and field
   // are positioned in; the dialog and the docked panel draw the same one
   const commentableBody = <div ref={attachBody} className={bodyClass}>
-    {body}
+    {body}{openingNote}
     <MarkdownCommentLayer ref={markdownLayer} source={previewSource} surface={bodyNode} roots={() => previewRef.current === null ? [] : [previewRef.current]}
       mode={settings.commentMode} margin={previewMargin} focusFallback={() => modeToggleRef.current} />
     {codeComments.layer}
@@ -604,7 +612,7 @@ export function FileViewer({ path: asked, paneId, machineId: machineProp, paneFo
   if (page) return (
     <main ref={surface} className="file-reader">
       {header}
-      <div className={`${bodyClass} file-reader-body`}>{body}</div>
+      <div className={`${bodyClass} file-reader-body`}>{body}{openingNote}</div>
     </main>
   );
 

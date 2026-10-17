@@ -58,6 +58,7 @@ run_script scripts/herdr-restart-regression.ts
 run_script scripts/sticky-modifiers-regression.ts
 run_script scripts/terminal-arrows-clicks-regression.ts
 run_script scripts/terminal-viewport-regression.ts
+run_script scripts/omo-question-wheel-regression.ts
 run_script scripts/application-paging-regression.ts
 run_script scripts/pane-paging-demo-regression.ts
 run_script scripts/key-bar-customization-demo-regression.ts
@@ -75,7 +76,8 @@ run_script scripts/chat-selection-copy-regression.ts
 run_script scripts/chat-fallback-browser-qa.ts
 run_script scripts/grok-chat-browser-qa.ts
 run_script scripts/omo-chat-browser-qa.ts
-run_script scripts/omo-skill-menu-demo-regression.ts
+run_script scripts/omo-plan-browser-regression.ts
+run_script scripts/agent-skill-menu-demo-regression.ts
 run_script scripts/agy-chat-browser-qa.ts
 run_script scripts/gjc-status-browser-regression.ts
 run_script scripts/math-browser-qa.ts
@@ -96,15 +98,18 @@ run_script scripts/held-rows-demo-regression.ts
 run_script scripts/block-comments-regression.ts
 run_script scripts/sidebar-activity-demo-regression.ts
 run_script scripts/sidebar-spacing-demo-regression.ts
+run_script scripts/sidebar-branch-line-demo-regression.ts
 run_script scripts/workspace-touch-reorder-demo-regression.ts
 run_script scripts/prompt-dock-demo-regression.ts
 run_script scripts/plugin-actions-demo-regression.ts
 run_script scripts/palette-machines-demo-regression.ts
 run_script scripts/narrow-pane-demo-regression.ts
 run_script scripts/touch-long-press-demo-regression.ts
+run_script scripts/context-menu-inputs-demo-regression.ts
 run_script scripts/render-crash-demo-regression.ts
 run_script scripts/phone-split-grid-demo-regression.ts
 run_script scripts/recent-folders-regression.ts
+run_script scripts/phone-worktree-sheet-regression.ts
 run_script scripts/preferences-sync-regression.ts
 run_script scripts/machine-dialog-regression.ts
 run_script scripts/machine-conflict-regression.ts
