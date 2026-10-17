@@ -100,10 +100,10 @@ export function keepEmptyRows(shadow: ShadowRoot): void {
  */
 export const DIFF_SHADOW_CSS = `${SHADOW_CSS}
 :host {
-  --diffs-light-addition-color: var(--syntax-inserted);
-  --diffs-dark-addition-color: var(--syntax-inserted);
-  --diffs-light-deletion-color: var(--syntax-deleted);
-  --diffs-dark-deletion-color: var(--syntax-deleted);
+  --diffs-light-addition-color: var(--git-added);
+  --diffs-dark-addition-color: var(--git-added);
+  --diffs-light-deletion-color: var(--git-deleted);
+  --diffs-dark-deletion-color: var(--git-deleted);
   --diffs-bg-separator-override: var(--bg-elevated);
   --diffs-bg-context-override: var(--bg);
   --diffs-bg-context-gutter-override: var(--bg);
