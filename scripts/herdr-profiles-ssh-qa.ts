@@ -9,7 +9,8 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { createServer } from "../server/index.ts";
 import { parseHerdrProfiles } from "../server/herdr-profiles.ts";
-import { REMOTE_BUNDLE_VERSION, type Machine, type SetupJob } from "../shared/machines.ts";
+import type { Machine, SetupJob } from "../shared/machines.ts";
+import { BRIDGE_VERSION as REMOTE_BUNDLE_VERSION } from "../server/bridge-version.ts";
 import type { ServerMessage, SessionSnapshot, WorkspaceCreated } from "../shared/protocol.ts";
 
 const archive = resolve(process.env.HERDR_SSH_QA_BUNDLE ?? "");

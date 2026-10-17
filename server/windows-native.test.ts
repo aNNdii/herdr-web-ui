@@ -19,7 +19,7 @@ import { descendantArgv, windowsProcessTable } from "./windows-processes.ts";
 import { windowsHost } from "./remote-host.ts";
 import type { SshConnection } from "./ssh.ts";
 import { psQuote } from "./powershell.ts";
-import { REMOTE_BUNDLE_VERSION } from "../shared/machines.ts";
+import { BRIDGE_VERSION as REMOTE_BUNDLE_VERSION } from "./bridge-version.ts";
 
 const onWindows = process.platform === "win32";
 

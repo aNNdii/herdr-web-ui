@@ -1,0 +1,135 @@
+name: Fork bridge bundles
+# The fork's remote PC bridges (docs/fork.md#remote-pcs): a release of next whose server code differs
+# from every published bridge publishes its bundles here as remote-v<version>, version as
+# server/bridge-version.ts names it (upstream's number and a fingerprint of server/ and shared/),
+# before its vX.Y.Z-next.N tag exists, so an install that updates finds its bridge. A version that is
+# already published builds nothing. Built as upstream's Remote PC bundles workflow builds them.
+on:
+  workflow_call:
+    inputs:
+      sha:
+        description: the commit whose bridge is published
+        type: string
+        required: true
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: fork-bridge-bundles
+  cancel-in-progress: false
+jobs:
+  plan:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      build: ${{ steps.version.outputs.build }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.sha || github.sha }}
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.2
+      - name: Name the bridge
+        id: version
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          version=$(bun -e 'import { BRIDGE_VERSION } from "./server/bridge-version.ts"; console.log(BRIDGE_VERSION)')
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          if gh release view "remote-v$version" >/dev/null 2>&1; then
+            echo "Bridge remote-v$version is already published." >> "$GITHUB_STEP_SUMMARY"
+            echo "build=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "Publishing bridge remote-v$version." >> "$GITHUB_STEP_SUMMARY"
+            echo "build=true" >> "$GITHUB_OUTPUT"
+          fi
+  bundle:
+    needs: plan
+    if: needs.plan.outputs.build == 'true'
+    timeout-minutes: 20
+    strategy:
+      fail-fast: true
+      matrix:
+        os: [ubuntu-24.04, ubuntu-24.04-arm, macos-15, macos-15-intel]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.sha || github.sha }}
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.2
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+      - run: bun install --frozen-lockfile
+      - run: bun run build
+      - run: bun run scripts/build-remote-bundle.ts
+      - run: bun run scripts/remote-bundle-smoke.ts
+      - uses: actions/upload-artifact@v7
+        with:
+          name: bridge-${{ matrix.os }}
+          path: remote-bundles/*
+  bundle-windows:
+    needs: plan
+    if: needs.plan.outputs.build == 'true'
+    timeout-minutes: 20
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.sha || github.sha }}
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.2
+      - run: bun install --frozen-lockfile
+      - run: bun run build
+      - run: bun run scripts/build-remote-bundle.ts win32-x64
+      - uses: actions/upload-artifact@v7
+        with:
+          name: bridge-win32-x64
+          path: remote-bundles/*
+  release:
+    needs: [plan, bundle, bundle-windows]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          path: bundles
+          merge-multiple: true
+      - name: Merge the platforms' manifests
+        env:
+          VERSION: ${{ needs.plan.outputs.version }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          python3 - <<'PY'
+          import glob, json, os
+          version = os.environ['VERSION']
+          tag = 'remote-v' + version
+          result = {'version': version, 'assets': {}}
+          for path in glob.glob('bundles/manifest-*.json'):
+              data = json.load(open(path))
+              assert data['version'] == version, (path, data['version'], version)
+              for platform, asset in data['assets'].items():
+                  asset['url'] = 'https://github.com/' + os.environ['REPOSITORY'] + '/releases/download/' + tag + '/' + asset['url']
+                  result['assets'][platform] = asset
+          assert len(result['assets']) == 5, sorted(result['assets'])
+          json.dump(result, open('bundles/manifest.json', 'w'), indent=2)
+          PY
+      - name: Publish the bridge
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          VERSION: ${{ needs.plan.outputs.version }}
+          SHA: ${{ inputs.sha || github.sha }}
+        run: |
+          # a release of the same server code that published it meanwhile
+          if gh release view "remote-v$VERSION" >/dev/null 2>&1; then exit 0; fi
+          gh release create "remote-v$VERSION" bundles/*.tgz bundles/manifest.json --target "$SHA" --title "remote-v$VERSION" \
+            --notes 'The fork'"'"'s SSH remote bridge runtimes with SHA-256 manifest (server/bridge-version.ts).' --latest=false

@@ -2,7 +2,8 @@ import { describe, expect, it, spyOn } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { BRIDGE_PROTOCOL, REMOTE_BUNDLE_VERSION, type SetupJob } from "../shared/machines.ts";
+import { BRIDGE_PROTOCOL, type SetupJob } from "../shared/machines.ts";
+import { BRIDGE_VERSION as REMOTE_BUNDLE_VERSION } from "./bridge-version.ts";
 import { MachineManager } from "./machines.ts";
 import { handleMachineRequest } from "./machine-api.ts";
 import { posixHost } from "./remote-host.ts";
@@ -153,7 +154,7 @@ describe("approved bridge replacement", () => {
     expect(registered).toBe(0);
   });
   it("never downgrades a newer bridge even after an explicit update request", async () => {
-    const { result, operations } = await scenario({ initialBundle: String(Number(REMOTE_BUNDLE_VERSION) + 1) });
+    const { result, operations } = await scenario({ initialBundle: String(parseInt(REMOTE_BUNDLE_VERSION, 10) + 1) });
     expect(result).toMatchObject({ phase: "failed", action_required: "bridge_conflict" });
     expect(result.error).toContain("Update this app");
     expect(operations).toEqual([]);
@@ -187,12 +188,12 @@ describe("approved bridge replacement", () => {
   // the descriptor is what the bridge wrote; the identity it answers with is what runs. A newer
   // bridge is never this app's to replace, whichever of the two says so
   it("never stops a bridge whose live identity is newer, even when its descriptor looks older", async () => {
-    const { result, operations } = await scenario({ identity: { bridge_protocol: BRIDGE_PROTOCOL, bundle_version: String(Number(REMOTE_BUNDLE_VERSION) + 1) } });
+    const { result, operations } = await scenario({ identity: { bridge_protocol: BRIDGE_PROTOCOL, bundle_version: String(parseInt(REMOTE_BUNDLE_VERSION, 10) + 1) } });
     expect(result).toMatchObject({ phase: "failed", action_required: "bridge_conflict" });
     expect(operations).toEqual(["install", "verify:4242"]);
   });
   it("calls a newer live bridge a conflict on a plain connect, where an update cannot help", async () => {
-    const { result, operations } = await scenario({ onlyFirst: true, initialProtocol: BRIDGE_PROTOCOL, initialBundle: REMOTE_BUNDLE_VERSION, identity: { bundle_version: String(Number(REMOTE_BUNDLE_VERSION) + 1) } });
+    const { result, operations } = await scenario({ onlyFirst: true, initialProtocol: BRIDGE_PROTOCOL, initialBundle: REMOTE_BUNDLE_VERSION, identity: { bundle_version: String(parseInt(REMOTE_BUNDLE_VERSION, 10) + 1) } });
     expect(result).toMatchObject({ phase: "failed", action_required: "bridge_conflict" });
     expect(result.error).toContain("Update this app");
     expect(operations).toEqual(["verify:4242"]);

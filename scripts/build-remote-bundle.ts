@@ -6,7 +6,8 @@
 import { createHash } from "node:crypto";
 import { chmodSync, cpSync, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { REMOTE_BUNDLE_VERSION } from "../shared/machines.ts";
+// fork: the fork's bridge version (server/bridge-version.ts)
+import { BRIDGE_VERSION as REMOTE_BUNDLE_VERSION } from "../server/bridge-version.ts";
 
 const root = resolve(import.meta.dir, "..");
 const hostPlatform = `${process.platform}-${process.arch}`;
