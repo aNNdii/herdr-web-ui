@@ -619,23 +619,25 @@ const storedPreview = (page: Page): Promise<{ lines: number[]; comment: string; 
 });
 
 /**
- * Polls until the field over a selection (`field`) sits above the selection's first line, its bottom 8 px clear of the
- * line's top (± 1), and inside the viewer's body sideways. The selection is read from the strong fill, which holds it
- * while the field is open (the browser's own selection goes once the field takes the focus).
+ * Polls until the field over a selection (`field`) sits beside the selection, 8 px clear (± 1): its top under the
+ * selection's last line, or, without room there, its bottom above the first line (lib/selectionField.ts `fieldPlace`),
+ * and inside the viewer's body sideways. The selection is read from the strong fill, which holds it while the field is
+ * open (the browser's own selection goes once the field takes the focus).
  */
 async function assertFieldOver(page: Page, viewer: Locator, field: Locator, what: string): Promise<void> {
   let seen: unknown = null;
-  await eventually(`${what}: the field above the selection, 8 px clear`, async () => {
-    const top = await page.evaluate(() => {
+  await eventually(`${what}: the field beside the selection, 8 px clear`, async () => {
+    const lines = await page.evaluate(() => {
       const registry = (CSS as unknown as { highlights: { get(key: string): Iterable<AbstractRange> | undefined } }).highlights;
-      const tops = [...(registry.get("comment-strong") ?? [])].flatMap((range) => range instanceof Range ? [...range.getClientRects()] : [])
-        .filter((rect) => rect.width > 0 && rect.height > 0).map((rect) => rect.top);
-      return tops.length === 0 ? null : Math.min(...tops);
+      const rects = [...(registry.get("comment-strong") ?? [])].flatMap((range) => range instanceof Range ? [...range.getClientRects()] : [])
+        .filter((rect) => rect.width > 0 && rect.height > 0);
+      return rects.length === 0 ? null : { top: Math.min(...rects.map((rect) => rect.top)), bottom: Math.max(...rects.map((rect) => rect.bottom)) };
     });
     const box = await field.boundingBox();
     const body = await viewer.locator(".file-viewer-body").boundingBox();
-    seen = { top, box, body };
-    return top !== null && box !== null && body !== null && Math.abs(box.y + box.height - (top - 8)) <= 1
+    seen = { lines, box, body };
+    return lines !== null && box !== null && body !== null
+      && (Math.abs(box.y - (lines.bottom + 8)) <= 1 || Math.abs(box.y + box.height - (lines.top - 8)) <= 1)
       && box.x >= body.x - 1 && box.x + box.width <= body.x + body.width + 1;
   }).catch((error: Error) => { throw new Error(`${error.message} (${JSON.stringify(seen)})`); });
 }

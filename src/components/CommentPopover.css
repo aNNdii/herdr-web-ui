@@ -115,10 +115,26 @@
   --comment-row-max: 160px;
 }
 
+/* ↑ and Delete: a small round button beside the field with a mouse, a full touch target for a finger. The field's first
+   line is as tall, so a one-line comment sits level with them (`.is-row .comment-editor-field`) */
+.comment-popover,
+.comment-frame {
+  --comment-save-size: 28px;
+}
+
+@media (pointer: coarse) {
+  .comment-popover,
+  .comment-frame {
+    --comment-save-size: var(--touch-target);
+  }
+}
+
 .comment-popover.is-row {
   width: 100%;
+  /* the field, and the reference under it where it is shown, close together */
+  gap: var(--space-1);
   box-shadow: none;
-  padding: var(--space-2) var(--space-2) var(--space-2) var(--space-4);
+  padding: var(--space-2) var(--space-2) var(--space-2) var(--space-3);
   background: var(--bg-elevated);
 }
 
@@ -131,7 +147,8 @@
 .is-row .comment-editor-field {
   flex: 1 1 auto;
   min-width: 0;
-  padding: var(--space-1) 0;
+  /* one line is as tall as ↑ beside it, its text in the middle: the buttons stay at the bottom as the field grows */
+  padding: max(0px, calc((var(--comment-save-size) - 1lh) / 2)) 0;
   /* the row ends at `--comment-row-max`: its hairline and padding are the rest */
   max-height: calc(var(--comment-row-max) - 2 * var(--space-2) - 2 * var(--hairline));
 }
@@ -185,6 +202,18 @@
 .comment-popover-reference,
 .comment-popover-note {
   margin: 0;
+}
+
+/* in place it is secondary: under the field, small and dim */
+.is-row .comment-popover-reference {
+  color: var(--text-dim);
+  font-size: var(--fs-xs);
+}
+
+/* the file and lines are secondary in every box: the quiet tertiary grey of line numbers, as --text-dim is close to
+   --text in some palettes (Catppuccin) */
+.comment-popover-reference .comment-file-reference {
+  color: var(--line-number);
 }
 
 .comment-popover-note {
@@ -345,15 +374,15 @@ pre.comment-popover-plain {
 /* Delete, always in view on a saved comment: an icon button of the app's (`.icon-button`) at the control height, dim,
    the danger colour only under a pointer or the keyboard's focus. Pushed to the left, away from ↑ */
 .comment-popover-delete {
-  width: var(--control-h);
-  height: var(--control-h);
+  width: var(--comment-save-size);
+  height: var(--comment-save-size);
   margin-right: auto;
   color: var(--text-dim);
 }
 
 .comment-popover-delete svg {
-  width: var(--icon-size);
-  height: var(--icon-size);
+  width: calc(var(--icon-size) - 2px);
+  height: calc(var(--icon-size) - 2px);
 }
 
 .comment-popover-delete:focus-visible {
@@ -372,8 +401,8 @@ pre.comment-popover-plain {
   align-items: center;
   justify-content: center;
   flex: none;
-  width: var(--control-h);
-  height: var(--control-h);
+  width: var(--comment-save-size);
+  height: var(--comment-save-size);
   padding: 0;
   background: var(--primary);
   border: 0;
@@ -384,8 +413,8 @@ pre.comment-popover-plain {
 }
 
 .comment-popover-save svg {
-  width: var(--icon-size);
-  height: var(--icon-size);
+  width: calc(var(--icon-size) - 2px);
+  height: calc(var(--icon-size) - 2px);
 }
 
 /* nothing to save (a new comment empty, a saved one unchanged): dimmed, as a disabled button is (styles.css `.btn`) */
@@ -397,15 +426,6 @@ pre.comment-popover-plain {
 @media (hover: hover) {
   .comment-popover-save:hover:not(:disabled) {
     background: var(--primary-hover);
-  }
-}
-
-/* fingers: a full touch target, Delete's too */
-@media (pointer: coarse) {
-  .comment-popover-save,
-  .comment-popover-delete {
-    width: var(--touch-target);
-    height: var(--touch-target);
   }
 }
 

@@ -175,6 +175,8 @@ export type { Machine, MachineEvent, PaneTarget, SetupJob, SetupRequest, SetupAc
  *         (`limits`), and `truncated` says when it was. 400 invalid_scope / invalid_revision /
  *         invalid_cwd / missing_directory, 404 revision_not_found, 409 not_a_repository,
  *         503 git_unavailable, 504 git_timeout; 403 read_only for a watching device, as a file read)
+ *  GET    /api/workspace/diff/tree?pane_id=&directory=  -> RepoDiffTree (every file the repository holds,
+ *         tracked or not ignored, for the review's file tree; the same folder rules as the two above)
  *  GET    /api/workspace/diff/file?pane_id=&directory=&scope=&base=&head=&path=&old_path=
  *         -> RepoDiffFilePatch (one file of that comparison as a standard `diff --git` unified
  *         patch; `path` and, for a rename, `old_path` are the list's own, relative to the
@@ -756,6 +758,8 @@ export interface RepoDiffFile {
   deletions: number | null;
   /** null when not determined: an untracked file in a list is not opened to find out */
   binary: boolean | null;
+  /** when it last changed on disk (`stamps=1`): a review's Viewed mark holds while this is the same; absent from an older server */
+  stamp?: string;
 }
 
 /** GET /api/workspace/diff/files */
@@ -794,6 +798,18 @@ export interface RepoDiffFilePatch {
   /** the patch exists and was left out for its size */
   truncated: boolean;
   limits: { max_patch_bytes: number; context_lines: number };
+}
+
+/** GET /api/workspace/diff/tree: every file of the repository, relative to its root, sorted; a capped list says so. */
+export interface RepoDiffTree {
+  repository: RepoDiffRepository;
+  paths: string[];
+  /** the files of `paths` git ignores, asked for with `ignored=1`; absent from an older server or bridge */
+  ignored?: string[];
+  /** a folder outside any repository, listed as it is (asked for with `folder=1`): `repository` names only its root */
+  plain?: boolean;
+  truncated: boolean;
+  limits: { max_files: number; max_list_bytes: number };
 }
 
 export interface AgentKind {

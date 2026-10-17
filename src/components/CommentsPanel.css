@@ -1,0 +1,281 @@
+/* The comments panel (CommentsPanel.tsx), in the file viewer's frame (FileViewer.css): docked, `.file-panel` beside the
+   panes and `.file-viewer-docked` in it; else the viewer's dialog (`.modal` on `.file-viewer-scrim`), a sheet on a phone.
+   Its header is the docked viewer's (`.file-viewer-header-docked`). */
+.comments-panel {
+  outline: none;
+}
+
+.comments-panel-frame {
+  min-width: 0;
+}
+
+/* the dialog: the app's dialog width, the body scrolling between the header and the foot */
+.comments-panel-dialog {
+  --comments-panel-bg: var(--bg-panel);
+  width: min(100%, 520px);
+  max-height: min(92vh, 100%);
+}
+
+.comments-panel-head {
+  flex: none;
+}
+
+.comments-panel-title {
+  align-items: baseline;
+  gap: var(--space-2);
+}
+
+.comments-panel-count {
+  color: var(--text-dim);
+  font-weight: var(--fw-regular);
+  font-variant-numeric: tabular-nums;
+}
+
+/* the list scrolls between the header and the foot */
+.comments-panel-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+
+.comments-panel-empty {
+  margin: var(--space-6) 0;
+  text-align: center;
+  color: var(--text-dim);
+  font-size: var(--fs-sm);
+}
+
+.comments-panel-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  margin: 0;
+  padding: 0 var(--space-3) var(--space-4);
+  list-style: none;
+}
+
+/* one place's comments (the chat, or a file), one hairline apart */
+.comments-panel-group + .comments-panel-group {
+  border-top: var(--hairline) solid var(--border);
+}
+
+/* the place: the file's glyph, its name strong and its folder dim, the count at the right; it stays at the top while
+   its comments scroll under it */
+.comments-panel-group-head {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-4) var(--space-3) var(--space-3);
+  /* the panel's own ground (FileViewer.css `.file-panel`, the dialog's `.modal`), so the head is no band of its own */
+  background: var(--comments-panel-bg, var(--bg));
+}
+
+.comments-panel-place {
+  display: flex;
+  flex: 0 1 auto;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--text-strong);
+  font: inherit;
+  font-size: var(--fs-sm);
+  text-align: left;
+}
+
+button.comments-panel-place:not(:disabled) {
+  cursor: pointer;
+}
+
+@media (hover: hover) {
+  button.comments-panel-place:not(:disabled):hover .comments-panel-name {
+    text-decoration: underline;
+    text-underline-offset: 2px;
+  }
+}
+
+.comments-panel-glyph {
+  flex: none;
+  width: calc(var(--icon-size) - 2px);
+  height: calc(var(--icon-size) - 2px);
+  color: var(--text-dim);
+}
+
+.comments-panel-name {
+  flex: none;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: var(--fw-bold);
+}
+
+/* the folder gives way first */
+.comments-panel-folder {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--line-number);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+}
+
+/* the place's count: a small quiet pill (as the Review's Changed files count) */
+.comments-panel-group-head .comments-panel-count {
+  flex: none;
+  margin-left: auto;
+  min-width: 18px;
+  height: 18px;
+  box-sizing: border-box;
+  padding: 0 var(--space-1);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-pill);
+  background: var(--bg-hover);
+  color: var(--text-dim);
+  font-size: var(--fs-2xs);
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+}
+
+/* one comment: a card holding what it is on (the code, or the quoted text) at its top and what it says under it, so
+   each comment reads as one thing; its edge takes the accent while it is written */
+.comments-panel-card {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: var(--hairline) solid var(--border-strong);
+  border-radius: var(--radius-lg);
+  background: var(--bg-elevated);
+}
+
+@media (hover: hover) {
+  .comments-panel-card:hover {
+    border-color: var(--text-dim);
+  }
+}
+
+.comments-panel-card:focus-within {
+  border-color: var(--accent);
+}
+
+/* the commented lines as code with their numbers, the card's head, which opens the file there */
+.comments-panel-code {
+  display: block;
+  width: 100%;
+  margin: 0;
+  padding: var(--space-2) var(--space-3) var(--space-2) var(--space-2);
+  border: 0;
+  border-bottom: var(--hairline) solid var(--border);
+  border-radius: 0;
+  background: var(--bg-input);
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  overflow: hidden;
+}
+
+button.comments-panel-code:not(:disabled) {
+  cursor: pointer;
+}
+
+@media (hover: hover) {
+  button.comments-panel-code:not(:disabled):hover {
+    background: var(--bg-hover);
+  }
+}
+
+.comments-panel-code:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.comments-panel-snippet {
+  display: block;
+}
+
+/* the numbers' gutter as wide as the last number shown (CommentsPanel.tsx), not the snippet's line count */
+.comments-panel-snippet .hl-code {
+  --hl-number: calc(var(--snippet-digits, 2) * 1ch + var(--space-3));
+  overflow: hidden;
+}
+
+.comments-panel-more {
+  display: block;
+  margin-top: var(--space-1);
+  padding-left: calc(var(--snippet-digits, 2) * 1ch + var(--space-3));
+  color: var(--line-number);
+  font-size: var(--fs-2xs);
+}
+
+/* a reply's quote (or a preview's text), the card's head: two lines at most, dim, set off by a rule as the chat's
+   quotes are */
+.comments-panel-quote {
+  margin: 0;
+  padding: var(--space-2) var(--space-3);
+  border-bottom: var(--hairline) solid var(--border);
+  background: var(--bg-input);
+  color: var(--text-dim);
+  font-size: var(--fs-sm);
+}
+
+.comments-panel-quote > span {
+  display: -webkit-box;
+  padding-left: var(--space-2);
+  border-left: 2px solid var(--border-strong);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  overflow: hidden;
+}
+
+/* what it says, at rest and while written, flat in the card (the card is the box): the same padding either way */
+.comments-panel-card .comment-rest,
+.comments-panel-card .comment-popover.is-row {
+  width: auto;
+  margin: 0;
+  box-sizing: border-box;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.comments-panel-foot {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  min-height: var(--control-h);
+  padding: var(--space-2) var(--space-3);
+  padding-bottom: max(var(--space-2), env(safe-area-inset-bottom));
+  border-top: var(--hairline) solid var(--border);
+}
+
+.comments-panel-undo {
+  display: flex;
+  flex: 1 1 auto;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  margin: 0;
+  color: var(--text);
+  font-size: var(--fs-sm);
+}
+
+/* a finger: the edit field never under --fs-input, or iOS zooms the page into it (as the comment sheet, CommentPopover.css) */
+@media (pointer: coarse) {
+  .comments-panel {
+    --comment-field-min: var(--fs-input);
+  }
+}

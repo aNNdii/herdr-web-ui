@@ -1,9 +1,9 @@
 /**
- * Where the comment field over a selection goes (components/MarkdownComments.tsx), without the DOM: above the
- * selection's first line, its bottom `FIELD_GAP_PX` clear of it, so it grows upward and never covers the text it is
- * about; without room above for it, below the selection's last line, growing downward. Sideways it starts where the
- * selection does, kept inside the scrolling body. All boxes are client pixels; the place is in the body's content
- * coordinates (an absolutely placed child of the scrolling body, which is its containing block).
+ * Where the comment field over a selection goes (components/MarkdownComments.tsx), without the DOM: below the
+ * selection's last line, `FIELD_GAP_PX` clear of it, growing downward, where the Comment button was; without room below
+ * in the body's view, above the first line, its bottom there, growing upward. Sideways it is centred on where the
+ * selection ends (as the button is), kept inside the scrolling body. All boxes are client pixels; the place is in the
+ * body's content coordinates (an absolutely placed child of the scrolling body, which is its containing block).
  *
  * And how far that body scrolls, only it and never the page, to show what the layer opens: a field as it opens
  * (`revealBy`), and a comment the composer's walk stops at with its card or count (`walkScroll`,
@@ -25,24 +25,30 @@ export interface FieldPlace {
 
 /**
  * The field's place for a selection whose first line box starts at `first` and whose last line box ends at
- * `last.bottom`, in the scrolling body's client area `view`, scrolled by `scroll`. `field` is its size; `inset` the
- * room it keeps from the body's sides. `above` keeps the side chosen as it opened (a field growing as text wraps does
- * not flip); without it the side is chosen by the room above the first line in the body's view.
+ * `last.bottom` (and `last.right`, where the selection ends), in the scrolling body's client area `view`, scrolled by
+ * `scroll`. `field` is its size; `inset` the room it keeps from the body's sides. `above` keeps the side chosen as it
+ * opened (a field growing as text wraps does not flip); without it the field goes below when the body's view has room
+ * there, else above when it has room there, else below all the same. Without `last.right` it starts at the first line.
  */
 export function fieldPlace({ first, last, view, scroll, field, inset, above }: {
   first: { top: number; left: number };
-  last: { bottom: number };
+  /** where the selection ends (`right`): the field is centred there, as the Comment button is; unset, it starts at the first line */
+  last: { bottom: number; right?: number };
   view: { top: number; left: number; width: number; height: number };
   scroll: { top: number; left: number };
   field: { width: number; height: number };
   inset: number;
   above?: boolean;
 }): FieldPlace {
-  const up = above ?? first.top - view.top >= field.height + FIELD_GAP_PX;
+  // below the last line when the view has room there, else above the first line (if there is room there)
+  const roomBelow = last.bottom + FIELD_GAP_PX + field.height <= view.top + view.height - inset;
+  const roomAbove = first.top - FIELD_GAP_PX - field.height >= view.top + inset;
+  const up = above ?? (!roomBelow && roomAbove);
   const top = up ? first.top - view.top + scroll.top - FIELD_GAP_PX : last.bottom - view.top + scroll.top + FIELD_GAP_PX;
   const min = scroll.left + inset;
   const max = scroll.left + view.width - field.width - inset;
-  const left = max < min ? min : Math.min(Math.max(first.left - view.left + scroll.left, min), max);
+  const start = last.right === undefined ? first.left - view.left + scroll.left : last.right - view.left + scroll.left - field.width / 2;
+  const left = max < min ? min : Math.min(Math.max(start, min), max);
   return { above: up, top, left };
 }
 

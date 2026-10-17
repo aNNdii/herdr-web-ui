@@ -1,7 +1,7 @@
 /* The comment layer for rendered Markdown (MarkdownComments.tsx). The field over a selection is the code view's row card
    (CommentPopover.css `.is-row`), `--float-w` wide at most, placed in the scrolling surface's content by script
-   (SelectionField.tsx, lib/selectionField.ts): over the selection's first line, its bottom edge there (`data-above`), so it grows upward;
-   else its top edge under the last line. It is never moved by a transition. */
+   (SelectionField.tsx, lib/selectionField.ts): its top edge under the selection's last line; without room there, over
+   the first line, its bottom edge there (`data-above`), so it grows upward. It is never moved by a transition. */
 .markdown-comments-field {
   position: absolute;
   top: 0;
