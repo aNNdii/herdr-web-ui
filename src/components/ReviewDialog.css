@@ -1,0 +1,568 @@
+/* above the Files dialog it opens from, as the Changes diff is */
+.review-scrim {
+  z-index: calc(var(--z-modal) + 1);
+}
+
+.review-dialog {
+  width: min(96vw, 2200px);
+  max-width: 100%;
+  height: 94vh;
+  max-height: 94vh;
+  min-width: 0;
+  padding: 0;
+}
+
+/* All files | Changed, above the tree's filter; the pane's gap spaces the rows */
+.review-scope {
+  flex: none;
+  display: flex;
+}
+
+.review-scope > button,
+.review-mode > button,
+.review-tools .segmented > button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-1);
+  line-height: 1;
+}
+
+.review-scope > button {
+  flex: 1 1 0;
+}
+
+/* the changed files' count on their button: a small quiet pill, a shade brighter on the chosen button */
+.review-badge {
+  display: inline-flex;
+  align-items: center;
+  min-width: 18px;
+  height: 18px;
+  box-sizing: border-box;
+  padding: 0 var(--space-1);
+  justify-content: center;
+  border-radius: var(--radius-pill);
+  background: var(--bg-hover);
+  color: var(--text-dim);
+  font-size: var(--fs-2xs);
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+}
+
+.review-scope > button[aria-pressed="true"] .review-badge {
+  background: var(--bg-elevated);
+  color: var(--text);
+}
+
+/* Viewed: an action as the file's other tools, a circle that takes a check (in the done colour) once it is pressed */
+.review-tools .review-viewed[aria-pressed="true"] {
+  color: var(--status-done);
+}
+
+/* the tree's filter: the app's field, on the tree's full width, the ignored files' toggle beside it in All files */
+.review-filter {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.review-search {
+  flex: 1 1 auto;
+  min-width: 0;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.review-ignored {
+  flex: none;
+}
+
+/* a file git ignores: the tree's dim mark */
+.review-file .repo-diff-status[data-status="ignored"] {
+  color: var(--git-ignored);
+}
+
+/* what else the header says of the file (its size, a long text's length): small and dim, after its status */
+.review-file-fact {
+  flex: none;
+  color: var(--text-dim);
+  font-size: var(--fs-xs);
+  white-space: nowrap;
+}
+
+/* the status tag beside the path: small, as the file list's marks are */
+.review-file .repo-diff-status {
+  font-size: var(--fs-xs);
+  line-height: 1;
+  padding: 0 var(--space-1);
+}
+
+/* one slim row: the fold and back buttons, the title with its count on the same line, the close button */
+.review-header {
+  padding: var(--space-2) var(--space-3);
+  gap: var(--space-2);
+  border-bottom: 1px solid var(--border);
+}
+
+.review-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.review-title .modal-title {
+  margin: 0;
+  font-size: var(--fs-md);
+}
+
+/* the second line under the title: secondary, small and dim */
+.review-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  column-gap: var(--space-3);
+  min-width: 0;
+  margin: 0;
+  line-height: 1.3;
+  color: var(--text-dim);
+  font-size: var(--fs-xs);
+}
+
+.review-meta:empty {
+  display: none;
+}
+
+.review-meta-warning {
+  color: var(--status-blocked);
+}
+
+/* the branch, after a small glyph */
+.review-meta-branch {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  font-family: var(--font-mono);
+}
+
+.review-meta-branch svg {
+  width: 12px;
+  height: 12px;
+}
+
+/* a plain folder's parent: one line, cut at its end (where it starts is what it says; the title names the folder) */
+.review-meta-path {
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+}
+
+.review-back,
+.review-fold {
+  flex: none;
+}
+
+/* folded: the file takes the whole width, the tree is one button away */
+.review-dialog[data-tree="folded"] .review-body {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.review-dialog[data-tree="folded"] .review-tree-pane {
+  display: none;
+}
+
+/* the tree on the left, the file on the right. The row is 1fr, not auto: an auto row grows with its
+   content and nothing inside scrolls. */
+.review-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(220px, 300px) minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
+}
+
+/* the tree takes its own palette from the app's tokens (@pierre/trees reads these custom properties
+   from its host; the -override ones win over its own defaults) */
+.review-tree {
+  --trees-bg: var(--bg);
+  --trees-bg-override: var(--bg);
+  --trees-bg-muted: var(--bg-elevated);
+  --trees-bg-muted-override: var(--bg-elevated);
+  --trees-fg: var(--text);
+  --trees-fg-override: var(--text);
+  --trees-fg-muted: var(--text-dim);
+  --trees-fg-muted-override: var(--text-dim);
+  --trees-border-color: var(--border);
+  --trees-border-color-override: var(--border);
+  --trees-accent: var(--accent);
+  --trees-accent-override: var(--accent);
+  /* git's marks: the palette's version-control colours (styles.css `--git-*`) */
+  --trees-added-dark: var(--git-added);
+  --trees-added-light: var(--git-added);
+  --trees-untracked-dark: var(--git-added);
+  --trees-untracked-light: var(--git-added);
+  --trees-deleted-dark: var(--git-deleted);
+  --trees-deleted-light: var(--git-deleted);
+  --trees-modified-dark: var(--git-modified);
+  --trees-modified-light: var(--git-modified);
+  --trees-renamed-dark: var(--git-renamed);
+  --trees-renamed-light: var(--git-renamed);
+  --trees-ignored-dark: var(--git-ignored);
+  --trees-ignored-light: var(--git-ignored);
+  font-family: var(--font-ui);
+  font-size: var(--fs-sm);
+}
+
+.review-tree-pane {
+  min-height: 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  box-sizing: border-box;
+  border-right: 1px solid var(--border);
+  overflow: hidden;
+}
+
+/* the tree's container: a frame with rounded corners and room around the rows; the frame makes the rounding visible */
+.review-tree {
+  flex: 1 1 auto;
+  min-height: 0;
+  box-sizing: border-box;
+  /* the same space on every side, between the frame and the rows */
+  padding: var(--space-1);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  --trees-padding-inline: var(--space-1);
+  --trees-padding-inline-override: var(--space-1);
+  overflow: hidden;
+}
+
+.review-file-pane {
+  min-height: 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.review-file {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.review-file-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  background: var(--bg-elevated);
+  border-bottom: 1px solid var(--border);
+}
+
+/* the file's folder muted, its name bold: the bar's title */
+.review-file-folder {
+  color: var(--text-dim);
+}
+
+.review-file-name {
+  font-weight: var(--fw-bold);
+}
+
+/* +added and −removed lines, in the palette's git colours */
+.review-counts {
+  flex: none;
+  display: inline-flex;
+  gap: var(--space-2);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-bold);
+}
+
+.review-count-added {
+  color: var(--git-added);
+}
+
+.review-count-removed {
+  color: var(--git-deleted);
+}
+
+.review-file-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+/* the path's second line: what the file is (its change and counts, that git ignores it, its size or length) */
+.review-file-facts {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.review-file-path {
+  max-width: 100%;
+}
+
+.review-file-path {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+}
+
+.review-file-hint {
+  margin: 0;
+  padding: var(--space-1) var(--space-2);
+  color: var(--text-dim);
+  font-size: var(--fs-sm);
+}
+
+.review-mode {
+  flex: none;
+}
+
+/* the rows are a window the user scrolls, as RepoDiff.css draws them: the scroll root takes the
+   file's height, its column fills the root so the diff's host has a box before the first measure */
+.review-view {
+  position: relative;
+  /* a long press on the diff is a selection, not the system's copy menu */
+  -webkit-touch-callout: none;
+  flex: 1 1 auto;
+  min-height: 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  /* the code's own type, as VirtualSource.css and RepoDiff.css set it: the virtualizer measures the
+     line height from this element, so it must be the rows' height, else the file's end comes up short */
+  font-family: var(--font-mono);
+  /* the same as REVIEW_CSS in ReviewFile.tsx (the code's :host values): the row estimate must match the rows */
+  font-size: var(--fs-sm);
+  line-height: calc(var(--fs-sm) * 1.6);
+}
+
+.review-scroll {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  /* the library redraws the file when a comment opens or closes: without this the browser's scroll anchor is lost and
+     the place jumps to the top (the library sets the same on its own scroll root, CodeView) */
+  overflow-anchor: none;
+}
+
+.review-column {
+  display: flex;
+  flex-direction: column;
+  min-height: 100%;
+}
+
+.review-file-body {
+  display: block;
+  flex: 1 0 auto;
+}
+
+.review-tools {
+  flex: none;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+/* the comment toggle's count is a badge on its corner: the toggle is the positioned ancestor it sits in */
+.review-tools .review-comments {
+  position: relative;
+}
+
+/* the view switch (Preview | Source, Unified | Split) and the tools (comments, wrap, fold) of the file: one bar in every
+   view, apart by a rule where a switch stands before them */
+.review-tools .repo-diff-group.review-tools-rest {
+  padding-left: var(--space-2);
+  border-left: 1px solid var(--border);
+}
+
+/* a touch screen (a tablet in either orientation, however wide), or up to 1024px wide: the whole screen, not a floating
+   window. A mouse's desktop keeps the modal. The scrim's own 16px inset is taken away, or the screen keeps a frame of the page */
+@media (max-width: 1024px), (pointer: coarse) {
+  .review-scrim {
+    padding: 0;
+  }
+
+  .review-dialog {
+    width: 100vw;
+    max-width: 100vw;
+    height: 100dvh;
+    max-height: 100dvh;
+    border-radius: 0;
+  }
+}
+
+/* a phone: the tree or the file, one at a time; the Back button brings the tree back */
+@media (max-width: 640px) {
+  .review-dialog {
+    width: 100vw;
+    height: 100dvh;
+    border-radius: 0;
+  }
+
+  .review-body {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .review-dialog[data-view="tree"] .review-file-pane,
+  .review-dialog[data-view="file"] .review-tree-pane {
+    display: none;
+  }
+
+  .review-tree-pane {
+    border-right: 0;
+  }
+}
+
+/* the text's box: the comment margin is placed beside it, so in the readable width it is the reading column's
+   box (as the file viewer's `.file-viewer-markdown-readable`), not the whole preview's */
+.review-preview-text {
+  min-width: 0;
+}
+
+.review-preview-readable {
+  max-width: var(--chat-w);
+  margin-inline: auto;
+}
+
+/* a Markdown file's rendered preview: it scrolls on its own, as the diff does. Its comment layer places the
+   buttons and margin cards absolutely in it (MarkdownComments.css), so it is the positioned box they sit in,
+   as the file viewer's body is (FileViewer.css `.file-viewer-body`) */
+.review-preview {
+  flex: 1 1 auto;
+  min-height: 0;
+  position: relative;
+  isolation: isolate;
+  overflow: auto;
+  overscroll-behavior: contain;
+  padding: var(--space-4);
+}
+
+/* what the changes are compared with: the segmented choice, and for Branches the two names beneath it */
+.review-compare {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.review-branches {
+  display: grid;
+  gap: var(--space-3);
+}
+
+/* the app's labelled fields (styles.css `.field`), spaced by the form's gap rather than their own margin */
+.review-branches .field {
+  margin-bottom: 0;
+}
+
+.review-field-error {
+  color: var(--status-blocked);
+}
+
+/* a deleted comment's note, its Undo beside the words */
+.review-undo {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+/* the comment field and a saved comment in the review's annotation rows: they take the line's width,
+   as the file viewer's row does (CommentPopover.css `.is-row`), rather than the popover's 360 px card */
+.review-note {
+  padding: var(--space-2) var(--space-3);
+  box-sizing: border-box;
+}
+
+.review-file .comment-popover.is-row {
+  width: auto;
+  box-sizing: border-box;
+}
+
+/* a touch screen: the diff's text is not selected (a press on a line starts its comment, ReviewFile.tsx), so no system
+   menu and no selection handles get in the way */
+@media (pointer: coarse) {
+  .review-view {
+    -webkit-user-select: none;
+    user-select: none;
+  }
+}
+
+/* the wait for a file, a diff or the tree: a stepped spinner (as the app's others) and the word, in the empty area */
+.review-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  margin: 0;
+  padding: var(--space-4);
+  color: var(--text-dim);
+  font-size: var(--fs-sm);
+}
+
+.review-spinner {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  border: 2px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: review-spin var(--dur-spin) steps(8) infinite;
+}
+
+@keyframes review-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .review-spinner {
+    animation: none;
+  }
+}
+
+/* the diff's wait for its first drawn line: the loader covers the empty diff until the library has drawn it */
+.review-drawing {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg);
+}
+
+/* a file the review cannot draw: the file viewer's docked view (FileViewer.css `.file-panel`) fills the file pane, its
+   own width and edge taken back; the review's header stands for its header and toolbar (name, size, folder, Close) */
+.review-viewer > .file-panel {
+  flex: 1 1 auto;
+  min-height: 0;
+  width: auto;
+  border-left: 0;
+}
+
+.review-viewer .file-viewer-header-docked,
+.review-viewer .file-viewer-toolbar {
+  display: none;
+}

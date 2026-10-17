@@ -9,18 +9,28 @@ const field = { width: 320, height: 52 };
 const inset = 8;
 
 describe("fieldPlace", () => {
-  it("puts the field's bottom 8 px above the selection's first line, in the body's content coordinates", () => {
+  it("puts the field's top 8 px under the selection's last line, in the body's content coordinates", () => {
     const place = fieldPlace({ first: { top: 250, left: 180 }, last: { bottom: 300 }, view, scroll, field, inset });
-    expect(place).toEqual({ above: true, top: 250 - 50 + 1000 - FIELD_GAP_PX, left: 80 });
+    expect(place).toEqual({ above: false, top: 300 - 50 + 1000 + FIELD_GAP_PX, left: 80 });
   });
 
-  it("goes below the last line without room above for the field and the gap", () => {
-    const place = fieldPlace({ first: { top: 50 + 52 + 7, left: 180 }, last: { bottom: 160 }, view, scroll, field, inset });
-    expect(place).toEqual({ above: false, top: 160 - 50 + 1000 + FIELD_GAP_PX, left: 80 });
+  it("goes above the first line without room below for the field, the gap and the inset", () => {
+    const place = fieldPlace({ first: { top: 300, left: 180 }, last: { bottom: 450 - 8 - 52 - 7 }, view, scroll, field, inset });
+    expect(place).toEqual({ above: true, top: 300 - 50 + 1000 - FIELD_GAP_PX, left: 80 });
   });
 
-  it("stays above with exactly the room it needs", () => {
-    expect(fieldPlace({ first: { top: 50 + 52 + 8, left: 180 }, last: { bottom: 160 }, view, scroll, field, inset }).above).toBe(true);
+  it("stays below with exactly the room it needs", () => {
+    expect(fieldPlace({ first: { top: 300, left: 180 }, last: { bottom: 450 - 8 - 52 - 8 }, view, scroll, field, inset }).above).toBe(false);
+  });
+
+  it("goes below all the same without room on either side", () => {
+    expect(fieldPlace({ first: { top: 60, left: 180 }, last: { bottom: 440 }, view, scroll, field, inset }).above).toBe(false);
+  });
+
+  it("is centred on where the selection ends, as the Comment button is, and kept inside the body", () => {
+    expect(fieldPlace({ first: { top: 250, left: 180 }, last: { bottom: 270, right: 400 }, view, scroll, field, inset }).left).toBe(400 - 100 - 320 / 2);
+    expect(fieldPlace({ first: { top: 250, left: 180 }, last: { bottom: 270, right: 690 }, view, scroll, field, inset }).left).toBe(600 - 320 - 8);
+    expect(fieldPlace({ first: { top: 250, left: 180 }, last: { bottom: 270, right: 110 }, view, scroll, field, inset }).left).toBe(8);
   });
 
   it("keeps the side it was given, whatever the room now (a growing field does not flip)", () => {

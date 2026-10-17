@@ -29,6 +29,7 @@ import type {
   RepoDiffFileList,
   RepoDiffFilePatch,
   RepoDiffScope,
+  RepoDiffTree,
   PaneSplit,
   PaneSwapped,
   PaneZoomed,
@@ -635,8 +636,11 @@ function repoDiffQuery(query: RepoDiffQuery): URLSearchParams {
 }
 
 /** GET /api/workspace/diff/files: the files a comparison changed, with their status and counts. */
-export async function fetchRepoDiffFiles(query: RepoDiffQuery, machineId = "local"): Promise<RepoDiffFileList> {
-  return getJson<RepoDiffFileList>(machinePath(machineId, `workspace/diff/files?${repoDiffQuery(query).toString()}`));
+export async function fetchRepoDiffFiles(query: RepoDiffQuery & { stamps?: boolean }, machineId = "local"): Promise<RepoDiffFileList> {
+  const params = repoDiffQuery(query);
+  // each file's stamp, for the review's Viewed marks
+  if (query.stamps) params.set("stamps", "1");
+  return getJson<RepoDiffFileList>(machinePath(machineId, `workspace/diff/files?${params.toString()}`));
 }
 
 /** GET /api/workspace/diff/file: one changed file's patch, as git prints it, or why there is none. */
@@ -645,6 +649,12 @@ export async function fetchRepoDiffFile(query: RepoDiffQuery, path: string, oldP
   params.set("path", path);
   if (oldPath !== null) params.set("old_path", oldPath);
   return getJson<RepoDiffFilePatch>(machinePath(machineId, `workspace/diff/file?${params.toString()}`));
+}
+
+/** GET /api/workspace/diff/tree: every file of the repository the folder is in, for the review's file tree; `ignored`: git's ignored files too; `folder`: a folder in no repository lists its own files (`plain`). */
+export async function fetchRepoDiffTree(query: Pick<RepoDiffQuery, "paneId" | "directory"> & { ignored?: boolean; folder?: boolean }, machineId = "local"): Promise<RepoDiffTree> {
+  const params = new URLSearchParams({ ...(query.paneId ? { pane_id: query.paneId } : {}), ...(query.directory ? { directory: query.directory } : {}), ...(query.ignored ? { ignored: "1" } : {}), ...(query.folder ? { folder: "1" } : {}) });
+  return getJson<RepoDiffTree>(machinePath(machineId, `workspace/diff/tree?${params.toString()}`));
 }
 
 export type { CreateTabRequest, CreateWorkspaceRequest } from "../../shared/protocol.ts";

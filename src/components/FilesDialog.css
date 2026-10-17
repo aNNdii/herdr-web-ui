@@ -3,6 +3,29 @@
   flex: none;
 }
 
+/* Review: the whole repository's file tree, a labelled button beside the tabs */
+.files-dialog-review {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-height: var(--control-h);
+  padding: 0 var(--space-3);
+  border: 1px solid var(--border-strong, var(--border));
+  border-radius: var(--radius-md, 6px);
+  background: var(--bg-elevated);
+  color: var(--text);
+  font: inherit;
+  font-size: var(--fs-sm);
+  cursor: pointer;
+}
+
+.files-dialog-review svg {
+  width: 16px;
+  height: 16px;
+  color: var(--accent);
+}
+
 /* the dialog keeps one height across its two tabs: a short list of changes does not shrink it */
 .files-dialog .modal-body {
   min-height: calc(var(--control-h) * 8);

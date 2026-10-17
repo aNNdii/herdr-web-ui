@@ -53,7 +53,7 @@ import { patchText } from "../../shared/patch.ts";
 import { workRowLabel } from "../lib/workRowLabel.ts";
 import { machinePath, paneStorageId } from "../../shared/machines.ts";
 import { chatRestoreIndex, chatTurnAnchor, readChatPosition, rememberChatPosition, type ChatPosition } from "../lib/chatScrollMemory.ts";
-import { BlockCommentContext, isReplyComment, replyPart, useBlockComments, type ReplyPart } from "../lib/blockComments.ts";
+import { BlockCommentContext, replyPart, useBlockComments, type ReplyPart } from "../lib/blockComments.ts";
 import { paneComposer } from "../lib/commentSelection.ts";
 import { fileUrl } from "../lib/api.ts";
 import { useMachineId } from "../lib/machineContext.tsx";
@@ -1349,7 +1349,8 @@ export const ChatView = memo(function ChatView({ paneId, active = true, visible:
   // out of the list's window shows none until it is back, and the composer's walk opens its comments in a dialog meanwhile
   const owner = paneStorageId(machineId, paneId);
   const stored = useBlockComments(owner);
-  const replyCount = useMemo(() => stored.filter(isReplyComment).length, [stored]);
+  // every comment of the pane, its files' too: all of them go with the next message from here
+  const paneCount = stored.length;
   const conversation = state.source === "conversation" && ChatTimeline !== null;
   const chatSource = useChatCommentSource(owner, scroller, conversation);
   const chatLayout = useChatMargin(scroller, chatSource !== null, settings.commentLayout);
@@ -1500,8 +1501,8 @@ export const ChatView = memo(function ChatView({ paneId, active = true, visible:
     </MarkdownCommentLayer>
     {state.source === "conversation" && <ChatMinimap turns={minimap} rowKeys={rowKeys} scroller={scroller} onJump={jumpToTurn} />}
     {jump}
-    {/* the comment mode, at the chat's top right, with this pane's reply comments' count (the full text is its name and tooltip) */}
-    {toggleShown && <CommentModeToggle buttonRef={commentToggle} className="chat-comments-toggle" count={replyCount} hintOn="select" showHint={showHint} />}
+    {/* the comment mode, at the chat's top right, with all this pane's comments' count (the full text is its name and tooltip) */}
+    {toggleShown && <CommentModeToggle buttonRef={commentToggle} className="chat-comments-toggle" count={paneCount} hintOn="select" showHint={showHint} />}
     {/* the mode's hint, at the top of the chat (CommentModeHint.css `.code-comment-status`) */}
     {toggleShown && <CommentModeHint surface={frameBody} hint={hint} />}
     </div>

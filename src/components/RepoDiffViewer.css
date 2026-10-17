@@ -73,13 +73,13 @@
 
 .repo-diff-status[data-status="deleted"],
 .repo-diff-status[data-status="unmerged"] {
-  color: var(--syntax-deleted);
-  background: var(--status-blocked-tint);
+  color: var(--git-deleted);
+  background: color-mix(in srgb, var(--git-deleted) 14%, transparent);
 }
 
 .repo-diff-status[data-status="modified"] {
-  color: var(--accent);
-  background: var(--accent-tint);
+  color: var(--git-modified);
+  background: color-mix(in srgb, var(--git-modified) 14%, transparent);
 }
 
 .repo-diff-status[data-status="untracked"] {

@@ -92,3 +92,21 @@ export function keepEmptyRows(shadow: ShadowRoot): void {
     if (span.textContent === "" && span.firstElementChild === null) span.append(document.createElement("br"));
   }
 }
+
+/**
+ * The diff colors on top of the source theme: the app's inserted/deleted tokens as the package's
+ * base colors. Its gutter bars, signs and word emphasis take them verbatim, and it mixes the row
+ * backgrounds from them and the app's background itself (an override here would be mixed again).
+ */
+export const DIFF_SHADOW_CSS = `${SHADOW_CSS}
+:host {
+  --diffs-light-addition-color: var(--syntax-inserted);
+  --diffs-dark-addition-color: var(--syntax-inserted);
+  --diffs-light-deletion-color: var(--syntax-deleted);
+  --diffs-dark-deletion-color: var(--syntax-deleted);
+  --diffs-bg-separator-override: var(--bg-elevated);
+  --diffs-bg-context-override: var(--bg);
+  --diffs-bg-context-gutter-override: var(--bg);
+  --diffs-header-font-family: var(--font-ui);
+}
+`;

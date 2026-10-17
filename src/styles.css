@@ -94,8 +94,15 @@
   --line-number: var(--text-dim);
   --syntax-comment: var(--text-dim);
   --syntax-function: var(--accent);
-  --syntax-inserted: var(--status-done);
-  --syntax-deleted: var(--status-blocked);
+  /* git's marks (the review's tree and the diffs): each palette sets them, the status colours stand in for the rest */
+  --git-added: var(--status-done);
+  --git-modified: var(--accent);
+  --git-deleted: var(--status-blocked);
+  --git-renamed: var(--status-working);
+  --git-conflict: var(--notice);
+  --git-ignored: var(--text-dim);
+  --syntax-inserted: var(--git-added);
+  --syntax-deleted: var(--git-deleted);
   --syntax-keyword: #e8875f;
   --syntax-string: #a8c17c;
   --syntax-number: #d6a0c9;
@@ -414,6 +421,13 @@
   --syntax-variable: #f5e0dc;
   --syntax-meta: #f5c2e7;
   --syntax-function: #89b4fa;
+  /* Zed's Catppuccin Mocha version-control colours (catppuccin/zed themes/catppuccin-mauve.json) */
+  --git-added: #a6e3a1;
+  --git-modified: #f9e2af;
+  --git-deleted: #f38ba8;
+  --git-renamed: #74c7ec;
+  --git-conflict: #fab387;
+  --git-ignored: #9399b2;
 }
 
 [data-theme="light"][data-palette="catppuccin"] {
@@ -460,6 +474,13 @@
   --syntax-variable: #4c4f69;
   --syntax-meta: #bc1d91;
   --syntax-function: #0b59f4;
+  /* Zed's Catppuccin Latte version-control colours, each darkened until it passes 4.5:1 on the light surfaces */
+  --git-added: #307820;
+  --git-modified: #915c13;
+  --git-deleted: #d00f38;
+  --git-renamed: #177282;
+  --git-conflict: #b24608;
+  --git-ignored: #656872;
 }
 
 [data-chat-width="narrow"] {

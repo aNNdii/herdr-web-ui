@@ -67,6 +67,8 @@ export interface CommentPopoverProps {
   /** a `sheet`'s quote of what the comment is on (`lineQuote`): plain text, drawn as a blockquote clamped to three lines; a sheet draws this and not `quote`, and none where it is empty */
   sheetQuote?: string;
   reference?: FileReference;
+  /** show the reference (file and lines) in place, not for assistive tech only: the Review's new comments do */
+  showReference?: boolean;
   /** the dialog's accessible name where it has no visible title (a sheet's); the file reference then stays for assistive tech only */
   label?: string;
   /** why it is shown here (an outdated file comment) */
@@ -226,7 +228,7 @@ function Quote({ quote, reference }: Pick<CommentPopoverProps, "quote" | "refere
  * The popover of one opening: a new comment, or a saved one, to edit. A caller keys it by the opening
  * (`OpenComment.id`), so another comment opened is another popover.
  */
-export function CommentPopover({ placement, quote, sheetQuote, reference, label, note, comment, startValue, onText, onSave, onDelete, onClose, opener, fallback, framed = false, focusOnOpen = true, paging, readOnly = false, resetKey }: CommentPopoverProps): ReactElement {
+export function CommentPopover({ placement, quote, sheetQuote, reference, showReference = false, label, note, comment, startValue, onText, onSave, onDelete, onClose, opener, fallback, framed = false, focusOnOpen = true, paging, readOnly = false, resetKey }: CommentPopoverProps): ReactElement {
   const t = useT();
   const rowFrame = useContext(FieldFrameContext);
   const inFrame = framed && (placement === "sheet" || (placement === "row" && rowFrame !== null));
@@ -264,7 +266,7 @@ export function CommentPopover({ placement, quote, sheetQuote, reference, label,
     {/* in place the card is the field alone: a file comment's file and lines are no matter while it is written (the
         highlighted text stands beside it), so they are only said to assistive tech; a dialog and a sheet show them over the quote */}
     {inline
-      ? reference !== undefined && <p className="comment-popover-reference visually-hidden"><FileReferenceLabel reference={reference} /></p>
+      ? reference !== undefined && !showReference && <p className="comment-popover-reference visually-hidden"><FileReferenceLabel reference={reference} /></p>
       : <Top quote={quoted} sheetQuote={sheet ? sheetQuote : undefined} reference={reference} label={label} note={note} actions={actions} />}
     {sheet && readOnly ? <p className="comment-sheet-text">{comment}</p> : <div className="comment-popover-edit">
       {inFrame
@@ -288,5 +290,7 @@ export function CommentPopover({ placement, quote, sheetQuote, reference, label,
           </>}
       </div>
     </div>}
+    {/* shown in place (the Review), it is secondary: under the field, dim */}
+    {inline && reference !== undefined && showReference && <p className="comment-popover-reference"><FileReferenceLabel reference={reference} /></p>}
   </Frame>;
 }

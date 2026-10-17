@@ -6,7 +6,7 @@ import { DiffWorkerPool } from "./DiffWorkerPool.tsx";
 import { useT } from "../lib/i18n.ts";
 import type { DiffStyle } from "../lib/settings.ts";
 import { VIRTUAL_HIGHLIGHT_LINES } from "../lib/sourcePreview.ts";
-import { contentKey, keepEmptyRows, SCROLL_CONFIG, SHADOW_CSS, SOURCE_THEME } from "../lib/sourceTheme.ts";
+import { contentKey, DIFF_SHADOW_CSS, keepEmptyRows, SCROLL_CONFIG, SOURCE_THEME } from "../lib/sourceTheme.ts";
 import "./RepoDiff.css";
 
 export interface RepoDiffProps {
@@ -23,24 +23,6 @@ export interface RepoDiffProps {
 
 /** The fewest context lines the package's trimmer keeps correct (at 0 it miscounts the lines it drops). */
 export const FOLDED_CONTEXT_LINES = 1;
-
-/**
- * The diff colors on top of the source theme: the app's inserted/deleted tokens as the package's
- * base colors. Its gutter bars, signs and word emphasis take them verbatim, and it mixes the row
- * backgrounds from them and the app's background itself (an override here would be mixed again).
- */
-const DIFF_SHADOW_CSS = `${SHADOW_CSS}
-:host {
-  --diffs-light-addition-color: var(--syntax-inserted);
-  --diffs-dark-addition-color: var(--syntax-inserted);
-  --diffs-light-deletion-color: var(--syntax-deleted);
-  --diffs-dark-deletion-color: var(--syntax-deleted);
-  --diffs-bg-separator-override: var(--bg-elevated);
-  --diffs-bg-context-override: var(--bg);
-  --diffs-bg-context-gutter-override: var(--bg);
-  --diffs-header-font-family: var(--font-ui);
-}
-`;
 
 type Options = FileDiffOptions<undefined, undefined>;
 

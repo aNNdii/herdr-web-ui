@@ -61,13 +61,12 @@ import { BackgroundTasks } from "./BackgroundTasks.tsx";
 import { MicButton, VoiceRecordingPill, useDictation } from "./VoiceInput.tsx";
 import { cachedPaneCommands } from "../lib/paneCommandCache.ts";
 import { useT } from "../lib/i18n.ts";
+import { commentsPanel, useCommentsPanel } from "../lib/commentsPanel.ts";
+import { OpenFileContext } from "../lib/filePaths.ts";
 import { blockComments, commentTarget, isReplyComment, outgoingMessage, useBlockComments, type BlockComment, type PaneComment } from "../lib/blockComments.ts";
 import { changedField, inUnchangedPopover, revealField } from "../lib/commentDom.ts";
-import { markShownComment, openShownComment, shownCommentIds } from "../lib/shownComments.ts";
+import { markShownComment, shownCommentIds } from "../lib/shownComments.ts";
 import { popoverOutlived } from "../lib/commentPopover.ts";
-import { lastFileStop } from "../lib/commentWalk.ts";
-import { FileCommentNavContext } from "../lib/fileCommentNav.ts";
-import { sortFileComments, type FileComment } from "../lib/fileComments.ts";
 import { CommentPopover } from "./CommentPopover.tsx";
 import { modalOpen } from "../lib/focus.ts";
 
@@ -313,6 +312,10 @@ export function Composer({
   // off there are none: no bar, no walk, nothing sent, even what another tab that still has them on stores meanwhile
   const commentOwner = paneStorageId(machineId, paneId);
   const comments = useBlockComments(commentOwner);
+  // the bar opens the pane's comments panel (CommentsPanel.tsx), where each comment is edited or deleted
+  const commentsPanelState = useCommentsPanel();
+  // the panel opens a comment's file in the review, as the pane's own file links do
+  const openFile = useContext(OpenFileContext);
   // an open question reads the text as its answer, and without an agent the text is typed into
   // whatever runs in the pane (a shell, perhaps): the comments wait for a message to the agent
   const outgoing = outgoingMessage(comments, text, { answering: answerHint !== null, agent: agent !== null });
@@ -326,10 +329,9 @@ export function Composer({
     if (editedComment === null) return;
     if (!settings.comments || popoverOutlived({ commentId: editedComment.id, initialComment: editedComment.comment }, comments, editedText.current)) setEditedComment(null);
   }, [editedComment, settings.comments, comments]);
-  // the context bar at the top of the box walks the comments of the chat, one note per tap, and then
-  // the pane's file comments, each opened in the file viewer
-  const nextComment = useRef(0);
-  const openFileComment = useContext(FileCommentNavContext);
+  // the context bar at the top of the box opens the pane's comments panel (CommentsPanel.tsx). The walk it did before
+  // (one comment per tap, in the chat and then in the file viewer) is gone: what follows no longer starts, and stays only
+  // to keep this file close to upstream's
   /** the walk control (the bar's text): Escape from the note the walk stands on hands the focus back to it */
   const walkRef = useRef<HTMLButtonElement | null>(null);
   /**
@@ -384,56 +386,6 @@ export function Composer({
     });
     return () => window.cancelAnimationFrame(frame);
   }, [comments, clearCurrent]);
-  const goToComment = (): void => {
-    // this pane's own chat: several panes can be mounted, each with a chat view in its stack
-    const view = surfaceRef.current?.closest(".terminal-stack");
-    if (!view) return;
-    // a comment being written in this pane keeps its place: the walk gives the focus back to it, as the Send does
-    const unsaved = changedField(view);
-    if (unsaved !== null) {
-      revealField(unsaved);
-      return;
-    }
-    // one stop per reply comment the chat's comment layer shows, in reading order (lib/shownComments.ts)
-    const chat = view.querySelector(".chat-view");
-    const replies = comments.filter(isReplyComment);
-    const notes = chat === null ? [] : shownCommentIds(chat).filter((id) => replies.some((comment) => comment.id === id));
-    // a comment whose text is not in the chat (older history not loaded, a row outside the list's window, a reply that
-    // changed) is a stop of its own that opens it as a dialog, so the bar reaches every comment it counts
-    const shown = new Set(notes);
-    // (a file comment has no place in the chat: the viewer shows it)
-    const missing = replies.filter((comment) => !shown.has(comment.id));
-    // then the file comments, in the order they are sent, each a stop that opens the viewer at it
-    const files = sortFileComments(comments.filter((comment): comment is FileComment => !isReplyComment(comment)));
-    const inChat = notes.length + missing.length;
-    const stops = inChat + files.length;
-    if (stops === 0) return;
-    // the viewer showed a file comment of this walk last (`lastFileStop`): this walk goes on after that one
-    const last = lastFileStop.get(commentOwner);
-    lastFileStop.delete(commentOwner);
-    const shownLast = last === undefined ? -1 : files.findIndex((comment) => comment.id === last);
-    const stop = (shownLast >= 0 ? inChat + shownLast + 1 : nextComment.current) % stops;
-    nextComment.current = (stop + 1) % stops;
-    clearCurrent();
-    if (stop >= inChat) { openFileComment?.(paneId, machineId, files[stop - inChat]!); return; }
-    if (stop >= notes.length) {
-      const comment = missing[stop - notes.length]!;
-      editedText.current = comment.comment;
-      setEditedComment(comment);
-      return;
-    }
-    const id = notes[stop]!;
-    // the layer scrolls it into view (the chat's scroller only) and opens it: its field in the comment mode, else marked,
-    // or the sheet on a touch screen. Its text no longer drawn meanwhile: the dialog, as for a comment never shown
-    if (chat === null || !openShownComment(chat, id)) {
-      const comment = replies.find((one) => one.id === id);
-      if (comment === undefined) return;
-      editedText.current = comment.comment;
-      setEditedComment(comment);
-      return;
-    }
-    currentNote.current = { id, view: chat };
-  };
   const mounted = useRef(true);
   const [caret, setCaret] = useState(text.length);
   const textRef = useRef(text);
@@ -493,7 +445,6 @@ export function Composer({
   const removeAllComments = (): void => {
     if (comments.length === 0) return;
     blockComments.remove(commentOwner, comments.map((comment) => comment.id));
-    nextComment.current = 0;
     clearCurrent();
     if (!window.matchMedia("(pointer: coarse)").matches) textareaRef.current?.focus();
   };
@@ -1443,8 +1394,9 @@ export function Composer({
                 type="button"
                 className="composer-comments-walk"
                 aria-label={waiting ? `${label}. ${why}` : label}
-                title={`${waiting ? `${label}\n${why}` : label}\n${t("Go to the next comment")}`}
-                onClick={goToComment}
+                title={`${waiting ? `${label}\n${why}` : label}\n${t("Show comments")}`}
+                aria-expanded={commentsPanelState?.owner === commentOwner}
+                onClick={(event) => commentsPanel.toggle(commentOwner, event.currentTarget, openFile)}
               >
                 <MessageSquare aria-hidden="true" />
                 <span className="composer-comments-text">{label}</span>

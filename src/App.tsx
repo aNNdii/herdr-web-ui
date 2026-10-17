@@ -1,4 +1,4 @@
-import { type CSSProperties, type DragEvent, type ReactNode, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { type CSSProperties, type DragEvent, lazy, type ReactNode, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { Bell, Ellipsis, FolderOpen, Link, Menu, MessageSquare, PanelLeft, Search, SquareTerminal, X } from "lucide-react";
 
 import type { AgentStatus, ServerMessage, AccessRefusal, HealthAuth, HerdrPane } from "../shared/protocol.ts";
@@ -84,6 +84,11 @@ import { PaneFollowContext } from "./lib/paneSubmitContext.ts";
 import { SplitDropPreview } from "./components/SplitDropPreview.tsx";
 import { CrashProbe, RegionCrash } from "./components/AppCrash.tsx";
 import { RenderBoundary } from "./components/RenderBoundary.tsx";
+import { CommentsPanel } from "./components/CommentsPanel.tsx";
+import { useCommentsPanel } from "./lib/commentsPanel.ts";
+
+// the review and its diff and tree libraries are their own chunk, loaded when it first opens
+const ReviewDialog = lazy(() => import("./components/ReviewDialog.tsx").then((module) => ({ default: module.ReviewDialog })));
 
 const APP_TITLE = "herdr web ui";
 /** how soon after a key press a focus counts as the user's own (lastKeyAtRef) */
@@ -326,6 +331,8 @@ export function App() {
   // the width the sidebar's edge was dragged to on this device; null is the density's own
   const [sidebarWidth, setSidebarWidth] = useState(storedSidebarWidth);
   const filePanelAvailable = useMediaQuery(FILE_PANEL_DOCK_QUERY);
+  // the comments panel (CommentsPanel.tsx): docked, it stands in the file panel's place
+  const commentsPanelState = useCommentsPanel();
   const [filePanelWidth, setFilePanelWidth] = useState(storedFilePanelWidth);
   const [lens, setLens] = useState<{ key: string; view: PaneView }>({ key: "", view: "terminal" });
   // Explicit lens choices stay authoritative in this page even when storage cannot be written.
@@ -382,6 +389,9 @@ export function App() {
   const paneActionsRef = useRef<((target: HerdrPane) => RowMenuItem[]) | null>(null);
   // the Files dialog, and the file open in the viewer (a path as the chat or the dialog gave it)
   const [filesOpen, setFilesOpen] = useState(false);
+  // the review (ReviewDialog.tsx): opened from the Files dialog, or with a file a chat names (`path`)
+  const [review, setReview] = useState<{ path: string | null; paneId: string; directory: string | null; machineId: string; id: number } | null>(null);
+  const reviewFile = useCallback((path: string, target: { paneId: string; directory: string | null; machineId: string }) => setReview({ ...target, path, id: Date.now() }), []);
   const { viewing, openFile, closeFile, setPresentation, releaseFile } = useFileViewer();
   // a repository diff from the Files dialog's Changes tab, an entry of its own like a file
   const { viewing: diffViewing, openDiff, closeDiff, releaseDiff } = useRepoDiffViewer();
@@ -419,11 +429,6 @@ export function App() {
   const toggleFilePresentation = filePanelAvailable && viewing !== null
     ? () => presentFile(fileDocked ? "popup" : "panel")
     : undefined;
-  const viewFile = useCallback((path: string) => {
-    // the Files dialog would cover the docked panel the file opens in
-    if (filePanelAvailable && filePresentation(path) === "panel") setFilesOpen(false);
-    openFile({ path, paneId: selectedPaneId, machineId: selectedMachineId });
-  }, [openFile, selectedPaneId, selectedMachineId, filePanelAvailable]);
   // the composer's walk stops at a file comment: its file opens in the viewer, at that comment
   const viewFileComment = useCallback((paneId: string, machineId: string, comment: FileComment) => {
     openFile({ path: comment.path, paneId, machineId, comment: comment.id });
@@ -1595,7 +1600,7 @@ export function App() {
         <div className={`scrim${drawerOpen ? " is-open" : ""}`} aria-hidden="true" onClick={() => setDrawerOpen(false)} />
 
         {/* a file path in the chat opens in the viewer, relative to the selected pane's folder */}
-        <OpenFileContext.Provider value={selectedPaneId !== null ? viewFile : null}>
+        <OpenFileContext.Provider value={selectedPane !== null ? (path) => reviewFile(path, { paneId: selectedPane.pane_id, directory: selectedPane.foreground_cwd ?? selectedPane.cwd ?? null, machineId: selectedMachineId }) : null}>
         <FileCommentNavContext.Provider value={viewFileComment}>
         <div className={`pane-column${chatShown ? " is-chat" : ""}`}>
         {/* over the pane only: a bar across the window would cut the sidebar off from its top row in the header */}
@@ -1687,7 +1692,7 @@ export function App() {
                   <div id={slotPanelId} className="terminal-tabpanel" role={slotPanelLabel === null ? undefined : "tabpanel"} aria-label={slotPanelLabel ?? undefined}>
                   <PaneCanvas key={machineId} snapshot={slotSnapshot} pane={pane} selectedPaneId={paneId} onSelect={onSelect} onChanged={actions.refresh} actionsRef={active ? paneActionsRef : undefined}
                     onOpenInHalf={wideScreen ? (id, side) => dockSide({ machineId, paneId: id }, side) : undefined}
-                    renderPane={(item, itemActive, herdrSplit) => <OpenFileContext.Provider value={item ? (path) => openFile({ path, paneId: item.pane_id, machineId }) : null}>
+                    renderPane={(item, itemActive, herdrSplit) => <OpenFileContext.Provider value={item ? (path) => reviewFile(path, { paneId: item.pane_id, directory: item.foreground_cwd ?? item.cwd ?? null, machineId }) : null}>
                       <PaneTerminal
                         title={item ? displayPaneTitle(item) : active ? selectedTitle : null}
                         // Wait for the roster before attaching: the loading placeholder is replaced
@@ -1736,7 +1741,9 @@ export function App() {
         </FileCommentNavContext.Provider>
         </OpenFileContext.Provider>
         {/* last in the row: the file beside the pane (from 980px), the pane column shrinks and its terminal refits */}
-        {viewing !== null && fileDocked && <MachineContext.Provider value={viewing.machineId}>
+        {/* the comments panel takes the docked file's place while it is open; the file is back once it closes */}
+        {filePanelAvailable && <CommentsPanel docked panelStart={<FilePanelResizer width={filePanelWidth} onResize={setFilePanelWidth} />} />}
+        {viewing !== null && fileDocked && commentsPanelState === null && <MachineContext.Provider value={viewing.machineId}>
           <FileViewer key={viewing.path} docked panelStart={<FilePanelResizer width={filePanelWidth} onResize={setFilePanelWidth} />} {...fileViewerProps!} />
         </MachineContext.Provider>}
       </div>
@@ -1768,20 +1775,27 @@ export function App() {
       }} />
       <SettingsDialog auth={auth} herdrVersion={health?.herdr?.version ?? null} open={settingsOpen} section={settingsSection} linkPage={settingsLinkPage} linkSection={settingsLinkSection} onPage={onSettingsPage} onClose={closeSettings} onUsageLogin={(paneId) => { closeSettings(); selectTarget("local", paneId, "terminal"); void load(); }} actions={actions} updates={updates} onEnableNotifications={enableNotifications} overPreview={(viewing !== null && !fileDocked) || diffViewing !== null} />
       {filesOpen && selectedPane && (
-        <FilesDialog start={selectedPane.foreground_cwd ?? selectedPane.cwd ?? ""} paneId={selectedPane.pane_id} viewing={(viewing !== null && !fileDocked) || diffViewing !== null} onOpenFile={viewFile}
+        <FilesDialog start={selectedPane.foreground_cwd ?? selectedPane.cwd ?? ""} paneId={selectedPane.pane_id} viewing={(viewing !== null && !fileDocked) || diffViewing !== null || review !== null} onOpenFile={(path) => reviewFile(path, { paneId: selectedPane.pane_id, directory: selectedPane.foreground_cwd ?? selectedPane.cwd ?? null, machineId: selectedMachineId })}
           onOpenDiff={(comparison, file) => openDiff({ machineId: selectedMachineId, paneId: selectedPane.pane_id, directory: selectedPane.foreground_cwd ?? selectedPane.cwd ?? null, ...comparison, path: file.path, oldPath: file.old_path })}
           onBrowseFolders={(path) => actions.openPalette(folderQueryFor(path, null))}
+          onReview={() => { setFilesOpen(false); setReview({ path: null, paneId: selectedPane.pane_id, directory: selectedPane.foreground_cwd ?? selectedPane.cwd ?? null, machineId: selectedMachineId, id: Date.now() }); }}
           onClose={() => setFilesOpen(false)} />
       )}
+      {/* the comments of one pane, opened from its chat's comments button or its composer's comments bar: as a dialog
+          where no file panel docks (docked, it stands in the file panel's place, above) */}
+      {!filePanelAvailable && <CommentsPanel docked={false} />}
+      {/* every file opens here: of the pane's repository, another one or none; media in the file viewer's view inside it */}
+      {review !== null && <MachineContext.Provider value={review.machineId}>
+        <Suspense fallback={null}>
+          <ReviewDialog key={review.id} paneId={review.paneId} directory={review.directory} initialPath={review.path} onClose={() => setReview(null)} />
+        </Suspense>
+      </MachineContext.Provider>}
       {diffViewing !== null && <MachineContext.Provider value={diffViewing.machineId}>
         <RepoDiffViewer key={`${diffViewing.scope}:${diffViewing.path}`} target={diffViewing} onClose={closeDiff} onOpenFile={(path) => {
-          const docked = filePanelAvailable && filePresentation(path) === "panel";
-          if (docked) {
-            setFilesOpen(false);
-            releaseDiff();
-          }
-          openFile({ path, paneId: diffViewing.paneId, machineId: diffViewing.machineId }, docked);
-        }} keyboardActive={!settingsOpen && (viewing === null || fileDocked)} />
+          // the file opens in the review, over the diff (a diff of no pane: in the file viewer, as before)
+          if (diffViewing.paneId !== null) reviewFile(path, { paneId: diffViewing.paneId, directory: diffViewing.directory, machineId: diffViewing.machineId });
+          else openFile({ path, paneId: null, machineId: diffViewing.machineId });
+        }} keyboardActive={!settingsOpen && review === null && (viewing === null || fileDocked)} />
       </MachineContext.Provider>}
       {viewing !== null && !fileDocked && <MachineContext.Provider value={viewing.machineId}>
         <FileViewer key={viewing.path} {...fileViewerProps!} />

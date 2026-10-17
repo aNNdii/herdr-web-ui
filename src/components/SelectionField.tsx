@@ -1,9 +1,10 @@
 /**
  * The box of a comment field over its text, for the Markdown comment layer (MarkdownComments.tsx): the field over a
  * selection, and a count's fields (useMarginFields.tsx), stacked and placed as one over the first one's text. It is
- * portalled into the scrolling surface, whose content it scrolls with, and placed from the text's first line box:
- * above it, `FIELD_GAP_PX` clear, growing upward (`data-above`, MarkdownComments.css); below the last line where there
- * is no room above (lib/selectionField.ts `fieldPlace`). The side is chosen once, as it opens. It is placed again as it
+ * portalled into the scrolling surface, whose content it scrolls with, and placed from the text's line boxes: under
+ * the last line, `FIELD_GAP_PX` clear, centred on where the text ends; above the first line, growing upward
+ * (`data-above`, MarkdownComments.css), where there is no room below (lib/selectionField.ts `fieldPlace`). The side is
+ * chosen once, as it opens. It is placed again as it
  * grows and as the surface or its content is resized (the text reflows), and never moved by a transition. It is
  * scrolled into view once, as it opens, by the surface alone and just far enough (`revealBy`, `INSET_PX` to spare).
  * Its text not drawn (re-rendered away), it stays where it was.
@@ -42,7 +43,7 @@ export function SelectionField({ surface, ranges, box, reveal = true, children }
       const view = { top: outer.top + body.clientTop, left: outer.left + body.clientLeft, width: body.clientWidth, height: body.clientHeight };
       const placed = fieldPlace({
         first: { top: Math.min(...rects.map((rect) => rect.top)), left: rects[0]!.left },
-        last: { bottom: Math.max(...rects.map((rect) => rect.bottom)) },
+        last: { bottom: Math.max(...rects.map((rect) => rect.bottom)), right: rects[rects.length - 1]!.right },
         view,
         scroll: { top: body.scrollTop, left: body.scrollLeft },
         field: { width: node.offsetWidth, height: node.offsetHeight },

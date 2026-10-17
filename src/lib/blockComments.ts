@@ -253,7 +253,7 @@ function sortComments(comments: readonly BlockComment[]): BlockComment[] {
 }
 
 /** A copy of `comments` in the order they are listed and sent in: reply comments in reading order, then file comments (`sortFileComments`). */
-function sortPaneComments(comments: readonly PaneComment[]): PaneComment[] {
+export function sortPaneComments(comments: readonly PaneComment[]): PaneComment[] {
   return [...sortComments(comments.filter(isReplyComment)), ...sortFileComments(comments.filter((c): c is FileComment => !isReplyComment(c)))];
 }
 

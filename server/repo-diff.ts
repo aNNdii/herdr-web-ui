@@ -1,7 +1,8 @@
 import { closeSync, lstatSync, openSync, readSync } from "node:fs";
+import { readdir } from "node:fs/promises";
 import { join } from "node:path";
 
-import type { RepoDiffFile, RepoDiffFileList, RepoDiffFilePatch, RepoDiffRepository, RepoDiffScope, RepoDiffStatus } from "../shared/protocol.ts";
+import type { RepoDiffFile, RepoDiffFileList, RepoDiffFilePatch, RepoDiffRepository, RepoDiffScope, RepoDiffStatus, RepoDiffTree } from "../shared/protocol.ts";
 import { errorResponse, jsonResponse } from "./http.ts";
 
 /**
@@ -22,6 +23,15 @@ import { errorResponse, jsonResponse } from "./http.ts";
 export const REPO_DIFF_MAX_FILES = 2_000;
 /** What one listing command may print before it is stopped (names, statuses, line counts). */
 export const REPO_DIFF_MAX_LIST_BYTES = 2 * 1024 * 1024;
+/** Every file of the repository a tree lists at most; `truncated` says when there were more. */
+export const REPO_TREE_MAX_FILES = 50_000;
+/** What the listing command may print before it is stopped (one path per NUL-terminated entry). */
+export const REPO_TREE_MAX_LIST_BYTES = 16 * 1024 * 1024;
+/** A folder outside any repository (`folder=1`) is listed this deep and this far at most; `truncated` says when there was more. */
+export const FOLDER_TREE_MAX_FILES = 5_000;
+export const FOLDER_TREE_MAX_DEPTH = 6;
+/** Folders a plain folder's listing does not walk into: a repository's own data, and installed dependencies. */
+const FOLDER_TREE_SKIPPED = new Set([".git", "node_modules"]);
 /** One file's patch; a larger one is answered as `too_large` with no patch text. */
 export const REPO_DIFF_MAX_PATCH_BYTES = 1024 * 1024;
 /** Unchanged lines around each change, as `git diff` prints by default. */
@@ -228,18 +238,34 @@ async function changedFiles(context: Context, root: string, comparison: Comparis
   return { files, complete: !names.overflow && !others.overflow };
 }
 
+/**
+ * A changed file's stamp: its modification time and size on disk, or that it is deleted or gone. A Viewed mark is kept
+ * with the stamp it was set at, so a later write to the file (an agent's next change) takes the mark away.
+ */
+function fileStamp(root: string, file: RepoDiffFile): string {
+  if (file.status === "deleted") return "deleted";
+  try {
+    const stat = lstatSync(join(root, file.path));
+    return `${Math.round(stat.mtimeMs)}:${stat.size}`;
+  } catch {
+    return "missing";
+  }
+}
+
 /** GET /api/workspace/diff/files */
 export async function repoDiffFiles(cwd: string, params: URLSearchParams, options: RepoDiffOptions = {}): Promise<RepoDiffFileList> {
   const context = contextOf(options);
   const repository = await repositoryOf(context, cwd);
   const comparison = await comparisonOf(context, repository.root, params);
   const listing = await changedFiles(context, repository.root, comparison, []);
+  const files = listing.files.slice(0, context.maxFiles);
   return {
     repository,
     scope: comparison.scope,
     base: comparison.base,
     head: comparison.head,
-    files: listing.files.slice(0, context.maxFiles),
+    // with `stamps=1` each file says when it last changed on disk, for a review's Viewed mark
+    files: params.get("stamps") === "1" ? files.map((file) => ({ ...file, stamp: fileStamp(repository.root, file) })) : files,
     total: listing.complete ? listing.files.length : null,
     truncated: !listing.complete || listing.files.length > context.maxFiles,
     limits: { max_files: context.maxFiles, max_list_bytes: context.maxListBytes },
@@ -261,6 +287,80 @@ function untrackedKind(path: string, maxBytes: number): "text" | "binary" | "too
   } finally {
     if (fd !== null) closeSync(fd);
   }
+}
+
+/**
+ * GET /api/workspace/diff/tree: every file the repository holds, tracked or not ignored (`git ls-files`),
+ * for the review's file tree; with `ignored=1` the files git ignores too, named in `ignored`. Read only,
+ * like the rest of this module.
+ */
+export async function repoDiffTree(cwd: string, params: URLSearchParams, options: RepoDiffOptions = {}): Promise<RepoDiffTree> {
+  const context = contextOf(options);
+  let repository: RepoDiffRepository;
+  try {
+    repository = await repositoryOf(context, cwd);
+  } catch (error) {
+    // with `folder=1` a folder outside any repository answers with its own files, as a plain folder
+    if (error instanceof RepoDiffError && error.code === "not_a_repository" && params.get("folder") === "1") return folderTree(cwd);
+    throw error;
+  }
+  const maxBytes = options.maxListBytes ?? REPO_TREE_MAX_LIST_BYTES;
+  const listing = await runGit(context, repository.root, ["ls-files", "-z", "--cached", "--others", "--exclude-standard"], maxBytes);
+  if (!listing.overflow && listing.code !== 0) throw new RepoDiffError("git_failed", "git could not list the files of this repository", 503);
+  // whole names only (a cut listing ends inside one), and each once: a conflicted file is listed once per stage
+  const listed = new Set(fields(listing.stdout).filter((path) => path !== ""));
+  let overflow = listing.overflow;
+  const ignored = new Set<string>();
+  if (params.get("ignored") === "1" && !overflow) {
+    const extra = await runGit(context, repository.root, ["ls-files", "-z", "--others", "--ignored", "--exclude-standard"], Math.max(1, maxBytes - listing.stdout.length));
+    if (!extra.overflow && extra.code !== 0) throw new RepoDiffError("git_failed", "git could not list the ignored files of this repository", 503);
+    overflow = extra.overflow;
+    for (const path of fields(extra.stdout)) if (path !== "" && !listed.has(path)) ignored.add(path);
+  }
+  const paths = [...listed, ...ignored].sort((left, right) => (left < right ? -1 : left > right ? 1 : 0)).slice(0, REPO_TREE_MAX_FILES);
+  return {
+    repository,
+    paths,
+    ...(params.get("ignored") === "1" ? { ignored: paths.filter((path) => ignored.has(path)) } : {}),
+    truncated: overflow || listed.size + ignored.size > REPO_TREE_MAX_FILES,
+    limits: { max_files: REPO_TREE_MAX_FILES, max_list_bytes: REPO_TREE_MAX_LIST_BYTES },
+  };
+}
+
+/**
+ * A folder outside any repository, as the review's tree shows it (`plain`): its files, walked breadth first to
+ * `FOLDER_TREE_MAX_DEPTH` folders deep and `FOLDER_TREE_MAX_FILES` files at most, without `.git` and `node_modules`;
+ * links are listed as files and never followed. Unreadable folders are left out.
+ */
+async function folderTree(root: string): Promise<RepoDiffTree> {
+  const paths: string[] = [];
+  let truncated = false;
+  let level = [""];
+  for (let depth = 0; depth <= FOLDER_TREE_MAX_DEPTH && level.length > 0 && !truncated; depth++) {
+    const next: string[] = [];
+    for (const folder of level) {
+      const entries = await readdir(folder === "" ? root : join(root, folder), { withFileTypes: true }).catch(() => []);
+      for (const entry of entries) {
+        const path = folder === "" ? entry.name : `${folder}/${entry.name}`;
+        if (entry.isDirectory()) {
+          if (FOLDER_TREE_SKIPPED.has(entry.name)) continue;
+          if (depth === FOLDER_TREE_MAX_DEPTH) truncated = true;
+          else next.push(path);
+        } else if (paths.length < FOLDER_TREE_MAX_FILES) paths.push(path);
+        else truncated = true;
+      }
+      if (truncated && paths.length >= FOLDER_TREE_MAX_FILES) break;
+    }
+    level = next;
+  }
+  if (level.length > 0) truncated = true;
+  return {
+    repository: { root, branch: null, head: null, detached: false, unborn: false },
+    paths: paths.sort((left, right) => (left < right ? -1 : left > right ? 1 : 0)),
+    plain: true,
+    truncated,
+    limits: { max_files: FOLDER_TREE_MAX_FILES, max_list_bytes: REPO_TREE_MAX_LIST_BYTES },
+  };
 }
 
 /** GET /api/workspace/diff/file */
@@ -312,9 +412,9 @@ export async function repoDiffFile(cwd: string, params: URLSearchParams, options
 }
 
 /** The HTTP answer of either route, with every refusal in the `{ error: { code, message } }` envelope. */
-export async function repoDiffResponse(kind: "files" | "file", cwd: string, params: URLSearchParams, options: RepoDiffOptions = {}): Promise<Response> {
+export async function repoDiffResponse(kind: "files" | "file" | "tree", cwd: string, params: URLSearchParams, options: RepoDiffOptions = {}): Promise<Response> {
   try {
-    const body = kind === "files" ? await repoDiffFiles(cwd, params, options) : await repoDiffFile(cwd, params, options);
+    const body = kind === "files" ? await repoDiffFiles(cwd, params, options) : kind === "tree" ? await repoDiffTree(cwd, params, options) : await repoDiffFile(cwd, params, options);
     return jsonResponse(body, 200, { "cache-control": "private, no-store" });
   } catch (error) {
     if (error instanceof RepoDiffError) return jsonResponse({ error: { code: error.code, message: error.message } }, error.status);

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { FolderSearch, X } from "lucide-react";
+import { FolderSearch, ListTree, X } from "lucide-react";
 
 import "./FilesDialog.css";
 import { DirectoryBrowser } from "./DirectoryBrowser.tsx";
@@ -23,13 +23,15 @@ export interface FilesDialogProps {
   onOpenDiff: (comparison: RepoComparison, file: RepoDiffFile) => void;
   /** the command palette, already browsing this folder (it opens above this dialog) */
   onBrowseFolders: (path: string) => void;
+  /** the whole repository's review (ReviewDialog.tsx), opened in place of this dialog */
+  onReview?: () => void;
   onClose: () => void;
 }
 
 type Tab = "browse" | "changes";
 
 /** The files of the pane's folder (and any other), each opened in the file viewer, and the changes of its repository, each opened as a diff. */
-export function FilesDialog({ start, paneId, viewing, onOpenFile, onOpenDiff, onBrowseFolders, onClose }: FilesDialogProps) {
+export function FilesDialog({ start, paneId, viewing, onOpenFile, onOpenDiff, onBrowseFolders, onReview, onClose }: FilesDialogProps) {
   const t = useT();
   const phone = useMediaQuery("(max-width: 480px)");
   const surface = useFocusTrap<HTMLElement>(true);
@@ -62,6 +64,7 @@ export function FilesDialog({ start, paneId, viewing, onOpenFile, onOpenDiff, on
             <button type="button" aria-pressed={tab === "browse"} onClick={() => show("browse")}>{t("Browse")}</button>
             <button type="button" aria-pressed={tab === "changes"} onClick={() => show("changes")}>{t("Changes")}</button>
           </div>
+          {onReview && <button type="button" className="files-dialog-review" aria-label={t("Review all files")} title={t("Review all files")} onClick={onReview}><ListTree aria-hidden="true" /><span>{t("Review")}</span></button>}
           {!phone && <button type="button" className="icon-button" aria-label={t("Browse folders in the palette")} title={t("Browse folders in the palette")} onClick={browseFolders}><FolderSearch aria-hidden="true" /></button>}
           <button type="button" className="icon-button" aria-label={t("Close files")} onClick={onClose}><X aria-hidden="true" /></button>
         </header>

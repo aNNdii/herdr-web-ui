@@ -62,6 +62,7 @@ import { useMediaQuery } from "../lib/useMediaQuery.ts";
 import { CommentMargin, type CommentMarginProps } from "./CommentMargin.tsx";
 import { useMarkdownCommentSheet } from "./MarkdownCommentSheet.tsx";
 import { CommentPopover } from "./CommentPopover.tsx";
+import type { FileReference } from "./FileReference.tsx";
 import { SelectionButton, SELECTION_BUTTON_CLASS } from "./SelectionButton.tsx";
 import { SelectionField } from "./SelectionField.tsx";
 import { useCommentPopover } from "./useCommentPopover.ts";
@@ -234,6 +235,8 @@ export interface MarkdownCommentLayerHandle {
 
 /** What a host gives `MarkdownCommentLayer`, and what it must do. */
 export interface MarkdownCommentLayerProps<T> {
+  /** the file and lines a target is on, shown on its card (the Review shows them; unset, the card names nothing) */
+  reference?: (target: T) => FileReference | undefined;
   /** the layer's handle (a plain prop: React 19) */
   ref?: Ref<MarkdownCommentLayerHandle>;
   /** the surface's comments and how they are kept; null: it takes no comments now, and what is open is left */
@@ -271,7 +274,7 @@ export interface MarkdownCommentLayerProps<T> {
 }
 
 /** The comment layer of one surface (see the module comment and `MarkdownCommentLayerProps`). */
-export function MarkdownCommentLayer<T>({ ref, source, surface: host, roots, mode, margin, focusFallback, children }: MarkdownCommentLayerProps<T>): ReactNode {
+export function MarkdownCommentLayer<T>({ ref, source, surface: host, roots, mode, margin, focusFallback, reference, children }: MarkdownCommentLayerProps<T>): ReactNode {
   const { settings } = useSettings();
   const t = useT();
   // what the live region says last; `n` makes the same words a new message
@@ -572,6 +575,8 @@ export function MarkdownCommentLayer<T>({ ref, source, surface: host, roots, mod
     <SelectionField key={`open-${open.id}`} surface={host} ranges={fieldRanges} box={box}>
       <CommentPopover
         placement="row"
+        reference={open === null || reference === undefined ? undefined : reference(open.target)}
+        showReference={reference !== undefined}
         quote={{ text: quote.current }}
         comment={open.initialComment}
         startValue={text.read()}
