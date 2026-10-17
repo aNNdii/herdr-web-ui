@@ -261,7 +261,8 @@ export class Updater {
 
   private async sourceBlock(): Promise<string | null> {
     const branch = await this.git("branch", "--show-current");
-    if (branch !== "main" && !(branch === "" && this.options.pluginCheckout)) return "Switch the source checkout to main to update.";
+    // fork: an install on `next` takes the fork's vX.Y.Z-next.N releases (RELEASE_TAG) as main takes upstream's
+    if (branch !== "main" && branch !== "next" && !(branch === "" && this.options.pluginCheckout)) return "Switch the source checkout to main or next to update.";
     if (await this.git("status", "--porcelain", "--untracked-files=all")) return "The source checkout has local changes. Commit or move them before updating.";
     if (await this.git("rev-parse", "HEAD") !== this.sourceRevision) return CHECKOUT_CHANGED_REASON;
     return null;
