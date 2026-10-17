@@ -56,8 +56,6 @@ Only tokens overridden by `[data-theme="light"]` have a light value. Both column
 | Text/strong | `--text-strong` | `#f2ebdf` | `#16120d` |
 | Accent | `--accent` | `#f0a830` | `#8c5000` |
 | Accent/tint | `--accent-tint` | `rgba(240, 168, 48, 0.13)` | `rgba(140, 80, 0, 0.1)` |
-| Comment fill | `--comment-fill` | `color-mix(in srgb, var(--accent) 16%, transparent)` | same expression |
-| Comment fill/strong | `--comment-fill-strong` | `color-mix(in srgb, var(--accent) 34%, transparent)` | same expression |
 | Primary | `--primary` | `#f0a830` | `#c57d12` |
 | Primary/hover | `--primary-hover` | `#f6bb55` | `#d48c1f` |
 | Primary/text | `--primary-text` | `#1b1407` | `#1b1407` |

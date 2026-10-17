@@ -104,8 +104,8 @@
   --git-renamed: var(--status-working);
   --git-conflict: var(--notice);
   --git-ignored: var(--text-dim);
-  --syntax-inserted: var(--git-added);
-  --syntax-deleted: var(--git-deleted);
+  --syntax-inserted: var(--status-done);
+  --syntax-deleted: var(--status-blocked);
   --syntax-keyword: #e8875f;
   --syntax-string: #a8c17c;
   --syntax-number: #d6a0c9;

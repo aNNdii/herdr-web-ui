@@ -13,7 +13,7 @@
  * What does not: files, images, push and remote PCs, which need a real machine.
  */
 import type { AgentIntegration, AgentStatus, ConversationTurn, IntegrationsResponse, Machine, MachineEvent, PaneDirection, PaneFindMatch, PaneFindRequest, PanePlan, PaneResized, PaneSplit, PaneSwapped, PaneZoomed, PendingMessage, PlanStep, PluginActionResult, PluginActions, PluginActionsResponse, PortalStatus, ServerMessage, SessionSnapshot, TabMoved, UsageReport, WorkspaceCreated, WorkspaceInfo, WorktreeEntry, WorktreeListing, WorktreeOpened, WorktreeRemoved } from "../../shared/protocol.ts";
-import type { RepoDiffFile, RepoDiffFileList, RepoDiffFilePatch, RepoDiffRepository, RepoDiffScope } from "../../shared/protocol.ts";
+import type { RepoDiffFile, RepoDiffFileList, RepoDiffFilePatch, RepoDiffRepository, RepoDiffScope, RepoDiffTree } from "../../shared/protocol.ts";
 import { VOICE_DEFAULTS, type VoiceStatus } from "../../shared/voice.ts";
 import { isAgentName } from "../../shared/agent-name.ts";
 import { neighborPane } from "../../src/lib/layoutMap.ts";
@@ -1035,15 +1035,20 @@ async function route(url: URL, method: string, init: RequestInit | undefined, in
   if (path === "/api/voice") return json({ configured: false, source: null, ...VOICE_DEFAULTS } satisfies VoiceStatus, 200, { "cache-control": "no-store" });
   if (path === "/api/voice/config") return error("demo", "the demo saves no OpenAI key", 409);
   if (path === "/api/voice/transcribe") return error("voice_not_configured", "transcription is unavailable in the demo", 409);
-  if (path === "/api/workspace/diff/files" || path === "/api/workspace/diff/file") {
-    const scope = query.get("scope") || "workspace";
-    if (scope !== "workspace" && scope !== "staged" && scope !== "commit") return error("invalid_scope", "scope must be workspace, staged or commit", 400);
-    // the demo keeps no history to name commits in
-    if (scope === "commit") return error("revision_not_found", "the demo repository has no commits to compare", 404);
+  if (path === "/api/workspace/diff/files" || path === "/api/workspace/diff/file" || path === "/api/workspace/diff/tree") {
     const root = snapshot().panes.find((pane) => pane.pane_id === paneId)?.cwd ?? query.get("directory") ?? "/home/demo/checkout-api";
     // a worktree's checkout is on its own branch, as the sidebar and the footer say
     const branch = [...repositories.values()].flatMap((repo) => repo.checkouts).find((checkout) => checkout.path === root)?.branch ?? "main";
     const repository: RepoDiffRepository = { root, branch, head: "4f2a9c1d7e3b5a8c6d0e1f2a3b4c5d6e7f8a9b0c", detached: false, unborn: false };
+    // the review's tree: the demo repository's files and its changed ones, none of them ignored
+    if (path === "/api/workspace/diff/tree") {
+      const paths = [...new Set([...DEMO_FILES, ...DEMO_DIFF.filter((entry) => entry.file.status !== "deleted").map((entry) => entry.file.path)])].sort();
+      return json({ repository, paths, ignored: [], truncated: false, limits: { max_files: DEMO_DIFF_LIMITS.max_files, max_list_bytes: DEMO_DIFF_LIMITS.max_list_bytes } } satisfies RepoDiffTree);
+    }
+    const scope = query.get("scope") || "workspace";
+    if (scope !== "workspace" && scope !== "staged" && scope !== "commit") return error("invalid_scope", "scope must be workspace, staged or commit", 400);
+    // the demo keeps no history to name commits in
+    if (scope === "commit") return error("revision_not_found", "the demo repository has no commits to compare", 404);
     // everything in the demo is unstaged work
     const changed = scope === "workspace" ? DEMO_DIFF : [];
     const compared: RepoDiffScope = scope;

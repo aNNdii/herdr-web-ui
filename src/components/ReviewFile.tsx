@@ -57,10 +57,10 @@ const REVIEW_CSS = `${DIFF_SHADOW_CSS}
 :host {
   --diffs-font-size: var(--fs-sm);
   --diffs-line-height: calc(var(--fs-sm) * 1.6);
-  --diffs-bg-addition-override: color-mix(in srgb, var(--syntax-inserted) 12%, var(--bg));
-  --diffs-bg-deletion-override: color-mix(in srgb, var(--syntax-deleted) 12%, var(--bg));
-  --diffs-bg-addition-emphasis-override: color-mix(in srgb, var(--syntax-inserted) 22%, var(--bg));
-  --diffs-bg-deletion-emphasis-override: color-mix(in srgb, var(--syntax-deleted) 22%, var(--bg));
+  --diffs-bg-addition-override: color-mix(in srgb, var(--git-added) 12%, var(--bg));
+  --diffs-bg-deletion-override: color-mix(in srgb, var(--git-deleted) 12%, var(--bg));
+  --diffs-bg-addition-emphasis-override: color-mix(in srgb, var(--git-added) 22%, var(--bg));
+  --diffs-bg-deletion-emphasis-override: color-mix(in srgb, var(--git-deleted) 22%, var(--bg));
   -webkit-touch-callout: none;
 }
 `;
