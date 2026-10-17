@@ -4,7 +4,9 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync
 import { createServer as tcpServer } from "node:net";
 import { hostname } from "node:os";
 import { join } from "node:path";
-import { BRIDGE_PROTOCOL, LOCAL_MACHINE, REMOTE_BUNDLE_VERSION, type BridgeIdentity, type Machine, type MachineAction, type MachineEvent, type MachineSettings, type SetupAction, type SetupJob, type SetupProgress, type SetupRequest, type SshTarget } from "../shared/machines.ts";
+import { BRIDGE_PROTOCOL, LOCAL_MACHINE, type BridgeIdentity, type Machine, type MachineAction, type MachineEvent, type MachineSettings, type SetupAction, type SetupJob, type SetupProgress, type SetupRequest, type SshTarget } from "../shared/machines.ts";
+// fork: the fork's bridge version (server/bridge-version.ts)
+import { BRIDGE_VERSION as REMOTE_BUNDLE_VERSION } from "./bridge-version.ts";
 import type { ServerMessage, SessionSnapshot, HerdrPane } from "../shared/protocol.ts";
 import type { PushService } from "./push.ts";
 import { alertStatus } from "../shared/notify-policy.ts";
@@ -80,7 +82,8 @@ async function freePort(): Promise<number> {
 
 /** A bundle newer than this app's: never this app's to replace, whichever app started it. */
 function newerBundle(version: unknown): boolean {
-  return typeof version === "string" && /^\d+$/.test(version) && Number(version) > Number(REMOTE_BUNDLE_VERSION);
+  // fork: upstream's number leads the fork's version (30-fork.<fingerprint>)
+  return typeof version === "string" && /^\d+$/.test(version) && Number(version) > parseInt(REMOTE_BUNDLE_VERSION, 10);
 }
 /**
  * ssh's refusals: the PC answered, and only a password or a new host key gets past them. The

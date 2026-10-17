@@ -2,7 +2,9 @@ import { createHash, randomBytes } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, readFileSync, realpathSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
-import { BRIDGE_PROTOCOL, REMOTE_BUNDLE_VERSION, type BridgeIdentity } from "../shared/machines.ts";
+import { BRIDGE_PROTOCOL, type BridgeIdentity } from "../shared/machines.ts";
+// fork: the fork's bridge version (server/bridge-version.ts)
+import { BRIDGE_VERSION as REMOTE_BUNDLE_VERSION } from "./bridge-version.ts";
 import { HerdrError, herdrSocketPath, ping } from "./herdr/client.ts";
 import { attachableIdentity, sidecarAvailable } from "./pty/sidecar.ts";
 

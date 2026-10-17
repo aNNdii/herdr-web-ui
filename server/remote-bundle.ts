@@ -1,7 +1,8 @@
 import { createHash } from "node:crypto";
 import { access, mkdir, readdir, readFile, rename, rm, stat } from "node:fs/promises";
 import { join, dirname } from "node:path";
-import { REMOTE_BUNDLE_VERSION } from "../shared/machines.ts";
+// fork: the fork's bridge version (server/bridge-version.ts)
+import { BRIDGE_VERSION as REMOTE_BUNDLE_VERSION } from "./bridge-version.ts";
 
 export interface BundleManifest {
   version: string;
@@ -17,7 +18,8 @@ export async function bundleManifestSource(platform: string, options: BundleSour
   const local = join(options.directory ?? join(import.meta.dir, "..", "remote-bundles"), `manifest-${platform}.json`);
   try { await access(local); return local; }
   catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
-  return `https://github.com/devswha/herdr-web-ui/releases/download/remote-v${REMOTE_BUNDLE_VERSION}/manifest.json`;
+  // fork: the fork publishes its own bridges (.github/workflows/fork-bridge-bundles.yml)
+  return `https://github.com/aNNdii/herdr-web-ui/releases/download/remote-v${REMOTE_BUNDLE_VERSION}/manifest.json`;
 }
 export interface BundleFile { path: string; sha256: string; size: number }
 interface BundleFileOptions extends BundleSourceOptions {

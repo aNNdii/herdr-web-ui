@@ -3,7 +3,8 @@ name: Fork next release
 # is the upstream version in package.json, N counts that version's next releases. The fork's
 # installs update from these tags alone (server/updater.ts), so a tag is created only after the
 # fast checks passed on its exact commit, and never by hand. NEXT_AUTO_RELEASE 'false' leaves
-# pushes unreleased; Run workflow on next still releases.
+# pushes unreleased; Run workflow on next still releases. Its remote PC bridge is published first
+# (fork-bridge-bundles.yml), when no release published that server code yet.
 # The gate is CI's Fast checks job (`bun run check fast`: workflow syntax, generated types,
 # typecheck, build, unit tests) without its Release guards, which hold upstream's own releases to
 # upstream's remote bundle tags and telemetry Worker deploy, which the fork can never meet. The
@@ -62,8 +63,16 @@ jobs:
           node: 'true'
       - run: bun install --frozen-lockfile
       - run: bun run check fast
-  publish:
+  # the bridge of this commit's server code is published before the tag that installs update to
+  bridge:
     needs: [preflight, validate]
+    permissions:
+      contents: write
+    uses: ./.github/workflows/fork-bridge-bundles.yml
+    with:
+      sha: ${{ github.sha }}
+  publish:
+    needs: [preflight, validate, bridge]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:

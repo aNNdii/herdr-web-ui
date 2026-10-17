@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { REMOTE_BUNDLE_VERSION } from "../shared/machines.ts";
+import { BRIDGE_VERSION as REMOTE_BUNDLE_VERSION } from "./bridge-version.ts";
 import { bundleFile, bundleManifestSource } from "./remote-bundle.ts";
 
 const roots: string[] = [];
@@ -40,7 +40,7 @@ describe("remote bundle sources", () => {
 
   it("uses the release only when the requested platform has no local manifest", async () => {
     const { directory } = fixture("linux-x64");
-    expect(await bundleManifestSource("darwin-arm64", { directory, manifest: "" })).toBe(`https://github.com/devswha/herdr-web-ui/releases/download/remote-v${REMOTE_BUNDLE_VERSION}/manifest.json`);
+    expect(await bundleManifestSource("darwin-arm64", { directory, manifest: "" })).toBe(`https://github.com/aNNdii/herdr-web-ui/releases/download/remote-v${REMOTE_BUNDLE_VERSION}/manifest.json`);
     await expect(bundleManifestSource("../linux-x64", { directory })).rejects.toThrow("Unsupported bundle platform");
   });
 

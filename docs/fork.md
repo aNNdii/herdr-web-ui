@@ -32,6 +32,26 @@ which is the order the fork's installs follow (`RELEASE_TAG` in `server/updater.
 - The repository variable `NEXT_AUTO_RELEASE=false` leaves pushes unreleased; **Actions → Fork next
   release → Run workflow** on `next` still releases the branch's head.
 
+## Remote PCs
+
+A remote PC runs a bridge: a copy of the server from a bundle the connection server installs over
+SSH (`~/.local/share/herdr-web-ui/remote-v<version>`). Upstream names it by `REMOTE_BUNDLE_VERSION`
+in `shared/machines.ts`, raised by hand; the fork names it by
+[`server/bridge-version.ts`](../server/bridge-version.ts): upstream's number and a fingerprint of
+the files of `server/` and `shared/` the bundle carries, e.g. `30-fork.1a2b3c4d5e6f`. The connection
+server reads its checkout and a bridge its bundle, so they agree exactly when they run the same code.
+
+- A release whose server code no release published yet first publishes its bundles for every
+  platform as the release `remote-v<version>` in this fork
+  ([`fork-bridge-bundles.yml`](../.github/workflows/fork-bridge-bundles.yml), called by the next
+  release before it tags), and the connection server downloads them from there.
+- After an update, reconnecting a PC (or its next connect) installs the new bridge; herdr and its
+  panes keep running. The install removes the other `remote-v*` runtimes no process runs from.
+- A release that changed no server code keeps the bridge version: nothing is built or reinstalled.
+- A local bundle (`bun run build:remote <platform>`, in `remote-bundles/` beside the server) is
+  used instead of the published one; one built from other server code fails with "Remote bundle
+  version mismatch", so delete the folder once it is out of date.
+
 ## Syncing with upstream
 
 [`fork-upstream-sync.yml`](../.github/workflows/fork-upstream-sync.yml) runs daily (and on demand):
