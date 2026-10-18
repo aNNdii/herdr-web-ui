@@ -295,6 +295,9 @@
   border-radius: var(--radius-md);
   --trees-padding-inline: var(--space-1);
   --trees-padding-inline-override: var(--space-1);
+  /* a level indents about 14px instead of 22px, the indent guides kept; `0px`, not `0`: the library takes 1px off
+     it in a `calc()`, where a bare zero is no length */
+  --trees-level-gap-override: 0px;
   overflow: hidden;
 }
 

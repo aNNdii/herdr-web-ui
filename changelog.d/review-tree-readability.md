@@ -14,6 +14,7 @@
 - A viewed file keeps its check in the review's tree when its name is shortened, and its icon and
   name fade, keeping their colours.
 - The Viewed button sits last among a file's tools in the review.
+- The review's tree indents each level less.
 
 ### Fixed
 - An image, PDF or other file the review shows in its file viewer no longer ends in "This file

@@ -3,7 +3,8 @@
  * repository answered by the server's own repo-diff module: how a deep path is cut when the tree's column is
  * narrow. A flattened folder row gives up its front segments first, each down to its first letter and "…", and
  * only then cuts its last segment, at its start; a file name keeps its end and extension
- * (`…-import-service.test.ts` and `…-import-service.ts` stay apart); a short name is never cut.
+ * (`…-import-service.test.ts` and `…-import-service.ts` stay apart); a short name is never cut. A level indents a
+ * row about 14px, its indent guide kept.
  *
  * The tree draws in a shadow root and restyles nothing of its own on the page: these checks read what is drawn,
  * character by character, so a markup change of the library (a beta) shows here.
@@ -236,6 +237,23 @@ try {
     assert.deepEqual(await read(page, null), CHAIN, `${theme}: a wide column shows every folder whole`);
     for (const name of [TEST_FILE, SOURCE_FILE]) assert.deepEqual(await read(page, `${CHAIN.join("/")}/${name}`), [name], `${theme}: a wide column shows ${name} whole`);
     await shot(page, `640-${theme}`);
+
+    // a level moves a row about 14px in (the library's 22px less its 8px level gap), its indent guide kept; the
+    // gap is cut on the tree alone, so the Changes list and the rest of the page keep theirs
+    const indent = await page.evaluate((deep) => {
+      const shadow = document.querySelector(".review-tree")!.shadowRoot!;
+      const row = (path: string) => shadow.querySelector<HTMLElement>(`[data-type='item'][data-item-path="${path}"]:not([data-file-tree-sticky-row])`)!;
+      const left = (path: string) => row(path).querySelector("[data-item-section='content']")!.getBoundingClientRect().left;
+      return {
+        step: left(deep) - left("README.md"),
+        guides: row(deep).querySelectorAll("[data-item-section='spacing-item']").length,
+        tree: getComputedStyle(document.querySelector(".review-tree")!).getPropertyValue("--trees-level-gap-override").trim(),
+        page: getComputedStyle(document.body).getPropertyValue("--trees-level-gap-override").trim(),
+      };
+    }, `${CHAIN.join("/")}/${TEST_FILE}`);
+    assert.ok(indent.step >= 12 && indent.step <= 16, `${theme}: a level indents a row about 14px: ${indent.step}`);
+    assert.equal(indent.guides, 1, `${theme}: a nested row keeps its indent guide`);
+    assert.deepEqual([indent.tree, indent.page], ["0px", ""], `${theme}: only the review tree drops its level gap`);
 
     // narrower and narrower: the order the folders give way in, and how a name is cut
     let frontAtLeast = false, lastCut = false, fileCut = false, tooNarrow = 0;
@@ -688,7 +706,7 @@ try {
     assert.deepEqual(errors, [], "column: no page errors");
     await context.close();
   }
-  console.log("review tree: browser OK (front folders give way first to their first letter, the last folder and file names keep their end, short names whole; Viewed is the file's last tool in every view; folders keep their state as viewed files drop out; every file viewed leaves a note and a way to show them again; a viewed file's check stays in sight, its name faded; rows show their path as a tooltip; the column drags, steps and resets, its limits drawn and never stored)");
+  console.log("review tree: browser OK (front folders give way first to their first letter, the last folder and file names keep their end, short names whole; a level indents about 14px; Viewed is the file's last tool in every view; folders keep their state as viewed files drop out; every file viewed leaves a note and a way to show them again; a viewed file's check stays in sight, its name faded; rows show their path as a tooltip; the column drags, steps and resets, its limits drawn and never stored)");
 } finally {
   await browser?.close(); server?.stop(true); rmSync(root, { recursive: true, force: true });
 }
