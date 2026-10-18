@@ -1,0 +1,50 @@
+/*
+ * How a path gives way in a narrow row (PathText.tsx): the part that tells two rows apart stays, the
+ * deepest folder and the end of a file name. The same rule as the Review tree's, in
+ * ReviewTree.shadow.css, which draws it on @pierre/trees' own markup: change the two together.
+ */
+.path-text {
+  min-width: 0;
+  white-space: nowrap;
+}
+
+/* A folder path (`packages/core/…/mob`): the front segments give way first, the frontmost first, each
+   down to its first letter and "…"; only then is the last one cut, at its start. The weights make one
+   segment shrink after another: each is a million times the one after it, which leaves the later ones
+   less than a hundredth of a pixel short meanwhile. */
+.path-text-folder {
+  display: flex;
+  overflow: hidden;
+}
+
+.path-text-slash {
+  flex: none;
+}
+
+.path-text-segment {
+  flex: 0 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  /* one letter and "…"; a shorter name (`a`) keeps its own width where calc-size() is known */
+  min-width: 2ch;
+  min-width: calc-size(max-content, min(size, 2ch));
+}
+
+/* the segments counted from the end, a slash between each two */
+.path-text-segment:nth-last-child(3) { flex-shrink: 1e6; }
+.path-text-segment:nth-last-child(5) { flex-shrink: 1e12; }
+.path-text-segment:nth-last-child(7) { flex-shrink: 1e18; }
+.path-text-segment:nth-last-child(9) { flex-shrink: 1e24; }
+/* deeper paths share the last weight: a float holds no more */
+.path-text-segment:nth-last-child(n + 11) { flex-shrink: 1e30; }
+
+/* Cut at the start: the last folder segment and a file name. The box runs right to left, so what does
+   not fit leaves on the left, behind the "…"; the text inside runs left to right in its own isolate
+   (`dir="ltr"`), so punctuation (`.gitignore`, `name.test.ts`) stays where it is. */
+.path-text-start-cut {
+  flex: 0 1 auto;
+  overflow: hidden;
+  direction: rtl;
+  text-align: left;
+  text-overflow: ellipsis;
+}

@@ -1,10 +1,11 @@
-import { useEffect, useMemo, useState } from "react";
-import { ArrowLeft, Eye, GitBranch, PanelLeft, PanelLeftClose, X } from "lucide-react";
+import { useEffect, useMemo, useState, type CSSProperties } from "react";
+import { ArrowLeft, Eye, EyeOff, GitBranch, PanelLeft, PanelLeftClose, X } from "lucide-react";
 
 import "./ReviewDialog.css";
 import { RenderBoundary } from "./RenderBoundary.tsx";
 import { ReviewFile, ReviewLoading } from "./ReviewFile.tsx";
 import { ReviewTree } from "./ReviewTree.tsx";
+import { ReviewTreeResizer } from "./ReviewTreeResizer.tsx";
 
 import type { RepoDiffFile, RepoDiffFileList, RepoDiffTree } from "../../shared/protocol.ts";
 import { paneStorageId } from "../../shared/machines.ts";
@@ -12,7 +13,9 @@ import { useT } from "../lib/i18n.ts";
 import { useMachineApi, useMachineId } from "../lib/machineContext.tsx";
 import { diffErrorMessage, type RepoComparison } from "../lib/repoDiff.ts";
 import { ApiError } from "../lib/api.ts";
-import { storedShowIgnored, storedViewed, storeShowIgnored, storeViewed, treeMarks, type TreeMark, type ViewedFiles } from "../lib/review.ts";
+import { storedHideViewed, storedShowIgnored, storedViewed, storeHideViewed, storeShowIgnored, storeViewed, treeMarks, type TreeMark, type ViewedFiles } from "../lib/review.ts";
+import { reviewList, type ReviewListNote } from "../lib/reviewList.ts";
+import { reviewTreeColumn, storedReviewTreeWidth } from "../lib/reviewTreeWidth.ts";
 import { SHEET_QUERY } from "../lib/sheets.ts";
 import { nativeModalOver, useFocusTrap } from "../lib/useFocusTrap.ts";
 import { useMediaQuery } from "../lib/useMediaQuery.ts";
@@ -119,6 +122,11 @@ export function ReviewDialog({ paneId, directory, initialPath = null, onClose }:
   const [treeShown, setTreeShown] = useState(() => !window.matchMedia(NARROW_PORTRAIT).matches);
   // the files git ignores, in All files: off until turned on (build output and dependencies are many), then kept per device
   const [showIgnored, setShowIgnored] = useState(storedShowIgnored);
+  // the viewed files, in Changed files: shown until hidden, then kept hidden per device
+  const [hideViewed, setHideViewed] = useState(storedHideViewed);
+  const chooseHideViewed = (on: boolean): void => { storeHideViewed(on); setHideViewed(on); };
+  // the tree column's width as the user dragged it, per device; null is its default width
+  const [treeWidth, setTreeWidth] = useState(storedReviewTreeWidth);
   const [baseText, setBaseText] = useState("main");
   // Show changes with no base branch: the field says what is missing
   const [branchMissing, setBranchMissing] = useState(false);
@@ -279,17 +287,31 @@ export function ReviewDialog({ paneId, directory, initialPath = null, onClose }:
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose, surface]);
 
-  const filter = query.trim().toLowerCase();
   const changedPaths = useMemo(() => new Set(changes.map((one) => one.path)), [changes]);
-  // the list the tree shows: all of the repository's (or the folder's) files, or only those git lists as changed; then the filter
+  // the list the tree shows: all of the repository's (or the folder's) files, or only those git lists as changed; then the
+  // filter, and in Changed the viewed files left out once hidden (the file shown stays)
   const listShown = plain ? "all" : scope;
   const listing = listShown === "changed" ? changesNow : treeNow;
-  const shownPaths = useMemo(() => {
+  // Hide viewed files is offered only where a file can be marked viewed: a changed file with a stamp
+  const hideable = !plain && scope === "changed" && changes.some((one) => one.stamp !== undefined);
+  const hidden = hideable && hideViewed ? viewedPaths : null;
+  // the shown file matters only while files are hidden: otherwise a pick leaves the list as it is
+  const keep = hidden === null ? null : selected;
+  const list = useMemo(() => reviewList({
+    scope: listShown,
     // Changed lists git's changes themselves: a file staged for deletion, or one a compared revision dropped, is not in the tree's files
-    let list = listShown === "changed" ? [...changedPaths] : treeValue?.paths ?? [];
-    if (filter !== "") list = list.filter((path) => path.toLowerCase().includes(filter));
-    return list;
-  }, [treeValue, listShown, changedPaths, filter]);
+    paths: listShown === "changed" ? [...changedPaths] : treeValue?.paths ?? [],
+    query,
+    hidden,
+    keep,
+  }), [listShown, changedPaths, treeValue, query, hidden, keep]);
+  const notes: Record<ReviewListNote, string> = {
+    "nothing-changed": t("Nothing changed here."),
+    "no-match": t("No file matches."),
+    "all-viewed": t("All changed files are viewed."),
+    "all-matching-viewed": t("All matching files are viewed."),
+  };
+  const allViewed = list.note === "all-viewed" || list.note === "all-matching-viewed";
   const ignoredPaths = plain ? undefined : treeValue?.ignored;
   const marks = useMemo<TreeMark[]>(() => [...treeMarks(changes), ...(ignoredPaths ?? []).map((path) => ({ path, status: "ignored" as const }))], [changes, ignoredPaths]);
   const listReady = listing.status === "ready";
@@ -332,7 +354,7 @@ export function ReviewDialog({ paneId, directory, initialPath = null, onClose }:
             <X aria-hidden="true" />
           </button>
         </header>
-        <div className="review-body">
+        <div className="review-body" style={{ "--review-tree-column": reviewTreeColumn(treeWidth) } as CSSProperties}>
           <div className="review-tree-pane">
             {!plain && <div className="segmented review-scope" role="group" aria-label={t("Files shown")}>
               <button type="button" aria-pressed={scope === "all"} onClick={() => setScope("all")}>{t("All files")}</button>
@@ -378,16 +400,25 @@ export function ReviewDialog({ paneId, directory, initialPath = null, onClose }:
               {!plain && scope === "all" && <button type="button" className="icon-button repo-diff-action review-ignored" aria-pressed={showIgnored} aria-label={t("Show ignored files")} title={t("Show ignored files")} onClick={() => { storeShowIgnored(!showIgnored); setShowIgnored(!showIgnored); }}>
                 <Eye aria-hidden="true" />
               </button>}
+              {hideable && <button type="button" className="icon-button repo-diff-action review-hide-viewed" aria-pressed={hideViewed} aria-label={t("Hide viewed files")} title={t("Hide viewed files")} onClick={() => chooseHideViewed(!hideViewed)}>
+                <EyeOff aria-hidden="true" />
+              </button>}
             </div>
             {/* the tree loads on its own: its place holds a loader meanwhile, the file beside it is shown already */}
             {listing.status === "pending" && <ReviewLoading />}
             {listing.status === "failed" && <p className="repo-diff-note" role="alert">{diffErrorMessage(t, listing.error)}</p>}
-            {listReady && shownPaths.length === 0 && <p className="repo-diff-note">{listShown === "changed" && filter === "" ? t("Nothing changed here.") : t("No file matches.")}</p>}
+            {/* why the list is short; with every file viewed, a way to show them again. The file still shown stays under it */}
+            {listReady && list.note !== null && <div className="review-list-note">
+              <p className="repo-diff-note">{notes[list.note]}</p>
+              {allViewed && <button type="button" className="btn btn-ghost review-show-viewed" onClick={() => chooseHideViewed(false)}>{t("Show viewed files")}</button>}
+            </div>}
             {/* a tree the library cannot build (a listing it refuses) is a note here: the rest of the review stays usable */}
-            {listReady && shownPaths.length > 0 && <RenderBoundary resetKey={shownPaths} fallback={() => <p className="repo-diff-note" role="alert">{t("The file list can't be shown.")}</p>}>
-              <ReviewTree paths={shownPaths} marks={marks} selected={selected} expandAll={filter !== "" || listShown === "changed"} viewed={viewedPaths} viewedTitle={t("Viewed")} onOpen={pick} />
+            {listReady && list.paths.length > 0 && <RenderBoundary resetKey={list.paths} fallback={() => <p className="repo-diff-note" role="alert">{t("The file list can't be shown.")}</p>}>
+              <ReviewTree paths={list.paths} marks={marks} selected={selected} listing={`${listShown}|${list.query}`} expandAll={list.filtered || listShown === "changed"} viewed={viewedPaths} viewedTitle={t("Viewed")} onOpen={pick} />
             </RenderBoundary>}
           </div>
+          {/* the column's edge; a phone shows the tree or the file, and a folded tree has no edge */}
+          {!narrow && treeVisible && <ReviewTreeResizer width={treeWidth} onResize={setTreeWidth} />}
           <div className="review-file-pane">
             {file !== null && fileRoot !== null && decided === file
               ? <RenderBoundary resetKey={file} fallback={() => <p className="repo-diff-note" role="alert">{t("This file can't be shown.")}</p>}>

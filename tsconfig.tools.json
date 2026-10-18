@@ -33,6 +33,8 @@
     "scripts/virtual-source-fixture.tsx",
     "scripts/repo-diff-browser-qa.ts",
     "scripts/repo-diff-fixture.tsx",
+    "scripts/review-tree-browser-qa.ts",
+    "scripts/review-tree-fixture.tsx",
     "scripts/lan-exposure-notice-regression.ts",
     "scripts/application-paging-regression.ts",
     "scripts/omo-question-wheel-regression.ts",

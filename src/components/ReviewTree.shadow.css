@@ -1,0 +1,83 @@
+/*
+ * The Review tree's own rules inside @pierre/trees' shadow root: ReviewTree.tsx passes this file
+ * (`?inline`) as `unsafeCSS`, the layer after the library's. Only this file and ReviewTree.tsx know
+ * the library's row markup; scripts/review-tree-browser-qa.ts reads what it draws, so a markup change
+ * of the library shows there.
+ *
+ * How a path gives way when the column is narrow: the part that tells two rows apart stays, the
+ * deepest folder and the end of a file name. The Changes list cuts its own rows by the same rule, in
+ * PathText.css: change the two together.
+ */
+
+/* A flattened folder row (`packages / core / … / mob`): the front segments give way first, the
+   frontmost first, each down to its first letter and "…"; only then is the last one cut, at its
+   start. The weights make one segment shrink after another: each is a million times the one after
+   it, which leaves the later ones less than a hundredth of a pixel short meanwhile. */
+[data-item-flattened-subitems] {
+  display: flex;
+  min-width: 0;
+}
+
+[data-item-flattened-subitem] {
+  flex: 0 1 auto;
+  /* the last segment: down to nothing, after every front one */
+  min-width: 0;
+}
+
+[data-item-flattened-subitem]:not(:last-of-type) {
+  /* one letter and the library's "…" marker; a shorter name (`src`) keeps its own width where calc-size() is
+     known, else a little space after it */
+  min-width: calc(1ch + 1em);
+  min-width: calc-size(max-content, min(size, 1ch + 1em));
+}
+
+[data-item-flattened-subitem]:nth-last-of-type(2) { flex-shrink: 1e6; }
+[data-item-flattened-subitem]:nth-last-of-type(3) { flex-shrink: 1e12; }
+[data-item-flattened-subitem]:nth-last-of-type(4) { flex-shrink: 1e18; }
+[data-item-flattened-subitem]:nth-last-of-type(5) { flex-shrink: 1e24; }
+/* deeper chains share the last weight: a float holds no more */
+[data-item-flattened-subitem]:nth-last-of-type(n + 6) { flex-shrink: 1e30; }
+
+/* Cut at the start: the last folder segment, and a name's first part (the library splits a file
+   name before its extension and cuts the first part, at its end by default; the extension stays).
+   The library's end cut is a grid of [content, marker]: here the marker's cell moves before the
+   content, the marker to its left, and the text is aligned to the right, so what does not fit
+   leaves on the left. No bidi: punctuation (`.gitignore`, `name.test.`) stays where it is. */
+:is([data-item-flattened-subitem]:last-of-type, [data-truncate-segment-priority="2"]) > [data-truncate-container="truncate"] {
+  & [data-truncate-grid] {
+    grid-template-columns: 0 minmax(0, max-content);
+  }
+
+  & [data-truncate-grid] > :not([data-truncate-marker-cell]) {
+    grid-row: 1;
+    grid-column: 2;
+  }
+
+  & [data-truncate-marker-cell] {
+    grid-row: 1;
+    grid-column: 1;
+  }
+
+  & [data-truncate-marker] {
+    right: auto;
+    left: 0;
+  }
+
+  & [data-truncate-content="visible"] {
+    display: flex;
+    justify-content: flex-end;
+  }
+}
+
+/* A viewed file's check (the only thing ReviewTree.tsx draws in the decoration lane): the lane keeps its
+   check's width however long the name, and still takes the room left, so git's marks stay at the right
+   end of every row. The library's lane gives way down to nothing. */
+[data-item-section="decoration"] {
+  flex: 1 0 auto;
+}
+
+/* and the viewed file's icon and name fade, keeping their colours (git's status colour among them); the check
+   and git's mark stay as they are */
+[data-type="item"]:has(> [data-item-section="decoration"] > *) > :is([data-item-section="icon"], [data-item-section="content"]) {
+  opacity: 0.55;
+}

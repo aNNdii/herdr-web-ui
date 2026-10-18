@@ -7,8 +7,9 @@
  * native selection and a real copy that keep blank lines and leave the gutters out; binary,
  * too-large, conflicted, deleted, untracked and renamed files and their notes; a folder that is no
  * repository and a commit that does not exist; the file itself opened on the owning PC; Escape,
- * Back and Close with the focus returned; a remote PC's routes; the rows in the app's palette; and
- * the static demo's fixture.
+ * Back and Close with the focus returned; a narrow list that cuts a deep folder at its front first,
+ * keeps name ends and gives a rename's old name way first; a remote PC's routes; the rows in the
+ * app's palette; and the static demo's fixture.
  *
  * The browser is Playwright's headless shell, whose clipboard is its own: a real Cmd+C here never
  * touches the clipboard of the PC running the check.
@@ -110,8 +111,23 @@ function fixtures(): { main: string; detached: string; plain: string } {
   return { main, detached, plain };
 }
 
+/** A deep folder of long, alike file names, and a staged rename of one: what the Changes list cuts in a narrow row. */
+const DEEP_FOLDER = "packages/application/services/mobile/dispatcher";
+function deepFixture(): string {
+  const deep = join(root, "deep");
+  mkdirSync(join(deep, DEEP_FOLDER), { recursive: true });
+  git(deep, "init", "-q", "-b", "main");
+  for (const name of ["rule-import-service.test.ts", "rule-import-service.ts", "legacy-rule-import-adapter.ts"]) writeFileSync(join(deep, DEEP_FOLDER, name), "export const before = 1;\n");
+  git(deep, "add", ".");
+  git(deep, "commit", "-q", "-m", "first");
+  git(deep, "mv", `${DEEP_FOLDER}/legacy-rule-import-adapter.ts`, `${DEEP_FOLDER}/rule-import-adapter-for-mobile-dispatch.ts`);
+  for (const name of ["rule-import-service.test.ts", "rule-import-service.ts"]) writeFileSync(join(deep, DEEP_FOLDER, name), "export const after = 2;\n");
+  return deep;
+}
+
 const repos = fixtures();
-const panes = new Map([["pane-main", repos.main], ["pane-conflict", repos.detached], ["pane-plain", repos.plain]]);
+const deepRepo = deepFixture();
+const panes = new Map([["pane-main", repos.main], ["pane-conflict", repos.detached], ["pane-plain", repos.plain], ["pane-deep", deepRepo]]);
 const requests: string[] = [];
 let browser: Awaited<ReturnType<typeof chromium.launch>> | undefined;
 let server: ReturnType<typeof Bun.serve> | undefined;
@@ -555,6 +571,93 @@ try {
     assert.deepEqual(errors, [], `${label}: no errors at the end`);
     console.log(`PASS ${label}: a conflict, a detached HEAD and a folder outside git are each explained`);
     await context.close();
+  }
+
+  // a narrow list cuts a deep folder at its front segments first, then its last at the start; a file name keeps its end,
+  // a rename gives way at its old name first; the text the rows say stays whole, and a folder's tooltip is its path
+  {
+    const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+    await context.addInitScript(() => localStorage.setItem("herdr-web-ui:settings", JSON.stringify({ language: "en", theme: "dark" })));
+    const page = await context.newPage();
+    page.setDefaultTimeout(15_000);
+    const errors: string[] = [];
+    page.on("pageerror", (error) => errors.push(error.message));
+    await page.goto(origin);
+    await openFiles(page, "pane-deep");
+    assert.deepEqual(await changeRows(page), [`M ${DEEP_FOLDER}/rule-import-service.test.ts +1−1`, `M ${DEEP_FOLDER}/rule-import-service.ts +1−1`], "the deep folder's rows say their whole paths");
+    const folder = page.locator(".repo-change-folder-name").first();
+    assert.equal(await folder.textContent(), DEEP_FOLDER, "the folder row says its whole path");
+    assert.equal(await folder.getAttribute("title"), DEEP_FOLDER, "the folder row's tooltip is its path");
+    assert.equal(await folder.getAttribute("dir"), "ltr", "the folder row's path runs left to right");
+    assert.equal(await page.locator(".repo-change-path").first().getAttribute("title"), `${DEEP_FOLDER}/rule-import-service.test.ts`, "a file row keeps its tooltip");
+
+    /** Each cut piece of the list at `width`: its text, whether it is cut, whether its end shows, and how wide it is in `ch`. */
+    const measure = (width: number) => page.evaluate((width) => {
+      document.querySelector<HTMLElement>(".repo-changes")!.style.width = `${width}px`;
+      const probe = document.createElement("span");
+      probe.textContent = "0".repeat(10);
+      const name = document.querySelector(".repo-change-folder-name")!;
+      name.append(probe);
+      const ch = probe.getBoundingClientRect().width / 10;
+      probe.remove();
+      const piece = (element: Element) => {
+        const box = element.getBoundingClientRect();
+        const text = element.firstElementChild?.getBoundingClientRect() ?? box;
+        return { text: element.textContent, cut: element.scrollWidth > element.clientWidth, endShown: Math.abs(text.right - box.right) < 1, chars: box.width / ch };
+      };
+      return {
+        folder: [...name.querySelectorAll(".path-text-segment, .path-text-start-cut")].map(piece),
+        files: [...document.querySelectorAll(".repo-change .repo-change-path > .path-text-start-cut")].map(piece),
+        old: [...document.querySelectorAll(".repo-change-old > .path-text-start-cut")].map(piece),
+        // a rename's arrow, wholly inside its row's path
+        arrows: [...document.querySelectorAll(".repo-change-arrow")].map((arrow) => {
+          const box = arrow.getBoundingClientRect(), path = arrow.parentElement!.getBoundingClientRect();
+          return box.width > 0 && box.left >= path.left - 0.5 && box.right <= path.right + 0.5;
+        }),
+      };
+    }, width);
+
+    const seen = { front: false, last: false, file: false, old: false, renamed: false };
+    const check = (width: number, state: Awaited<ReturnType<typeof measure>>): void => {
+      const at = `at ${width}px: ${JSON.stringify(state)}`;
+      const front = state.folder.slice(0, -1), last = state.folder.at(-1)!;
+      assert.equal(state.folder.length, DEEP_FOLDER.split("/").length, `every folder segment is drawn ${at}`);
+      // a later front segment gives way only once every one before it is down to a letter and "…"
+      front.forEach((segment, index) => {
+        assert.ok(segment.chars > 1.9, `a front segment keeps its first letter and "…" ${at}`);
+        if (segment.cut) assert.ok(front.slice(0, index).every((before) => before.chars < 2.1), `the front segments give way frontmost first ${at}`);
+      });
+      if (front.some((segment) => segment.cut)) seen.front = true;
+      if (last.cut) {
+        assert.ok(front.every((segment) => segment.chars < 2.1), `the last segment gives way after the front ones ${at}`);
+        seen.last = true;
+      }
+      assert.ok(last.endShown, `the last segment keeps its end ${at}`);
+      for (const file of [...state.files, ...state.old]) assert.ok(file.endShown, `a name keeps its end ${at}`);
+      assert.ok(state.arrows.every(Boolean), `a rename keeps its arrow in sight ${at}`);
+      if (state.files.some((file) => file.cut)) seen.file = true;
+      if (state.old.some((old) => old.cut)) seen.old = true;
+    };
+    for (let width = 760; width >= 200; width -= 8) check(width, await measure(width));
+    await shot(page, "cut-folder-200-dark");
+
+    await page.getByRole("button", { name: "Staged", exact: true }).click();
+    assert.deepEqual(await changeRows(page, "staged"), [`R ${DEEP_FOLDER}/legacy-rule-import-adapter.ts → ${DEEP_FOLDER}/rule-import-adapter-for-mobile-dispatch.ts +0−0`], "a rename's row says both whole paths");
+    for (let width = 760; width >= 200; width -= 8) {
+      const state = await measure(width);
+      check(width, state);
+      const renamed = state.files.at(-1)!, old = state.old[0]!;
+      // the old name gives way first, down to nothing, and only then the new one
+      if (renamed.cut) {
+        assert.ok(old.chars < 0.1, `a rename gives way at its old name first at ${width}px: ${JSON.stringify(state)}`);
+        seen.renamed = true;
+      }
+    }
+    await shot(page, "cut-rename-200-dark");
+    assert.deepEqual(seen, { front: true, last: true, file: true, old: true, renamed: true }, "the narrowing reached every cut");
+    assert.deepEqual(errors, [], "no errors while narrowing the list");
+    await context.close();
+    console.log("PASS a narrow Changes list cuts a deep folder at its front first, keeps name ends, and gives a rename's old name way first");
   }
 
   // a remote PC's repository reads through its bridge, the file too
