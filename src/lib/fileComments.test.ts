@@ -43,6 +43,13 @@ describe("placeFileComment", () => {
   });
   it("is outdated past the loaded lines", () => expect(placeFileComment({ lines: [6, 6], source: ["d"] }, file, 5)).toBeNull());
   it("is outdated without a source", () => expect(placeFileComment({ lines: [1, 1], source: [] }, file, 6)).toBeNull());
+  it("never matches a gap, not even with an empty line", () => {
+    const gapped = ["a", undefined, "b", undefined, "b"];
+    expect(placeFileComment({ lines: [2, 2], source: [""] }, gapped, 5)).toBeNull();
+    expect(placeFileComment({ lines: [1, 2], source: ["a", ""] }, gapped, 5)).toBeNull();
+    expect(placeFileComment({ lines: [1, 1], source: ["b"] }, gapped, 5)).toBeNull();
+    expect(placeFileComment({ lines: [3, 3], source: ["b"] }, gapped, 5)).toEqual([3, 3]);
+  });
   it("does not count a match that reaches past the loaded lines", () => expect(placeFileComment({ lines: [1, 2], source: ["c", "d"] }, file, 5)).toEqual([3, 4]));
   it("never moves a comment in a truncated file: it stays where its lines still read the same, else is outdated", () => {
     // "b" is found once in the loaded part, but a second copy may lie past the cut
@@ -56,6 +63,7 @@ describe("placeFileComment", () => {
 describe("fileQuote", () => {
   it("quotes a line with its header", () => expect(fileQuote({ ...base, lines: [8, 8], quoteLines: ["if (a < b) {"] })).toBe("> src/sync.ts:8\n> if (a < b) {"));
   it("names a range and quotes a blank line as a bare >", () => expect(fileQuote({ ...base, lines: [7, 9], quoteLines: ["a", "", "b"] })).toBe("> src/sync.ts:7-9\n> a\n>\n> b"));
+  it("puts a place after the range", () => expect(fileQuote({ ...base, lines: [7, 8], quoteLines: ["a", "b"] }, "@ feat/x (1a2b3c4)")).toBe("> src/sync.ts:7-8 @ feat/x (1a2b3c4)\n> a\n> b"));
   describe("on a selection", () => {
     const guide = { path: "/repo/docs/guide.md", label: "docs/guide.md", view: "preview" as const };
     it("quotes only the selected words under the header", () => {

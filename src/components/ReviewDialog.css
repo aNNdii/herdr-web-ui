@@ -515,7 +515,7 @@
   padding: var(--space-4);
 }
 
-/* what the changes are compared with: the segmented choice, and for Branches the two names beneath it */
+/* what the changes are compared with: the segmented choice, and for Branches the two fields beneath it, stacked at full width */
 .review-compare {
   flex: none;
   display: flex;
@@ -525,16 +525,14 @@
 
 .review-branches {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: var(--space-3);
 }
 
-/* the app's labelled fields (styles.css `.field`), spaced by the form's gap rather than their own margin */
+/* the app's labelled fields (styles.css `.field`), spaced by the grid's gap rather than their own margin */
 .review-branches .field {
   margin-bottom: 0;
-}
-
-.review-field-error {
-  color: var(--status-blocked);
+  min-width: 0;
 }
 
 /* a deleted comment's note, its Undo beside the words */

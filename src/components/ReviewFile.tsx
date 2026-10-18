@@ -20,6 +20,9 @@ import "./ReviewDialog.css";
 
 import type { RepoDiffFile, RepoDiffFilePatch } from "../../shared/protocol.ts";
 import { blockComments, useBlockComments } from "../lib/blockComments.ts";
+import { branchTarget, branchTargetOf, placeBranchComments, type BranchComment, type BranchTarget } from "../lib/branchComments.ts";
+import { diffQueryOf, type ReviewComparison } from "../lib/branchReview.ts";
+import { diffSides, type DiffRow } from "../lib/diffSides.ts";
 import { fileLines, isFileComment, pathLabel, type FileComment, type LineRange } from "../lib/fileComments.ts";
 import { formatBytes } from "../lib/bridgeProgress.ts";
 import { LINE_ELEMENT_LIMIT } from "../lib/highlight.ts";
@@ -27,8 +30,8 @@ import { useT } from "../lib/i18n.ts";
 import type { MarkdownBlock } from "../lib/markdown.ts";
 import { knownPreview, parsePreviewOffThread } from "../lib/markdownPreview.ts";
 import { useMachineApi, useMachineId } from "../lib/machineContext.tsx";
-import { diffColorable, diffErrorMessage, diffStyleFor, statusWord, unavailableMessage, type RepoComparison } from "../lib/repoDiff.ts";
-import { rangeOf, repositoryFile, reviewTarget } from "../lib/review.ts";
+import { diffColorable, diffErrorMessage, diffStyleFor, statusWord, unavailableMessage } from "../lib/repoDiff.ts";
+import { repositoryFile, reviewTarget, workspacePick } from "../lib/review.ts";
 import { fieldPlace, revealBy } from "../lib/selectionField.ts";
 import { useSettings, type MobileCommentGesture } from "../lib/settings.ts";
 import { SHEET_QUERY } from "../lib/sheets.ts";
@@ -99,8 +102,9 @@ export interface ReviewFileProps {
   change: RepoDiffFile | null;
   /** the Changed list is shown: a changed file opens as its diff; All files opens it whole */
   diffMode: boolean;
-  /** what the change is compared with: the working tree, the index, or two revisions */
-  comparison: RepoComparison;
+  /** what the change is compared with, as the file list resolved it: the working tree, the index, or two branches; null
+      until the list answered */
+  comparison: ReviewComparison | null;
   /** a folder outside any repository: the header names the file alone (the dialog's header names the folder) */
   plain?: boolean;
   /** a file git ignores, which the header says */
@@ -117,10 +121,35 @@ export interface ReviewFileProps {
 }
 
 /**
- * What an annotation on a line of the review is: a saved comment. A new one is not an annotation but a card portalled
- * into the scrolling body (`DraftField`): a change of the annotations redraws the file, and the scroll place with it.
+ * What an annotation on a line of the review is: a saved comment, on the lines it is drawn on (a branch comment's as
+ * placed in the diff shown) and on their side, a removed line's being the old file's. A new one is not an annotation but
+ * a card portalled into the scrolling body (`DraftField`): a change of the annotations redraws the file, and the scroll
+ * place with it.
  */
-type ReviewNote = { kind: "comment"; comment: FileComment };
+interface ReviewNote { comment: FileComment | BranchComment; lines: LineRange; side: "additions" | "deletions" }
+
+/**
+ * A new comment being written: on lines of the working tree's file, or, in a branch comparison's diff, on lines of one
+ * of its versions (`BranchTarget`, its text from the patch).
+ */
+type Draft = { kind: "file"; lines: LineRange } | { kind: "branch"; target: BranchTarget };
+
+function draftLines(draft: Draft): LineRange {
+  return draft.kind === "file" ? draft.lines : draft.target.lines;
+}
+
+/** Whether a new comment is on removed lines, which the diff draws as the old file's rows. */
+function draftOnBase(draft: Draft): boolean {
+  return draft.kind === "branch" && draft.target.place.side === "base";
+}
+
+/** A sheet's quote of a branch comment's lines: their text in its version, not the file's on disk. */
+function versionQuote(source: readonly string[]): string {
+  return lineQuote(source, [1, source.length]);
+}
+
+/** What a selected text, a press or a picked range starts a comment on: the drawn rows, and the text's boxes and ranges. */
+type OnComment = (rows: readonly DiffRow[], rects?: DOMRect[], ranges?: Range[]) => void;
 
 type Source =
   | { status: "pending" }
@@ -162,7 +191,7 @@ function parseFile(text: string): FileDiffMetadata | null {
 
 /**
  * Whether a drawn row is a line of the old file: a removed line, or any line of a split view's left column, whose
- * numbers are the old file's (an unchanged line there has the old number too). A comment goes on the working tree's lines.
+ * numbers are the old file's (an unchanged line there has the old number too).
  */
 function onOldSide(row: HTMLElement): boolean {
   return (row.dataset.lineType ?? "").includes("deletion") || row.closest("[data-deletions]") !== null;
@@ -174,8 +203,8 @@ const HOLD_MS = 450;
 const UNDO_MS = 10_000;
 const TAP_MS = 400;
 const MOVE_PX = 10;
-type LinePress = { x: number; y: number; line: number; side: string; started: number; timer: number | undefined };
-function useTouchLinePress(host: RefObject<HTMLDivElement | null>, gesture: MobileCommentGesture | null, onPress: (line: number, side: string) => void): void {
+type LinePress = { x: number; y: number; row: DiffRow; started: number; timer: number | undefined };
+function useTouchLinePress(host: RefObject<HTMLDivElement | null>, gesture: MobileCommentGesture | null, onPress: (row: DiffRow) => void): void {
   const latest = useRef(onPress);
   latest.current = onPress;
   useEffect(() => {
@@ -191,13 +220,12 @@ function useTouchLinePress(host: RefObject<HTMLDivElement | null>, gesture: Mobi
       const row = event.composedPath().find((node): node is HTMLElement => node instanceof HTMLElement && node.hasAttribute("data-line"));
       const line = Number(row?.dataset.line);
       if (row === undefined || !Number.isFinite(line) || line < 1) return;
-      const side = onOldSide(row) ? "deletions" : "additions";
-      const started: LinePress = { x: event.clientX, y: event.clientY, line, side, started: event.timeStamp, timer: undefined };
+      const started: LinePress = { x: event.clientX, y: event.clientY, row: { line, old: onOldSide(row) }, started: event.timeStamp, timer: undefined };
       press = started;
       if (gesture === "hold") {
         started.timer = window.setTimeout(() => {
           press = null;
-          latest.current(started.line, started.side);
+          latest.current(started.row);
         }, HOLD_MS);
       }
     };
@@ -207,7 +235,7 @@ function useTouchLinePress(host: RefObject<HTMLDivElement | null>, gesture: Mobi
     const up = (event: PointerEvent): void => {
       const done: LinePress | null = press;
       cancel();
-      if (done !== null && gesture === "tap" && event.timeStamp - done.started < TAP_MS) latest.current(done.line, done.side);
+      if (done !== null && gesture === "tap" && event.timeStamp - done.started < TAP_MS) latest.current(done.row);
     };
     element.addEventListener("pointerdown", down);
     element.addEventListener("pointermove", move);
@@ -223,8 +251,8 @@ function useTouchLinePress(host: RefObject<HTMLDivElement | null>, gesture: Mobi
   }, [host, gesture]);
 }
 
-/** A selected text of the diff: its root (the diff's shadow root), its ranges, and the lines it spans. */
-interface DiffSelection { root: SelectableRoot; ranges: Range[]; first: number; last: number; side: "additions" | "deletions" }
+/** A selected text of the diff: its root (the diff's shadow root), its ranges, and the drawn rows it spans. */
+interface DiffSelection { root: SelectableRoot; ranges: Range[]; rows: DiffRow[] }
 type SelectableRoot = ShadowRoot & { getSelection?: () => Selection | null };
 type ComposedSelection = Selection & { getComposedRanges?: (options: { shadowRoots: ShadowRoot[] }) => StaticRange[] };
 /** A composed range as a live Range, which can tell what it intersects. */
@@ -257,12 +285,12 @@ function useDiffSelection(host: RefObject<HTMLDivElement | null>, enabled: boole
         const own = root.getSelection?.() ?? null;
         const range = composed[0] ?? (own !== null && own.rangeCount > 0 ? own.getRangeAt(0) : undefined);
         if (range === undefined || range.collapsed || range.toString().trim() === "") continue;
-        const rows = [...root.querySelectorAll<HTMLElement>("[data-line]")].filter((row) => range.intersectsNode(row));
-        const kept = rows.filter((row) => !onOldSide(row));
-        const chosen = kept.length > 0 ? kept : rows;
-        const numbers = chosen.map((row) => Number(row.dataset.line)).filter((number) => Number.isFinite(number) && number > 0);
-        if (numbers.length === 0) continue;
-        found = { root, ranges: [range], first: Math.min(...numbers), last: Math.max(...numbers), side: kept.length > 0 ? "additions" : "deletions" };
+        // every row, the old file's too: which of them a comment keeps is the comparison's to say (`pick`)
+        const rows = [...root.querySelectorAll<HTMLElement>("[data-line]")].filter((row) => range.intersectsNode(row))
+          .map((row) => ({ line: Number(row.dataset.line), old: onOldSide(row) }))
+          .filter((row) => Number.isFinite(row.line) && row.line > 0);
+        if (rows.length === 0) continue;
+        found = { root, ranges: [range], rows };
         break;
       }
       setOffer(found);
@@ -304,7 +332,7 @@ function DiffView({ file, options, notes, renderNote, onComment, commenting, ges
   options: FileDiffOptions<ReviewNote, undefined>;
   notes: DiffLineAnnotation<ReviewNote>[];
   renderNote: (annotation: LineAnnotation<ReviewNote>) => ReactNode;
-  onComment: (first: number, last: number, side: string, rects?: DOMRect[], ranges?: Range[]) => void;
+  onComment: OnComment;
   commenting: boolean;
   gesture: MobileCommentGesture | null;
 }) {
@@ -313,7 +341,7 @@ function DiffView({ file, options, notes, renderNote, onComment, commenting, ges
   const drawn = useDrawn(host, file);
   const scroller = useRef<HTMLDivElement>(null);
   useKeepScrollPlace(scroller, notes, file);
-  useTouchLinePress(host, gesture, (line, side) => onComment(line, line, side));
+  useTouchLinePress(host, gesture, (row) => onComment([row]));
   // no browser menu over the diff: its own Comment button is the one way to act on a selection, as in the Markdown preview
   useEffect(() => {
     const element = host.current;
@@ -329,7 +357,7 @@ function DiffView({ file, options, notes, renderNote, onComment, commenting, ges
     const kept = offer.ranges.map((range) => range.cloneRange());
     offer.root.getSelection?.()?.removeAllRanges();
     document.getSelection()?.removeAllRanges();
-    onComment(offer.first, offer.last, offer.side, rects, kept);
+    onComment(offer.rows, rects, kept);
   }, [offer, onComment]);
   return <div ref={host} className="review-view">
     <DiffWorkerPool>
@@ -394,9 +422,10 @@ interface DraftAnchor {
 /**
  * The text a new comment is on, read once as it opens: the selection's line boxes it was opened from (as the Comment
  * button read them, lib/selectionField.ts `buttonPlace`), else, for a line picked by a press or a touch, the line's own
- * box (the right side's in the split view). In content coordinates, so it holds however the body scrolls.
+ * box (the right side's in the split view, a removed line's own row on the left). In content coordinates, so it holds
+ * however the body scrolls.
  */
-function useDraftAnchor(root: RefObject<HTMLElement | null>, draft: LineRange | null, rects: DOMRect[] | null): DraftAnchor | null {
+function useDraftAnchor(root: RefObject<HTMLElement | null>, draft: Draft | null, rects: DOMRect[] | null): DraftAnchor | null {
   const [anchor, setAnchor] = useState<DraftAnchor | null>(null);
   useEffect(() => {
     if (draft === null) {
@@ -425,9 +454,11 @@ function useDraftAnchor(root: RefObject<HTMLElement | null>, draft: LineRange | 
         anchorAt(scroller, drawn);
         return;
       }
-      const lines = [...(root.current?.querySelector("diffs-container")?.shadowRoot?.querySelectorAll<HTMLElement>(`[data-line="${draft[1]}"]`) ?? [])];
-      // split view: the same number is drawn on both sides; the comment goes on the right side
-      const line = lines.filter((node) => node.dataset.lineType !== "change-deletion").reduce<HTMLElement | undefined>((best, node) => best === undefined || node.getBoundingClientRect().right > best.getBoundingClientRect().right ? node : best, undefined) ?? lines[0];
+      const lines = [...(root.current?.querySelector("diffs-container")?.shadowRoot?.querySelectorAll<HTMLElement>(`[data-line="${draftLines(draft)[1]}"]`) ?? [])];
+      // a comment on removed lines goes under its removed row, whose number is the old file's
+      const removed = draftOnBase(draft) ? lines.find((node) => (node.dataset.lineType ?? "").includes("deletion")) : undefined;
+      // split view: the same number is drawn on both sides; any other comment goes on the right side
+      const line = removed ?? lines.filter((node) => node.dataset.lineType !== "change-deletion").reduce<HTMLElement | undefined>((best, node) => best === undefined || node.getBoundingClientRect().right > best.getBoundingClientRect().right ? node : best, undefined) ?? lines[0];
       if (line !== undefined) {
         anchorAt(scroller, [line.getBoundingClientRect()]);
         return;
@@ -515,13 +546,13 @@ function LinesView({ name, contents, options, notes, renderNote, onComment, comm
   options: FileOptions<ReviewNote, undefined>;
   notes: LineAnnotation<ReviewNote>[];
   renderNote: (annotation: LineAnnotation<ReviewNote>) => ReactNode;
-  onComment: (first: number, last: number, side: string, rects?: DOMRect[], ranges?: Range[]) => void;
+  onComment: OnComment;
   commenting: boolean;
   gesture: MobileCommentGesture | null;
 }) {
   const host = useRef<HTMLDivElement>(null);
   const offer = useDiffSelection(host, commenting);
-  useTouchLinePress(host, gesture, (line, side) => onComment(line, line, side));
+  useTouchLinePress(host, gesture, (row) => onComment([row]));
   const drawn = useDrawn(host, contents);
   const scroller = useRef<HTMLDivElement>(null);
   useKeepScrollPlace(scroller, notes, contents);
@@ -540,7 +571,7 @@ function LinesView({ name, contents, options, notes, renderNote, onComment, comm
     const kept = offer.ranges.map((range) => range.cloneRange());
     offer.root.getSelection?.()?.removeAllRanges();
     document.getSelection()?.removeAllRanges();
-    onComment(offer.first, offer.last, offer.side, rects, kept);
+    onComment(offer.rows, rects, kept);
   }, [offer, onComment]);
   const file = useMemo(() => ({ name, contents }), [name, contents]);
   return <div ref={host} className="review-view">
@@ -561,11 +592,11 @@ function FileView({ name, contents, options, notes, renderNote, onComment, gestu
   options: FileOptions<ReviewNote, undefined>;
   notes: LineAnnotation<ReviewNote>[];
   renderNote: (annotation: LineAnnotation<ReviewNote>) => ReactNode;
-  onComment: (first: number, last: number, side: string, rects?: DOMRect[], ranges?: Range[]) => void;
+  onComment: OnComment;
   gesture: MobileCommentGesture | null;
 }) {
   const host = useRef<HTMLDivElement>(null);
-  useTouchLinePress(host, gesture, (line, side) => onComment(line, line, side));
+  useTouchLinePress(host, gesture, (row) => onComment([row]));
   const file = useMemo(() => ({ name, contents }), [name, contents]);
   return <div ref={host} className="review-view">
     <DiffWorkerPool>
@@ -580,9 +611,10 @@ function FileView({ name, contents, options, notes, renderNote, onComment, gestu
  * One file of the review: its diff when git lists it changed (or its whole text, for All files), and
  * the comments on its lines. A comment starts from a selected text's Comment button, or on a touch
  * screen from a tap or a long press on a line (Settings' gesture), and is written in the same field as
- * the file viewer's (`CommentPopover`). Comments are kept per pane (`owner`), on the working tree's
- * lines, where the pane's chat sends them with its next message; a file that cannot be read is shown
- * without comments.
+ * the file viewer's (`CommentPopover`). Comments are kept per pane (`owner`), where the pane's chat
+ * sends them with its next message: on the working tree's lines, or in a branch comparison's diff on
+ * the lines of the version they are in, read from the patch (lib/branchComments.ts), so that diff takes
+ * comments whether or not the file is on disk. A file that cannot be read is shown without comments.
  */
 export function ReviewFile({ owner, paneId, directory, root, path, change, diffMode, comparison, plain = false, ignored = false, viewed = null, onViewed, onClose, onOpen, line }: ReviewFileProps) {
   const t = useT();
@@ -604,7 +636,7 @@ export function ReviewFile({ owner, paneId, directory, root, path, change, diffM
 
   const [source, setSource] = useState<Source>({ status: "pending" });
   const [patch, setPatch] = useState<Patch>({ status: "pending" });
-  const [draft, setDraft] = useState<LineRange | null>(null);
+  const [draft, setDraft] = useState<Draft | null>(null);
   const [draftText, setDraftText] = useState<Range[] | null>(null);
   const [anchor, setAnchor] = useState<DOMRect[] | null>(null);
   const [refused, setRefused] = useState(false);
@@ -638,20 +670,25 @@ export function ReviewFile({ owner, paneId, directory, root, path, change, diffM
     return () => { live = false; };
   }, [absolute, paneId, deleted, fetchFileInfo, fileUrl, t]);
 
+  // a patch is asked for by the hashes the file list resolved (a branch comparison's), so it matches the list
+  const diffQuery = useMemo(() => (comparison === null ? null : diffQueryOf(comparison)), [comparison]);
   useEffect(() => {
     let live = true;
     setPatch({ status: "pending" });
-    if (!changed) return () => { live = false; };
-    fetchRepoDiffFile({ paneId, directory, ...comparison }, path, oldPath).then(
+    if (!changed || diffQuery === null) return () => { live = false; };
+    fetchRepoDiffFile({ paneId, directory, ...diffQuery }, path, oldPath).then(
       (answer) => { if (live) setPatch({ status: "ready", answer }); },
       (error: unknown) => { if (live) setPatch({ status: "failed", error }); },
     );
     return () => { live = false; };
-  }, [changed, oldPath, path, paneId, directory, comparison, fetchRepoDiffFile]);
+  }, [changed, oldPath, path, paneId, directory, diffQuery, fetchRepoDiffFile]);
 
   const text = source.status === "ready" ? source.text : null;
   const lines = useMemo(() => (text === null ? null : fileLines(text)), [text]);
-  const commentable = lines !== null && settings.commentMode;
+  const showDiff = diffMode && changed;
+  // the branch comparison whose diff is shown: its comments are on the patch's lines, not the file's on disk
+  const branch = comparison?.scope === "branches" ? comparison.branches : null;
+  const diffBranch = showDiff ? branch : null;
   // a Markdown file opens as its rendered preview (the file viewer's renderer); its source is one click away
   const isMarkdown = /\.(md|markdown)$/i.test(path);
   const [preview, setPreview] = useState(isMarkdown && line === undefined);
@@ -673,7 +710,12 @@ export function ReviewFile({ owner, paneId, directory, root, path, change, diffM
   const previewMargin = usePreviewMargin(previewSource !== null, previewText, previewBody, settings.commentLayout);
   const answer = patch.status === "ready" ? patch.answer : null;
   const diffPatch = answer?.patch ?? null;
-  const diffFile = useMemo(() => (diffPatch === null ? null : parseFile(folded ? trimPatchContext(diffPatch, FOLD_CONTEXT_LINES) : diffPatch)), [diffPatch, folded]);
+  // the whole patch, unfolded: a branch comparison's comments are placed by it (the folded one hides unchanged lines)
+  const fullFile = useMemo(() => (diffPatch === null || folded && branch === null ? null : parseFile(diffPatch)), [diffPatch, folded, branch]);
+  const diffFile = useMemo(() => (diffPatch !== null && folded ? parseFile(trimPatchContext(diffPatch, FOLD_CONTEXT_LINES)) : fullFile), [diffPatch, folded, fullFile]);
+  // the two versions' lines the patch shows, which a branch comment is on
+  const sides = useMemo(() => (branch === null || fullFile === null ? null : diffSides(fullFile)), [branch, fullFile]);
+  const commentable = settings.commentMode && (diffBranch !== null ? sides !== null : lines !== null);
   const colored = diffPatch !== null && diffColorable(path, diffPatch);
   const counts = useMemo(() => (diffPatch === null ? null : countLines(diffPatch)), [diffPatch]);
   // the path's folder, muted, and its name, bold, as the file's bar shows them
@@ -682,28 +724,50 @@ export function ReviewFile({ owner, paneId, directory, root, path, change, diffM
   const fileName = path.slice(slash + 1);
   const diffStyle = diffStyleFor(settings.diffStyle, narrow);
 
-  // the saved comments on this file: the sheet edits one of them
+  // the saved comments on this file's working-tree lines
   const savedHere = useMemo(() => comments.filter(isFileComment).filter((comment) => comment.path === absolute), [comments, absolute]);
-  const editingNote = editing === null ? null : savedHere.find((comment) => comment.id === editing) ?? null;
+  const fileShown = useMemo(() => savedHere.map((comment): ReviewNote => ({ comment, lines: comment.lines, side: "additions" })), [savedHere]);
+  // the branch comments of this file in the comparison, each where its text is now; an outdated one is not drawn
+  const placed = useMemo(() => (branch === null || sides === null ? [] : placeBranchComments(comments, branch, absolute, sides)), [comments, branch, absolute, sides]);
+  const branchShown = useMemo(() => placed.flatMap(({ comment, lines: at }): ReviewNote[] => (at === null ? [] : [{ comment, lines: at, side: comment.place.side === "head" ? "additions" : "deletions" }])), [placed]);
+  // a branch comment whose text moved is rewritten to its new lines and the version shown, once: then it stays
+  useEffect(() => {
+    for (const one of placed) if (one.moved !== null) blockComments.moveBranch(owner, one.comment.id, one.moved);
+  }, [owner, placed]);
+  // the comments drawn: the sheet edits one of them
+  const shown = diffBranch !== null ? branchShown : fileShown;
+  const editingNote = editing === null ? null : shown.find((note) => note.comment.id === editing) ?? null;
 
   // the saved comments on this file as the lines' annotations, each under its last line
-  const fileNotes = useMemo<LineAnnotation<ReviewNote>[]>(() => savedHere.map((comment) => ({ lineNumber: comment.lines[1], metadata: { kind: "comment", comment } })), [savedHere]);
-  // a comment is on a line of the working tree: a diff of a branch or the index has other line numbers, so it takes none
-  const commentsOnDiff = comparison.scope === "workspace";
-  const diffNotes = useMemo<DiffLineAnnotation<ReviewNote>[]>(() => (commentsOnDiff ? fileNotes.map((note) => ({ ...note, side: "additions" })) : []), [fileNotes, commentsOnDiff]);
+  const fileNotes = useMemo(() => fileShown.map((note): LineAnnotation<ReviewNote> => ({ lineNumber: note.lines[1], metadata: note })), [fileShown]);
+  // a working-tree comment is on a line of the working tree, a branch comment on a line of the branch's diff; the
+  // index's diff has other line numbers and takes none
+  const commentsOnDiff = comparison !== null && comparison.scope !== "staged";
+  const diffShown = comparison?.scope === "workspace" ? fileShown : branchShown;
+  const diffNotes = useMemo(() => diffShown.map((note): DiffLineAnnotation<ReviewNote> => ({ lineNumber: note.lines[1], side: note.side, metadata: note })), [diffShown]);
 
-  // a line the user picked: a comment on it is written under it, unless it is a removed line
-  const pick = useCallback((first: number, last: number, side: string | undefined, rects?: DOMRect[], ranges?: Range[]) => {
+  // drawn rows the user picked: in a branch's diff the lines of one of its versions (`branchTarget`); otherwise the
+  // working tree's (`workspacePick`), a comment on removed lines only refused
+  const pick = useCallback((rows: readonly DiffRow[], rects?: DOMRect[], ranges?: Range[]) => {
     if (!commentable) return;
-    if (side === "deletions") {
-      setRefused(true);
-      return;
+    let next: Draft;
+    if (diffBranch !== null) {
+      const target = sides === null ? null : branchTarget(diffBranch, { path: absolute, label: path }, sides, rows);
+      if (target === null) return;
+      next = { kind: "branch", target };
+    } else {
+      const at = workspacePick(rows);
+      if (at === null) {
+        setRefused(true);
+        return;
+      }
+      next = { kind: "file", lines: at };
     }
     setRefused(false);
-    setDraft(rangeOf(first, last));
+    setDraft(next);
     setAnchor(rects ?? null);
     setDraftText(ranges ?? null);
-  }, [commentable]);
+  }, [commentable, diffBranch, sides, absolute, path]);
   // the text a new comment was opened on keeps a mark (the chat's pending fill) while the comment is written, as the
   // selection itself is gone once the field takes the focus
   useEffect(() => {
@@ -712,31 +776,35 @@ export function ReviewFile({ owner, paneId, directory, root, path, change, diffM
     return () => { CSS.highlights.delete(DRAFT_HIGHLIGHT); };
   }, [draft, draftText]);
   const onSelect = useCallback((range: SelectedLineRange | null) => {
-    if (range !== null) pick(range.start, range.end, range.side);
+    if (range === null) return;
+    const old = range.side === "deletions";
+    pick([{ line: range.start, old }, { line: range.end, old }]);
   }, [pick]);
 
   // a new comment on the lines it was opened on
-  const save = useCallback((range: LineRange, note: string) => {
-    if (lines === null) return;
-    blockComments.saveFile(owner, reviewTarget(absolute, path, range, lines), note);
+  const save = useCallback((at: Draft, note: string) => {
+    if (at.kind === "branch") blockComments.saveBranch(owner, at.target, note);
+    else if (lines !== null) blockComments.saveFile(owner, reviewTarget(absolute, path, at.lines, lines), note);
+    else return;
     setDraft(null);
   }, [lines, owner, absolute, path]);
 
   // an edit keeps the comment's anchor, so the store replaces it rather than adding a second one
-  const saveEdit = useCallback((comment: FileComment, note: string) => {
-    if (lines === null) return;
-    blockComments.saveFile(owner, { ...reviewTarget(absolute, path, comment.lines, lines), anchor: comment.anchor }, note);
+  const saveEdit = useCallback((comment: FileComment | BranchComment, note: string) => {
+    if (comment.kind === "branch") blockComments.saveBranch(owner, branchTargetOf(comment), note);
+    else if (lines !== null) blockComments.saveFile(owner, { ...reviewTarget(absolute, path, comment.lines, lines), anchor: comment.anchor }, note);
+    else return;
     setEditing(null);
   }, [lines, owner, absolute, path]);
 
   // the comment just deleted, for its Undo (the store keeps none): offered until the next delete, another file, or UNDO_MS
-  const [undoable, setUndoable] = useState<FileComment | null>(null);
+  const [undoable, setUndoable] = useState<FileComment | BranchComment | null>(null);
   useEffect(() => {
     if (undoable === null) return;
     const timer = window.setTimeout(() => setUndoable(null), UNDO_MS);
     return () => window.clearTimeout(timer);
   }, [undoable]);
-  const removeComment = useCallback((comment: FileComment) => {
+  const removeComment = useCallback((comment: FileComment | BranchComment) => {
     blockComments.remove(owner, [comment.id]);
     setEditing(null);
     setUndoable(comment);
@@ -744,20 +812,24 @@ export function ReviewFile({ owner, paneId, directory, root, path, change, diffM
   // back under its own anchor, with its text: the store finds no comment there and adds it again
   const undoDelete = (): void => {
     if (undoable === null) return;
-    const { kind: _kind, id: _id, created: _created, comment, ...target } = undoable;
-    blockComments.saveFile(owner, target, comment);
+    if (undoable.kind === "branch") {
+      blockComments.saveBranch(owner, branchTargetOf(undoable), undoable.comment);
+    } else {
+      const { kind: _kind, id: _id, created: _created, comment, ...target } = undoable;
+      blockComments.saveFile(owner, target, comment);
+    }
     setUndoable(null);
   };
 
   const renderCard = useCallback((annotation: LineAnnotation<ReviewNote>) => {
-    const comment = annotation.metadata.comment;
+    const { comment, lines: drawn } = annotation.metadata;
     if (editing === comment.id) {
       if (sheetInput) return null;
       return <CommentPopover placement="row" quote={{ text: "" }} comment={comment.comment} onSave={(value) => saveEdit(comment, value)} onDelete={() => removeComment(comment)} onClose={() => setEditing(null)} opener={noFocus} fallback={noFocus} />;
     }
     // a saved comment is drawn as its open field (CommentAtRest): with the mode on, the text opens it to edit (a click or
     // a key, never the focus alone) and it has its Delete; off, it is read only
-    const line = comment.lines[0];
+    const line = drawn[0];
     return <CommentAtRest text={comment.comment} commentId={comment.id}
       onEdit={settings.commentMode ? () => setEditing(comment.id) : undefined}
       onDelete={settings.commentMode ? () => removeComment(comment) : undefined}
@@ -814,7 +886,6 @@ export function ReviewFile({ owner, paneId, directory, root, path, change, diffM
 
   const plainOptions = useMemo<FileOptions<ReviewNote, undefined>>(() => ({ ...fileOptions, enableLineSelection: false, onLineSelectionEnd: undefined }), [fileOptions]);
 
-  const showDiff = diffMode && changed;
   let body: ReactNode;
   // the preview needs the file's text: a deleted, too large or unreadable file falls through to its diff or its note
   if (preview && isMarkdown && source.status === "ready") {
@@ -910,6 +981,11 @@ export function ReviewFile({ owner, paneId, directory, root, path, change, diffM
     <FileViewer docked path={absolute} paneId={paneId} machineId={machineId} paneFolder={directory} onClose={onClose} onOpen={onOpen} keyboardActive={false} />
   </div>;
 
+  // a new or edited comment's lines as a sheet quotes them: a branch comment's from its version, any other's from the file
+  const draftAt = draft === null ? null : draftLines(draft);
+  const draftQuote = draft === null ? undefined : draft.kind === "branch" ? versionQuote(draft.target.source) : lines === null ? undefined : lineQuote(lines, draft.lines);
+  const editingQuote = editingNote === null ? undefined : editingNote.comment.kind === "branch" ? versionQuote(editingNote.comment.source) : lines === null ? undefined : lineQuote(lines, editingNote.lines);
+
   return <div ref={bodyRef} className="review-file" data-mode={showDiff ? "diff" : "file"}>
     <div className="review-file-head">
       <div className="review-file-title">
@@ -931,7 +1007,7 @@ export function ReviewFile({ owner, paneId, directory, root, path, change, diffM
           <button type="button" aria-pressed={diffStyle === "split"} onClick={() => update({ diffStyle: "split" })}><Columns2 aria-hidden="true" /><span>{t("Split")}</span></button>
         </div>}
         <div className={isMarkdown && source.status === "ready" || showDiff && !narrow ? "repo-diff-group review-tools-rest" : "repo-diff-group"}>
-          {settings.comments && <CommentModeToggle className="review-comments" count={preview && isMarkdown ? previewComments.shown.length : savedHere.length} hintOn={preview && isMarkdown ? "select" : settings.mobileCommentGesture} showHint={showHint} />}
+          {settings.comments && <CommentModeToggle className="review-comments" count={preview && isMarkdown ? previewComments.shown.length : shown.length} hintOn={preview && isMarkdown ? "select" : settings.mobileCommentGesture} showHint={showHint} />}
           <button type="button" className="icon-button repo-diff-action" aria-pressed={settings.wrapCode} aria-label={t("Wrap lines")} title={t("Wrap lines")} onClick={() => update({ wrapCode: !settings.wrapCode })}><WrapText aria-hidden="true" /></button>
           {showDiff && <button type="button" className="icon-button repo-diff-action" aria-pressed={folded} aria-label={t("Fold context")} title={folded ? t("Showing one line around each change") : t("Fold context")} disabled={diffPatch === null} onClick={() => setFolded(!folded)}><FoldVertical aria-hidden="true" /></button>}
           {viewedBox}
@@ -943,13 +1019,14 @@ export function ReviewFile({ owner, paneId, directory, root, path, change, diffM
       <span>{t("Comment deleted.")}</span>
       <button type="button" className="btn btn-ghost" onClick={undoDelete}>{t("Undo")}</button>
     </p>}
-    {refused && <p className="review-file-hint" role="status">{t("Comments go on lines of the file as it is now, not on removed ones.")}</p>}
-    {showDiff && !commentsOnDiff && <p className="review-file-hint">{t("Comments on a diff are for the working tree only.")}</p>}
-    {draft !== null && !sheetInput && draftAnchor !== null && <DraftField key={`${draft[0]}-${draft[1]}`} anchor={draftAnchor}>
-      <CommentPopover placement="row" reference={{ path, lines: draft }} showReference quote={{ text: "" }} comment="" onSave={(value) => save(draft, value)} onDelete={() => setDraft(null)} onClose={() => setDraft(null)} opener={noFocus} fallback={noFocus} />
+    {/* the working tree's refusal; a branch diff takes removed lines */}
+    {refused && diffBranch === null && <p className="review-file-hint" role="status">{t("Comments go on lines of the file as it is now, not on removed ones.")}</p>}
+    {showDiff && comparison?.scope === "staged" && <p className="review-file-hint">{t("Comments on staged changes aren't supported.")}</p>}
+    {draft !== null && draftAt !== null && !sheetInput && draftAnchor !== null && <DraftField key={`${draftOnBase(draft) ? "base" : "head"}-${draftAt[0]}-${draftAt[1]}`} anchor={draftAnchor}>
+      <CommentPopover placement="row" reference={{ path, lines: draftAt }} showReference quote={{ text: "" }} comment="" onSave={(value) => save(draft, value)} onDelete={() => setDraft(null)} onClose={() => setDraft(null)} opener={noFocus} fallback={noFocus} />
     </DraftField>}
     {body}
-    {sheetInput && draft !== null && <CommentPopover placement="sheet" label={t("Comment on line {line}", { line: draft[0] })} sheetQuote={lines === null ? undefined : lineQuote(lines, draft)} quote={{ text: "" }} comment="" onSave={(value) => save(draft, value)} onDelete={() => setDraft(null)} onClose={() => setDraft(null)} opener={noFocus} fallback={noFocus} />}
-    {sheetInput && editingNote !== null && <CommentPopover placement="sheet" label={t("Comment on line {line}", { line: editingNote.lines[0] })} sheetQuote={lines === null ? undefined : lineQuote(lines, editingNote.lines)} quote={{ text: "" }} comment={editingNote.comment} onSave={(value) => saveEdit(editingNote, value)} onDelete={() => removeComment(editingNote)} onClose={() => setEditing(null)} opener={noFocus} fallback={noFocus} />}
+    {sheetInput && draft !== null && draftAt !== null && <CommentPopover placement="sheet" label={t("Comment on line {line}", { line: draftAt[0] })} sheetQuote={draftQuote} quote={{ text: "" }} comment="" onSave={(value) => save(draft, value)} onDelete={() => setDraft(null)} onClose={() => setDraft(null)} opener={noFocus} fallback={noFocus} />}
+    {sheetInput && editingNote !== null && <CommentPopover placement="sheet" label={t("Comment on line {line}", { line: editingNote.lines[0] })} sheetQuote={editingQuote} quote={{ text: "" }} comment={editingNote.comment.comment} onSave={(value) => saveEdit(editingNote.comment, value)} onDelete={() => removeComment(editingNote.comment)} onClose={() => setEditing(null)} opener={noFocus} fallback={noFocus} />}
   </div>;
 }

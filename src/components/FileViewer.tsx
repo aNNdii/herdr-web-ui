@@ -16,7 +16,7 @@ import { MarkdownImageContext } from "./Markdown.tsx";
 
 import type { FileInfo } from "../../shared/protocol.ts";
 import { ApiError } from "../lib/api.ts";
-import { blockComments, isReplyComment, useBlockComments } from "../lib/blockComments.ts";
+import { blockComments, isFileEntry, useBlockComments } from "../lib/blockComments.ts";
 import { leaveKey } from "../lib/commentPopover.ts";
 import { formatBytes } from "../lib/bridgeProgress.ts";
 import { LOCAL_MACHINE, paneStorageId } from "../../shared/machines.ts";
@@ -169,7 +169,7 @@ export function FileViewer({ path: asked, paneId, machineId: machineProp, paneFo
   // Opened at a comment: in the view it was written in, so the other one is not drawn first
   const [chosen, setChosen] = useState<{ path: string; mode: TextViewMode } | null>(() => {
     const comment = commentId === null || paneId === null ? undefined : blockComments.list(paneStorageId(machineId, paneId)).find((c) => c.id === commentId);
-    return comment === undefined || isReplyComment(comment) ? null : { path: asked, mode: comment.view === "code" ? "code" : "preview" };
+    return comment !== undefined && isFileEntry(comment) ? { path: asked, mode: comment.view === "code" ? "code" : "preview" } : null;
   });
   const mode = chosen?.path === path ? chosen.mode : target.line === null ? "preview" : "code";
   // the source element while the code shows (its <pre>, or a virtualized source's text box), which
@@ -430,7 +430,7 @@ export function FileViewer({ path: asked, paneId, machineId: machineProp, paneFo
   const previewPending = preview.status === "pending";
   useEffect(() => {
     if (pendingStop === null) return;
-    const comment = paneComments.find((c): c is FileComment => !isReplyComment(c) && c.id === pendingStop);
+    const comment = paneComments.find((c): c is FileComment => isFileEntry(c) && c.id === pendingStop);
     // gone meanwhile (sent, deleted): the viewer just shows its file
     if (comment === undefined) { setPendingStop(null); return; }
     if (scope !== null) {

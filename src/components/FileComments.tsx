@@ -11,7 +11,7 @@
  */
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type MutableRefObject, type ReactNode, type RefObject } from "react";
 
-import { blockComments, isReplyComment, useBlockComments } from "../lib/blockComments.ts";
+import { blockComments, isFileEntry, useBlockComments } from "../lib/blockComments.ts";
 import { popoverOutlived } from "../lib/commentPopover.ts";
 import { markCommentSurface } from "../lib/commentHighlight.ts";
 import { commentAt } from "../lib/commentSource.ts";
@@ -106,7 +106,7 @@ export function useFileComments(scope: FileCommentScope | null): FileComments {
   const lines = scope?.lines;
   const loaded = scope?.loaded ?? 0;
   const truncated = scope?.truncated ?? false;
-  const all = useMemo(() => path === undefined ? [] : comments.filter((c): c is FileComment => !isReplyComment(c) && c.path === path), [comments, path]);
+  const all = useMemo(() => path === undefined ? [] : comments.filter((c): c is FileComment => isFileEntry(c) && c.path === path), [comments, path]);
   const placed = useMemo(() => all.map((comment) => ({ comment, lines: lines === undefined ? null : placeFileComment(comment, lines, loaded, truncated) })), [all, lines, loaded, truncated]);
   const moved = useRef(new Set<string>());
   useEffect(() => {
@@ -173,7 +173,7 @@ export function usePreviewCommentSource(scope: FileCommentScope | null, surface:
         const target = found === null ? null : linesTarget(scope, found)?.target ?? null;
         if (target === null) return null;
         // the comment written there already, as the store finds it on save: an edit replaces it
-        const id = fileCommentAt(blockComments.list(owner).filter((c): c is FileComment => !isReplyComment(c)), target)?.id;
+        const id = fileCommentAt(blockComments.list(owner).filter(isFileEntry), target)?.id;
         return commentAt(shownComments, id, target, quoteOf(target));
       },
       persist: (target, text) => persistFile(owner, target, text),

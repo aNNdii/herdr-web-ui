@@ -36,7 +36,7 @@ import { SHELL_AGENTS, shellAgentExecutable } from "./shell-agent.ts";
 import { createDirectory, listDirectories } from "./directories.ts";
 import { claudeSessionTempDir } from "./claude-store.ts";
 import { fileResponse, findFile, crossSiteFileRead, forgetPageMedia, pageMediaResponse, pageMediaSource, PAGE_MEDIA_PATH } from "./file-view.ts";
-import { repoDiffResponse } from "./repo-diff.ts";
+import { REPO_DIFF_ROUTES, repoDiffResponse } from "./repo-diff.ts";
 import {
   agentManifests,
   agentPrompt,
@@ -2091,7 +2091,8 @@ export function createServer(
         return listing === null ? badRequest("invalid_cwd", "path must be a directory this user can read") : jsonResponse(listing);
       }
 
-      if (pathname === "/api/workspace/diff/files" || pathname === "/api/workspace/diff/file" || pathname === "/api/workspace/diff/tree") {
+      const repoDiffRoute = REPO_DIFF_ROUTES.find((route) => pathname === `/api/workspace/diff/${route}`);
+      if (repoDiffRoute !== undefined) {
         if (request.method !== "GET") return badRequest("method_not_allowed", "use GET");
         // file contents, like /api/fs/file: this app reads them, another site's page does not
         if (request.headers.get("sec-fetch-site") === "cross-site") return jsonResponse({ error: { code: "cross_site", message: "A repository's changes are read from this app" } }, 403);
@@ -2112,7 +2113,7 @@ export function createServer(
           cwd = expandedDirectory(relative ? resolve(base!, directory) : directory) ?? undefined;
         }
         if (cwd === undefined) return badRequest("invalid_cwd", "directory must be a directory this user can read");
-        return repoDiffResponse(pathname.endsWith("/tree") ? "tree" : pathname.endsWith("/files") ? "files" : "file", cwd, url.searchParams);
+        return repoDiffResponse(repoDiffRoute, cwd, url.searchParams);
       }
 
       // A tab is made the way a workspace is: herdr opens it with a shell in its root pane, and

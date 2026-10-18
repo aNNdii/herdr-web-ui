@@ -26,6 +26,7 @@ import type {
   PanePlan,
   PaneReadResult,
   PaneResized,
+  RepoBranchList,
   RepoDiffFileList,
   RepoDiffFilePatch,
   RepoDiffScope,
@@ -180,13 +181,16 @@ export class ApiError extends Error {
   readonly code: string | null;
   /** the server's own words, without the URL and status the message starts with */
   readonly detail: string;
+  /** the query parameter at fault (`error.param`), where the server names one; null otherwise */
+  readonly param: string | null;
 
-  constructor(url: string, status: number, detail: string, code: string | null) {
+  constructor(url: string, status: number, detail: string, code: string | null, param: string | null = null) {
     super(`${url} failed (${status}): ${detail}`);
     this.name = "ApiError";
     this.status = status;
     this.code = code;
     this.detail = detail;
+    this.param = param;
   }
 }
 
@@ -200,14 +204,16 @@ export const routeMissing = (error: unknown): boolean => error instanceof ApiErr
 async function errorFrom(url: string, response: Response): Promise<ApiError> {
   let detail = response.statusText;
   let code: string | null = null;
+  let param: string | null = null;
   try {
-    const body = (await response.json()) as { error?: { code?: string; message?: string } };
+    const body = (await response.json()) as { error?: { code?: string; message?: string; param?: unknown } };
     if (body.error?.message) detail = body.error.message;
     if (body.error?.code) code = body.error.code;
+    if (typeof body.error?.param === "string") param = body.error.param;
   } catch {
     /* non-JSON error body */
   }
-  return new ApiError(url, response.status, detail, code);
+  return new ApiError(url, response.status, detail, code, param);
 }
 
 async function getJson<T>(url: string, init?: RequestInit): Promise<T> {
@@ -625,6 +631,8 @@ export interface RepoDiffQuery {
   /** `commit` only: the list's hashes, so a file is read from the same comparison */
   base: string | null;
   head: string | null;
+  /** `commit` only: compare from where head forked off base (`merge_base=1`); ignored in the other scopes */
+  mergeBase?: boolean;
 }
 
 function repoDiffQuery(query: RepoDiffQuery): URLSearchParams {
@@ -634,6 +642,7 @@ function repoDiffQuery(query: RepoDiffQuery): URLSearchParams {
     scope: query.scope,
     ...(query.scope === "commit" && query.base ? { base: query.base } : {}),
     ...(query.scope === "commit" && query.head ? { head: query.head } : {}),
+    ...(query.scope === "commit" && query.mergeBase ? { merge_base: "1" } : {}),
   });
 }
 
@@ -657,6 +666,12 @@ export async function fetchRepoDiffFile(query: RepoDiffQuery, path: string, oldP
 export async function fetchRepoDiffTree(query: Pick<RepoDiffQuery, "paneId" | "directory"> & { ignored?: boolean; folder?: boolean }, machineId = "local"): Promise<RepoDiffTree> {
   const params = new URLSearchParams({ ...(query.paneId ? { pane_id: query.paneId } : {}), ...(query.directory ? { directory: query.directory } : {}), ...(query.ignored ? { ignored: "1" } : {}), ...(query.folder ? { folder: "1" } : {}) });
   return getJson<RepoDiffTree>(machinePath(machineId, `workspace/diff/tree?${params.toString()}`));
+}
+
+/** GET /api/workspace/diff/branches: the local and remote branches of the folder's repository, for the review's branch fields. */
+export async function fetchRepoBranches(query: Pick<RepoDiffQuery, "paneId" | "directory">, machineId = "local"): Promise<RepoBranchList> {
+  const params = new URLSearchParams({ ...(query.paneId ? { pane_id: query.paneId } : {}), ...(query.directory ? { directory: query.directory } : {}) });
+  return getJson<RepoBranchList>(machinePath(machineId, `workspace/diff/branches?${params.toString()}`));
 }
 
 export type { CreateTabRequest, CreateWorkspaceRequest } from "../../shared/protocol.ts";

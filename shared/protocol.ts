@@ -166,18 +166,26 @@ export type { Machine, MachineEvent, PaneTarget, SetupJob, SetupRequest, SetupAc
  *         keeps: its task list or checklist, read from the transcript; null when it keeps none)
  *  GET    /api/pane/files?pane_id=&q=&limit=  -> { files: string[] } (paths relative to the pane
  *         cwd matching q, for @-mentions; git ls-files when the cwd is a repo, bounded walk otherwise)
- *  GET    /api/workspace/diff/files?pane_id=&directory=&scope=&base=&head= -> RepoDiffFileList
+ *  GET    /api/workspace/diff/files?pane_id=&directory=&scope=&base=&head=&merge_base= -> RepoDiffFileList
  *         (what changed in the git repository the pane's folder, or `directory`, is inside: read
  *         only, on the PC that owns the pane. `directory` is absolute, `~/…`, or relative to the
  *         pane's folder; one of pane_id and directory is required. scope: workspace (the default:
  *         working tree against the index, plus untracked files), staged (index against HEAD) or
- *         commit (`base` against `head`, HEAD when absent; each one commit). The list is capped
- *         (`limits`), and `truncated` says when it was. 400 invalid_scope / invalid_revision /
- *         invalid_cwd / missing_directory, 404 revision_not_found, 409 not_a_repository,
- *         503 git_unavailable, 504 git_timeout; 403 read_only for a watching device, as a file read)
+ *         commit (`base` against `head`, HEAD when absent; each one commit). In commit, `merge_base=1`
+ *         compares from where head forked off base (`base...head`, as a pull request does) and names
+ *         that commit as `merge_base`; without it the comparison stays two-dot. The list is capped
+ *         (`limits`), and `truncated` says when it was. 400 invalid_scope (also merge_base outside
+ *         commit) / invalid_revision / invalid_cwd / missing_directory, 404 revision_not_found,
+ *         409 not_a_repository, 409 no_merge_base (base and head share no history), 503
+ *         git_unavailable, 504 git_timeout; 403 read_only for a watching device, as a file read.
+ *         invalid_revision, revision_not_found and no_merge_base name the field at fault in
+ *         `error.param`: "base" or "head"; an older server or bridge never sends it)
  *  GET    /api/workspace/diff/tree?pane_id=&directory=  -> RepoDiffTree (every file the repository holds,
  *         tracked or not ignored, for the review's file tree; the same folder rules as the two above)
- *  GET    /api/workspace/diff/file?pane_id=&directory=&scope=&base=&head=&path=&old_path=
+ *  GET    /api/workspace/diff/branches?pane_id=&directory=  -> RepoBranchList (the repository's local
+ *         and remote branches, for a review's branch fields, with the worktree each is checked out in;
+ *         the same folder rules as the routes above)
+ *  GET    /api/workspace/diff/file?pane_id=&directory=&scope=&base=&head=&merge_base=&path=&old_path=
  *         -> RepoDiffFilePatch (one file of that comparison as a standard `diff --git` unified
  *         patch; `path` and, for a rename, `old_path` are the list's own, relative to the
  *         repository root. The patch is whole or null: `unavailable` says why it is null, and no
@@ -235,7 +243,7 @@ export type { Machine, MachineEvent, PaneTarget, SetupJob, SetupRequest, SetupAc
  *  DELETE /api/push/subscribe { endpoint }      -> 204
  *  POST   /api/push/test      { endpoint }      -> 204 | 404 subscription_not_found | 410 subscription_gone | 502 push_failed
  *  GET    /api/usage[?refresh=1]         -> UsageReport (plan limits of the AI subscriptions signed in on this PC)
- *  Errors: non-2xx with { error: { code, message } }
+ *  Errors: non-2xx with { error: { code, message, param? } }
  *
  *  Access: every route above except /api/health, /api/auth and /api/devices/pair, plus the
  *  /ws upgrade, needs the request to be one of: from this PC itself (no proxy in front);
@@ -249,7 +257,8 @@ export type { Machine, MachineEvent, PaneTarget, SetupJob, SetupRequest, SetupAc
  *  login, when no token is configured); the upgrade is refused. Static files are always public.
  */
 export interface ApiError {
-  error: { code: string; message: string };
+  /** `param`: the query parameter at fault, where a route names one (the repository diff's base or head) */
+  error: { code: string; message: string; param?: "base" | "head" };
 }
 
 export interface PaneFindMatch {
@@ -771,6 +780,8 @@ export interface RepoDiffFileList {
   /** the commits compared, as full hashes, in the `commit` scope; null in the others */
   base: string | null;
   head: string | null;
+  /** where head forked off base, as a full hash: only with `merge_base=1`, and absent from an older server or bridge */
+  merge_base?: string | null;
   /** sorted by path, at most `limits.max_files` */
   files: RepoDiffFile[];
   /** how many files changed in all; null when git printed more than `limits.max_list_bytes` */
@@ -789,6 +800,8 @@ export interface RepoDiffFilePatch {
   scope: RepoDiffScope;
   base: string | null;
   head: string | null;
+  /** as in RepoDiffFileList: the commit the patch starts from, with `merge_base=1` */
+  merge_base?: string | null;
   file: RepoDiffFile;
   patch: string | null;
   /**
@@ -812,6 +825,27 @@ export interface RepoDiffTree {
   plain?: boolean;
   truncated: boolean;
   limits: { max_files: number; max_list_bytes: number };
+}
+
+/** A branch a review can compare, local or a remote's. */
+export interface RepoBranch {
+  /** as git shortens it: `main`, `feat/x`, `origin/next` */
+  name: string;
+  remote: boolean;
+  /** the absolute folder (symlinks resolved) of the worktree it is checked out in; null when none is, or that worktree's folder is gone */
+  worktree: string | null;
+}
+
+/** GET /api/workspace/diff/branches */
+export interface RepoBranchList {
+  repository: RepoDiffRepository;
+  /** every local branch, then the remote ones up to `limits.max_branches`, each group newest commit first; no `<remote>/HEAD` */
+  branches: RepoBranch[];
+  /** the branch `origin/HEAD` points at, else `main`, else `master` when that local branch exists; null otherwise */
+  default_base: string | null;
+  /** remote branches were left out at the cap; local ones never are */
+  truncated: boolean;
+  limits: { max_branches: number };
 }
 
 export interface AgentKind {

@@ -28,7 +28,7 @@ import { Trash2 } from "lucide-react";
 
 import "./CodeComments.css";
 
-import { blockComments, isReplyComment } from "../lib/blockComments.ts";
+import { blockComments, isFileEntry } from "../lib/blockComments.ts";
 import { clickFacts, isCommentClick, isDismissingPress } from "../lib/commentClick.ts";
 import { COMMENT_ROOM_ATTR, lineAt, lineElement, lineElementIndex, originOf, setCommentRooms, textRows } from "../lib/codeCommentDom.ts";
 import { codeCommentRows } from "../lib/codeCommentRows.ts";
@@ -471,7 +471,7 @@ export function useCodeComments({ scope, comments, surface, content, focusFallba
     if (current === null) return;
     const made = linesTarget(current, { lines: [line, line], quoteLines: [current.lines[line - 1] ?? ""] });
     if (made === null) return;
-    const found = fileCommentAt(blockComments.list(made.owner).filter((c): c is FileComment => !isReplyComment(c)), made.target);
+    const found = fileCommentAt(blockComments.list(made.owner).filter(isFileEntry), made.target);
     if (found === undefined) showOn(made.owner, made.target, null, touch, keyboard);
     else showOn(made.owner, targetOf(found), { id: found.id, comment: found.comment }, touch, keyboard);
   }, [showOn]);

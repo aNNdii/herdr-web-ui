@@ -1,7 +1,7 @@
 import { afterEach, expect, it } from "bun:test";
 import { MAX_ATTACHMENT_BYTES } from "../../shared/attachments.ts";
 import { NOTICE_VERSION } from "../../shared/telemetry.ts";
-import { AttachmentTooLargeError, ApiError, changeTelemetry, fetchPaneSubagents, fetchTelemetry, uploadPaneImage } from "./api.ts";
+import { AttachmentTooLargeError, ApiError, changeTelemetry, fetchPaneSubagents, fetchRepoBranches, fetchRepoDiffFile, fetchRepoDiffFiles, fetchTelemetry, uploadPaneImage } from "./api.ts";
 import { DEFAULT_SETTINGS, telemetrySettingsSnapshot } from "./settings.ts";
 
 const realFetch = globalThis.fetch;
@@ -75,6 +75,51 @@ it("preserves telemetry API errors", async () => {
 
   expect(error).toBeInstanceOf(ApiError);
   expect(error).toMatchObject({ status: 500, code: "telemetry_failed", detail: "Could not save" });
+});
+
+it("keeps the field an error names in param, and null when the server names none", async () => {
+  globalThis.fetch = (async (_url: string) => Response.json({ error: { code: "revision_not_found", message: "no such revision", param: "head" } }, { status: 404 })) as typeof fetch;
+  const named = await fetchRepoDiffFiles({ paneId: "w1:p1", directory: null, scope: "commit", base: "main", head: "feat/x" }).catch((failure: unknown) => failure);
+  expect(named).toBeInstanceOf(ApiError);
+  expect(named).toMatchObject({ status: 404, code: "revision_not_found", param: "head" });
+
+  globalThis.fetch = (async (_url: string) => Response.json({ error: { code: "telemetry_failed", message: "Could not save" } }, { status: 500 })) as typeof fetch;
+  expect(await changeTelemetry({ enabled: false }).catch((failure: unknown) => failure)).toMatchObject({ code: "telemetry_failed", param: null });
+
+  globalThis.fetch = (async (_url: string) => new Response("gateway down", { status: 502, statusText: "Bad Gateway" })) as typeof fetch;
+  expect(await changeTelemetry({ enabled: false }).catch((failure: unknown) => failure)).toMatchObject({ code: null, param: null });
+});
+
+it("asks for the merge base only in a commit comparison", async () => {
+  const requests: string[] = [];
+  globalThis.fetch = (async (url: string) => {
+    requests.push(url);
+    return Response.json({});
+  }) as typeof fetch;
+  await fetchRepoDiffFiles({ paneId: "w1:p1", directory: null, scope: "commit", base: "origin/next", head: "feat/x", mergeBase: true });
+  await fetchRepoDiffFile({ paneId: "w1:p1", directory: null, scope: "commit", base: "origin/next", head: "feat/x", mergeBase: true }, "src/a.ts", null, "pc-2");
+  await fetchRepoDiffFiles({ paneId: "w1:p1", directory: null, scope: "workspace", base: null, head: null, mergeBase: true });
+  await fetchRepoDiffFiles({ paneId: "w1:p1", directory: null, scope: "commit", base: "abc", head: "def", mergeBase: false });
+  await fetchRepoDiffFiles({ paneId: "w1:p1", directory: null, scope: "commit", base: "abc", head: "def" });
+  const mergeBases = requests.map((url) => new URL(url, "http://x").searchParams.get("merge_base"));
+  expect(mergeBases).toEqual(["1", "1", null, null, null]);
+  expect(requests[0]).toBe("/api/workspace/diff/files?pane_id=w1%3Ap1&scope=commit&base=origin%2Fnext&head=feat%2Fx&merge_base=1");
+  expect(requests[1]).toStartWith("/api/machines/pc-2/workspace/diff/file?");
+});
+
+it("reads a repository's branches through the PC's path, by pane or by folder", async () => {
+  const requests: string[] = [];
+  const list = { repository: { root: "/work", branch: "main", head: "a".repeat(40), detached: false, unborn: false }, branches: [{ name: "main", remote: false, worktree: "/work" }], default_base: "main", truncated: false, limits: { max_branches: 1000 } };
+  globalThis.fetch = (async (url: string) => {
+    requests.push(url);
+    return Response.json(list);
+  }) as typeof fetch;
+  expect(await fetchRepoBranches({ paneId: "w1:p1", directory: null })).toEqual(list);
+  await fetchRepoBranches({ paneId: null, directory: "/work/sub" }, "pc-2");
+  expect(requests).toEqual(["/api/workspace/diff/branches?pane_id=w1%3Ap1", "/api/machines/pc-2/workspace/diff/branches?directory=%2Fwork%2Fsub"]);
+
+  globalThis.fetch = (async (_url: string) => Response.json({ error: { code: "read_only", message: "this device can only watch" } }, { status: 403 })) as typeof fetch;
+  expect(await fetchRepoBranches({ paneId: "w1:p1", directory: null }).catch((failure: unknown) => failure)).toMatchObject({ status: 403, code: "read_only" });
 });
 
 it("treats a missing telemetry route as unavailable for reads and an API error for writes", async () => {

@@ -22,7 +22,7 @@ import { handleMachineRequest } from "./machine-api.ts";
 import type { MachineManager } from "./machines.ts";
 import { TailnetIdentitySource } from "./tailscale.ts";
 import { forgetTranscriptState } from "./conversation.ts";
-import type { RepoDiffFileList, RepoDiffFilePatch } from "../shared/protocol.ts";
+import type { RepoBranchList, RepoDiffFileList, RepoDiffFilePatch } from "../shared/protocol.ts";
 
 /**
  * Contract test for herdr-web-ui's HTTP + WS surface.
@@ -3552,5 +3552,88 @@ describe("repository diff of a pane's folder", () => {
     const posted = await fetch(`${base()}/api/workspace/diff/files?${pane}`, { method: "POST", headers: { "x-herdr-machine": "1" } });
     expect(posted.status).toBe(400);
     expect(((await posted.json()) as ApiError).error.code).toBe("method_not_allowed");
+  });
+
+  it("compares a branch from where it forked with merge_base=1, in the list and the patch, and names the field a refusal is about", async () => {
+    const repo = realpathSync(mkdtempSync(join(tmpdir(), "herdr-web-ui-test-repo-merge-base-")));
+    try {
+      const git = (...args: string[]) => {
+        const result = Bun.spawnSync(["git", "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "-c", "commit.gpgsign=false", "-C", repo, ...args], { stdout: "pipe", stderr: "pipe" });
+        if (result.exitCode !== 0) throw new Error(`git ${args.join(" ")} failed: ${result.stderr.toString()}`);
+        return result.stdout.toString().trim();
+      };
+      git("init", "-q", "-b", "next");
+      writeFileSync(join(repo, "a.txt"), "one\n");
+      git("add", ".");
+      git("commit", "-q", "-m", "first");
+      const fork = git("rev-parse", "HEAD");
+      git("checkout", "-q", "-b", "feat/x");
+      writeFileSync(join(repo, "feature.txt"), "feature\n");
+      git("add", ".");
+      git("commit", "-q", "-m", "feature");
+      const head = git("rev-parse", "HEAD");
+      git("checkout", "-q", "next");
+      writeFileSync(join(repo, "later.txt"), "later\n");
+      git("add", ".");
+      git("commit", "-q", "-m", "next moves on");
+      const tip = git("rev-parse", "HEAD");
+      const search = `directory=${encodeURIComponent(repo)}&scope=commit&base=next&head=feat%2Fx&merge_base=1`;
+
+      const listed = await fetch(`${base()}/api/workspace/diff/files?${search}`);
+      expect(listed.status).toBe(200);
+      const list = (await listed.json()) as RepoDiffFileList;
+      expect(list).toMatchObject({ scope: "commit", base: tip, head, merge_base: fork });
+      expect(list.files.map((file) => file.path)).toEqual(["feature.txt"]);
+      const patched = await fetch(`${base()}/api/workspace/diff/file?${search}&path=feature.txt`);
+      expect(patched.status).toBe(200);
+      const patch = (await patched.json()) as RepoDiffFilePatch;
+      expect(patch).toMatchObject({ base: tip, head, merge_base: fork, unavailable: null });
+      expect(patch.patch).toStartWith("diff --git a/feature.txt b/feature.txt\n");
+
+      const missing = await fetch(`${base()}/api/workspace/diff/files?directory=${encodeURIComponent(repo)}&scope=commit&base=next&head=nope&merge_base=1`);
+      expect(missing.status).toBe(404);
+      expect(((await missing.json()) as ApiError).error).toMatchObject({ code: "revision_not_found", param: "head" });
+      const outside = await fetch(`${base()}/api/workspace/diff/files?directory=${encodeURIComponent(repo)}&merge_base=1`);
+      expect(outside.status).toBe(400);
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  it("lists a folder's branches on this PC and its local alias, for a GET from this app only", async () => {
+    const repo = realpathSync(mkdtempSync(join(tmpdir(), "herdr-web-ui-test-repo-branches-")));
+    try {
+      const git = (...args: string[]) => {
+        const result = Bun.spawnSync(["git", "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "-c", "commit.gpgsign=false", "-C", repo, ...args], { stdout: "ignore", stderr: "pipe" });
+        if (result.exitCode !== 0) throw new Error(`git ${args.join(" ")} failed: ${result.stderr.toString()}`);
+      };
+      git("init", "-q", "-b", "main");
+      writeFileSync(join(repo, "a.txt"), "one\n");
+      git("add", ".");
+      git("commit", "-q", "-m", "first");
+      git("branch", "feat/x");
+      const search = `directory=${encodeURIComponent(repo)}`;
+      for (const url of [`${base()}/api/workspace/diff/branches?${search}`, `${base()}/api/machines/local/workspace/diff/branches?${search}`]) {
+        const response = await fetch(url);
+        expect([url, response.status]).toEqual([url, 200]);
+        expect(response.headers.get("cache-control")).toBe("private, no-store");
+        const list = (await response.json()) as RepoBranchList;
+        expect(list.repository).toMatchObject({ root: repo, branch: "main" });
+        expect(list.branches.map((branch) => branch.name).sort()).toEqual(["feat/x", "main"]);
+        expect(list.branches.find((branch) => branch.name === "main")).toEqual({ name: "main", remote: false, worktree: repo });
+        expect(list).toMatchObject({ default_base: "main", truncated: false });
+      }
+      const posted = await fetch(`${base()}/api/workspace/diff/branches?${search}`, { method: "POST", headers: { "x-herdr-machine": "1" } });
+      expect(posted.status).toBe(400);
+      expect(((await posted.json()) as ApiError).error.code).toBe("method_not_allowed");
+      const crossSite = await fetch(`${base()}/api/workspace/diff/branches?${search}`, { headers: { "sec-fetch-site": "cross-site" } });
+      expect(crossSite.status).toBe(403);
+      expect(((await crossSite.json()) as ApiError).error.code).toBe("cross_site");
+      const nowhere = await fetch(`${base()}/api/workspace/diff/branches`);
+      expect(nowhere.status).toBe(400);
+      expect(((await nowhere.json()) as ApiError).error.code).toBe("missing_directory");
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
   });
 });

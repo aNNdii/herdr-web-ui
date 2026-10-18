@@ -1,5 +1,6 @@
 import { createContext, useSyncExternalStore } from "react";
 import { isSlashCommand, MAX_COMPOSER_CHARS, SELECTION_QUOTE_MAX } from "./compose.ts";
+import { branchAnchor, branchCommentAt, branchQuote, isBranchComment, sortBranchComments, type BranchComment, type BranchPlace, type BranchTarget } from "./branchComments.ts";
 import { fileAnchor, fileCommentAt, fileQuote, isFileComment, sortFileComments, type FileComment, type FileTarget, type LineRange } from "./fileComments.ts";
 import { isCommentPoint, type CommentPoint } from "./commentPoint.ts";
 import type { InlineNode, ListBlock, MarkdownBlock } from "./markdown.ts";
@@ -91,12 +92,27 @@ export interface BlockComment {
   point?: CommentPoint;
 }
 
-/** What a pane keeps and sends: a comment on a block of an agent's reply, or on lines of a file. */
-export type PaneComment = BlockComment | FileComment;
+/** What a pane keeps and sends: a comment on a block of an agent's reply, on lines of a file, or on lines of a branch diff. */
+export type PaneComment = BlockComment | FileComment | BranchComment;
 
 /** A reply comment (a stored entry without `kind` is one). */
 export function isReplyComment(comment: PaneComment): comment is BlockComment {
-  return comment.kind !== "file";
+  switch (comment.kind) {
+    case undefined:
+    case "reply": return true;
+    case "file":
+    case "branch": return false;
+  }
+}
+
+/** A comment on lines of a file (the file viewer's). */
+export function isFileEntry(comment: PaneComment): comment is FileComment {
+  return comment.kind === "file";
+}
+
+/** A comment on lines of a branch diff (the review's). */
+export function isBranchEntry(comment: PaneComment): comment is BranchComment {
+  return comment.kind === "branch";
 }
 
 /** Most characters a quoted block takes in the outgoing message, the trailing "…" included. */
@@ -252,9 +268,12 @@ function sortComments(comments: readonly BlockComment[]): BlockComment[] {
   return [...comments].sort((a, b) => compareOrder(a.order, b.order));
 }
 
-/** A copy of `comments` in the order they are listed and sent in: reply comments in reading order, then file comments (`sortFileComments`). */
+/**
+ * A copy of `comments` in the order they are listed and sent in: reply comments in reading order, then file comments
+ * (`sortFileComments`), then branch comments (`sortBranchComments`).
+ */
 export function sortPaneComments(comments: readonly PaneComment[]): PaneComment[] {
-  return [...sortComments(comments.filter(isReplyComment)), ...sortFileComments(comments.filter((c): c is FileComment => !isReplyComment(c)))];
+  return [...sortComments(comments.filter(isReplyComment)), ...sortFileComments(comments.filter(isFileEntry)), ...sortBranchComments(comments.filter(isBranchEntry))];
 }
 
 /** The anchor of the part a comment starts in; null for one moved off its anchor by a replaced part (`~id`). */
@@ -349,14 +368,21 @@ export function textRange(lengths: readonly number[], start: number, end: number
   return { startNode: first.node, startOffset: first.offset, endNode: last.node, endOffset: last.offset };
 }
 
-/** The quote a comment sends: a file comment's lines (`fileQuote`), else its selection, every line prefixed (a blank line inside is a bare ">"), or its block cut to one line. */
+/**
+ * The quote a comment sends: a file comment's lines (`fileQuote`), a branch comment's with its version (`branchQuote`),
+ * else its selection, every line prefixed (a blank line inside is a bare ">"), or its block cut to one line.
+ */
 function quoteText(comment: PaneComment): string {
-  if (!isReplyComment(comment)) return fileQuote(comment);
+  if (isFileEntry(comment)) return fileQuote(comment);
+  if (isBranchEntry(comment)) return branchQuote(comment);
   if (comment.quote === undefined) return `> ${quoteFor(blockContent(comment.block))}`;
   return comment.quote.split("\n").map((line) => line.trim() === "" ? ">" : `> ${line}`).join("\n");
 }
 
-/** The message for `comments` and `text`: each comment quotes its selection, block or lines, replies first in reading order, then file comments, and the typed text, unless blank, comes last. */
+/**
+ * The message for `comments` and `text`: each comment quotes its selection, block or lines, replies first in reading
+ * order, then file comments, then branch comments, and the typed text, unless blank, comes last.
+ */
 export function composeWithComments(comments: readonly PaneComment[], text: string): string {
   const entries = sortPaneComments(comments).map((c) => `${quoteText(c)}\n${c.comment.trim()}`);
   if (text.trim() !== "") entries.push(text);
@@ -447,11 +473,12 @@ export function isBlockComment(value: unknown): value is BlockComment {
   try { return typeof blockContent(entry.block) === "string" && (entry.until === undefined || typeof blockContent(entry.until.block) === "string"); } catch { return false; }
 }
 
-/** A stored entry of either kind that reads without throwing; an entry without `kind` is a reply comment. */
+/** A stored entry of any kind that reads without throwing; an entry without `kind` is a reply comment. */
 export function isPaneComment(value: unknown): value is PaneComment {
   if (typeof value !== "object" || value === null) return false;
   const { kind } = value as { kind?: unknown };
   if (kind === "file") return isFileComment(value);
+  if (kind === "branch") return isBranchComment(value);
   return (kind === undefined || kind === "reply") && isBlockComment(value);
 }
 
@@ -585,7 +612,7 @@ export class BlockCommentStore {
     this.refresh(owner);
     const text = comment.trim();
     const comments = this.stored(owner);
-    const existing = fileCommentAt(comments.filter((c): c is FileComment => !isReplyComment(c)), target);
+    const existing = fileCommentAt(comments.filter(isFileEntry), target);
     if (text === "") {
       if (existing) this.write(owner, comments.filter((c) => c !== existing));
       return null;
@@ -611,11 +638,54 @@ export class BlockCommentStore {
     if (!this.enabled) return;
     this.refresh(owner);
     const comments = this.stored(owner);
-    const moved = comments.find((c): c is FileComment => !isReplyComment(c) && c.id === id);
+    const moved = comments.find((c): c is FileComment => isFileEntry(c) && c.id === id);
     if (moved === undefined || (moved.lines[0] === lines[0] && moved.lines[1] === lines[1])) return;
     const anchor = fileAnchor({ ...moved, lines });
     const taken = comments.some((c) => c.id !== id && c.anchor === anchor);
     const next: FileComment = { ...moved, lines, anchor: taken ? moved.anchor : anchor };
+    this.write(owner, comments.map((c) => c === moved ? next : c));
+  }
+
+  /**
+   * One branch comment per place, as `saveFile` keeps file comments: found by `branchCommentAt`, a blank comment removes
+   * it, a changed text gets a new id, a new one whose place reads as an anchor already kept takes `~id` after it, an
+   * edit keeps its creation time. Returns the id of the comment now kept there, null when there is none: deleted, or
+   * nothing kept while comments are off (`setEnabled`).
+   */
+  saveBranch(owner: string, target: BranchTarget, comment: string): string | null {
+    if (!this.enabled) return null;
+    this.refresh(owner);
+    const text = comment.trim();
+    const comments = this.stored(owner);
+    const existing = branchCommentAt(comments.filter(isBranchEntry), target);
+    if (text === "") {
+      if (existing) this.write(owner, comments.filter((c) => c !== existing));
+      return null;
+    }
+    if (existing?.comment === text) return existing.id;
+    const id = newId();
+    const wanted = existing?.anchor ?? target.anchor ?? branchAnchor(target);
+    const anchor = existing === undefined && comments.some((c) => c.anchor === wanted) ? `${wanted}~${id}` : wanted;
+    const { path, label, lines, source, place } = target;
+    const next: BranchComment = { kind: "branch", id, anchor, path, label, lines, source, place, created: existing?.created ?? this.now(), comment: text };
+    this.write(owner, existing ? comments.map((c) => c === existing ? next : c) : [...comments, next]);
+    return next.id;
+  }
+
+  /**
+   * Moves a branch comment to `lines` of the version `place`, where its text was found again in a later comparison:
+   * lines and commit are rewritten together. It keeps its old anchor when another comment already holds the new one.
+   * An unknown id, or the lines it already has, is no change; nor is any move while comments are off (`setEnabled`).
+   */
+  moveBranch(owner: string, id: string, to: { lines: LineRange; place: BranchPlace }): void {
+    if (!this.enabled) return;
+    this.refresh(owner);
+    const comments = this.stored(owner);
+    const moved = comments.find((c): c is BranchComment => isBranchEntry(c) && c.id === id);
+    if (moved === undefined || (moved.lines[0] === to.lines[0] && moved.lines[1] === to.lines[1])) return;
+    const anchor = branchAnchor({ ...moved, ...to });
+    const taken = comments.some((c) => c.id !== id && c.anchor === anchor);
+    const next: BranchComment = { ...moved, lines: to.lines, place: to.place, anchor: taken ? moved.anchor : anchor };
     this.write(owner, comments.map((c) => c === moved ? next : c));
   }
 

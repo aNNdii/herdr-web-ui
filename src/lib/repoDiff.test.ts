@@ -36,6 +36,7 @@ describe("repository diff words", () => {
   it("maps the routes' refusals and never shows git's own words", () => {
     expect(diffErrorMessage(t, new ApiError("/api/workspace/diff/files", 409, "fatal: not a git repository", "not_a_repository"))).toBe("This folder is not in a git repository.");
     expect(diffErrorMessage(t, new ApiError("/api/workspace/diff/files", 404, "no such commit", "revision_not_found"))).toBe("No commit by that name.");
+    expect(diffErrorMessage(t, new ApiError("/api/workspace/diff/files", 409, "base and head share no history", "no_merge_base"))).toBe("Base and head share no history.");
     expect(diffErrorMessage(t, new ApiError("/api/workspace/diff/files", 404, "Not found", "not_found"))).toBe("This PC's bridge cannot show changes yet.");
     expect(diffErrorMessage(t, new ApiError("/api/workspace/diff/files", 403, "watch only", "read_only"))).toBe("This device can only watch.");
     expect(diffErrorMessage(t, new ApiError("/api/workspace/diff/files", 504, "deadline", "git_timeout"))).toBe("git took too long to answer.");
