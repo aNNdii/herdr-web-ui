@@ -23,6 +23,14 @@
  * The tree's column starts at its default width and has a grip on its right edge: a drag, the arrow keys, Home and
  * End move it, a double-click resets it, and only a real move stores a width. A stored width wider than the window
  * allows is drawn narrower and kept; a folded tree stays folded; a phone has no grip.
+ *
+ * Branches, on a repository of their own: Compare and Base load the comparison from their merge base at once, the
+ * keyboard drives them (filter, arrows, Enter on a branch or on free text, Escape for the list alone), and a refused
+ * name is said under its field. A tap on an added, an unchanged and a removed line, in the unified and the split view,
+ * each saves a comment whose quote names the version (`@ feat/x (hash) · worktree …`, or the base at the merge base);
+ * the checks read the row numbers branch comments are placed by (unified: new numbers, a removed row its old one;
+ * split: old numbers on the left). On a 390×844 phone the fields stack, a tap opens the list, which scrolls alone and stays in the visible area
+ * over a keyboard, and a tap on a branch chooses and loads it.
  */
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
@@ -30,8 +38,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { chromium, type Page } from "playwright-core";
 import { build as viteBuild } from "vite";
-import { repoDiffResponse } from "../server/repo-diff.ts";
+import { repoDiffResponse, type RepoDiffRoute } from "../server/repo-diff.ts";
 import { serveStatic } from "../server/static.ts";
+import { branchQuote, type BranchComment } from "../src/lib/branchComments.ts";
 
 process.env["GIT_CONFIG_GLOBAL"] = "/dev/null";
 process.env["GIT_CONFIG_NOSYSTEM"] = "1";
@@ -72,14 +81,55 @@ function fixture(): string {
   return repo;
 }
 
+/** The file a branch changes: numbered lines, so each row's number can be read from its text. */
+const BRANCH_FILE = "src/a.ts";
+/** The pane whose review shows the branch fixture. */
+const BRANCH_PANE = "pane-branches";
+const numbered = (count: number): string[] => Array.from({ length: count }, (_, index) => `export const line${index + 1} = ${index + 1};`);
+/** Branches enough that the field's list scrolls on a phone. */
+const TOPICS = Array.from({ length: 40 }, (_, index) => `topic/${String(index).padStart(2, "0")}`);
+
+/**
+ * A repository checked out on `feat/x`, which branched from `main`: it adds two lines after line 5, changes line 10
+ * and removes line 20 of {@link BRANCH_FILE}, so a line after the addition has a new number 2 above its old one. `main`
+ * went on after the fork (`next.ts`), which a comparison from the merge base leaves out. `other` adds `other.ts` and is
+ * checked out in a worktree of its own; the topic branches sit on the fork.
+ */
+function branchFixture(): { repo: string; worktree: string; fork: string } {
+  const branches = join(root, "branches"), worktree = join(root, "wt-other");
+  mkdirSync(join(branches, "src"), { recursive: true });
+  git(branches, "init", "-q", "-b", "main");
+  const lines = numbered(30);
+  writeFileSync(join(branches, BRANCH_FILE), `${lines.join("\n")}\n`);
+  writeFileSync(join(branches, "next.ts"), "one\n");
+  git(branches, "add", ".");
+  git(branches, "commit", "-q", "-m", "first");
+  const fork = git(branches, "rev-parse", "HEAD").trim();
+  for (const topic of TOPICS) git(branches, "branch", topic);
+  git(branches, "branch", "other");
+  writeFileSync(join(branches, "next.ts"), "two\n");
+  git(branches, "commit", "-q", "-am", "main goes on");
+  git(branches, "switch", "-q", "-c", "feat/x", fork);
+  const changed = [...lines.slice(0, 5), "export const added1 = 1;", "export const added2 = 2;", ...lines.slice(5, 9), "export const line10 = 100;", ...lines.slice(10, 19), ...lines.slice(20)];
+  writeFileSync(join(branches, BRANCH_FILE), `${changed.join("\n")}\n`);
+  git(branches, "commit", "-q", "-am", "feature");
+  git(branches, "worktree", "add", "-q", worktree, "other");
+  writeFileSync(join(worktree, "other.ts"), "other\n");
+  git(worktree, "add", ".");
+  git(worktree, "commit", "-q", "-m", "other");
+  return { repo: branches, worktree, fork };
+}
+
 const repo = fixture();
+const branchRepo = branchFixture();
 let browser: Awaited<ReturnType<typeof chromium.launch>> | undefined;
 let server: ReturnType<typeof Bun.serve> | undefined;
 
 /** The routes the Review reads, on a stand-in that maps its one pane to the fixture repository. */
 async function api(url: URL): Promise<Response | null> {
-  const diff = /^\/api\/workspace\/diff\/(files|file|tree)$/.exec(url.pathname);
-  if (diff) return repoDiffResponse(diff[1] as "files" | "file" | "tree", repo, url.searchParams);
+  const diff = /^\/api\/workspace\/diff\/(files|file|tree|branches)$/.exec(url.pathname);
+  // the branch fixture's pane reviews its repository, every other pane the deep one
+  if (diff) return repoDiffResponse(diff[1] as RepoDiffRoute, url.searchParams.get("pane_id") === BRANCH_PANE ? branchRepo.repo : repo, url.searchParams);
   // the file routes the opened file is read through: an image as such, the rest as text
   const fs = /^\/api\/fs\/(stat|file)$/.exec(url.pathname);
   if (fs) {
@@ -706,7 +756,292 @@ try {
     assert.deepEqual(errors, [], "column: no page errors");
     await context.close();
   }
-  console.log("review tree: browser OK (front folders give way first to their first letter, the last folder and file names keep their end, short names whole; a level indents about 14px; Viewed is the file's last tool in every view; folders keep their state as viewed files drop out; every file viewed leaves a note and a way to show them again; a viewed file's check stays in sight, its name faded; rows show their path as a tooltip; the column drags, steps and resets, its limits drawn and never stored)");
+  // Branches: the fields load the comparison from the merge base at once, a keyboard drives them, and every line of the
+  // diff takes a comment, in both layouts, whose head names the version it is on
+  {
+    const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+    await context.addInitScript(() => localStorage.setItem("herdr-web-ui:settings", JSON.stringify({ language: "en", commentMode: true, mobileCommentGesture: "tap", diffStyle: "unified" })));
+    const page = await context.newPage();
+    page.setDefaultTimeout(15_000);
+    const errors: string[] = [];
+    page.on("pageerror", (error) => errors.push(error.message));
+    // the unknown name below is refused with a 404, which the browser logs
+    page.on("console", (message) => { if (message.type() === "error" && !message.text().includes("status of 404")) errors.push(`console: ${message.text()}`); });
+    // the lists the review asks for, as `scope head`: the working tree's once per open, a branch comparison once per choice
+    const asked: string[] = [];
+    page.on("request", (request) => {
+      const url = new URL(request.url());
+      if (url.pathname === "/api/workspace/diff/files" && url.searchParams.get("pane_id") === BRANCH_PANE) asked.push(`${url.searchParams.get("scope")} ${url.searchParams.get("head") ?? ""}`.trim());
+    });
+    const treed = page.waitForResponse((response) => {
+      const url = new URL(response.url());
+      return url.pathname === "/api/workspace/diff/tree" && url.searchParams.get("pane_id") === BRANCH_PANE;
+    });
+    await page.goto(`http://127.0.0.1:${server.port}/`);
+    await page.evaluate(([pane, directory]) => window.reviewTreeQA.open(pane!, directory!), [BRANCH_PANE, branchRepo.repo]);
+    const dialog = page.getByRole("dialog", { name: "Review", exact: true });
+    await dialog.waitFor();
+    // the tree's answer names the branch checked out, which leaves the working tree's comparison as it was
+    await treed;
+    await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+    assert.deepEqual(asked, ["workspace"], "the working tree's list loads once; the tree's answer does not load it again");
+    await dialog.getByRole("button", { name: "Branches", exact: true }).click();
+    const compare = dialog.getByRole("combobox", { name: "Compare", exact: true }), base = dialog.getByRole("combobox", { name: "Base", exact: true });
+    const heading = page.locator(".review-meta-branch");
+    const comparing = async (head: string, files: string[]): Promise<void> => {
+      await heading.getByText(`${head} → main`, { exact: true }).waitFor();
+      await listedUntil(page, `${head} → main lists its own changes`, (shown) => JSON.stringify(shown) === JSON.stringify(files));
+    };
+    // the defaults, loaded at once: the branch checked out and main; main's own commit after the fork is not listed
+    assert.equal(await compare.inputValue(), "feat/x", "Compare starts on the branch checked out");
+    assert.equal(await base.inputValue(), "main", "Base starts on main");
+    await comparing("feat/x", [BRANCH_FILE]);
+
+    // the keyboard: a click opens the list, typing filters it, the arrows move, Escape closes only the list
+    await compare.click();
+    assert.equal(await compare.getAttribute("aria-expanded"), "true", "a click opens the list");
+    const listbox = page.getByRole("listbox", { name: "Compare", exact: true });
+    const here = listbox.getByRole("option", { name: /^feat\/x/ });
+    assert.equal((await here.locator(".branch-combobox-worktree").textContent()), "this worktree", "the review's own checkout is this worktree");
+    const elsewhere = listbox.getByRole("option", { name: /^other/ }).locator(".branch-combobox-worktree");
+    assert.deepEqual([await elsewhere.textContent(), await elsewhere.getAttribute("title")], ["wt-other", branchRepo.worktree], "a branch checked out elsewhere names its worktree, its path as the tooltip");
+    await page.keyboard.type("othe");
+    assert.deepEqual(await listbox.getByRole("option").allTextContents(), ["otherwt-other"], "typing filters the list");
+    await page.keyboard.press("ArrowDown");
+    const active = await compare.getAttribute("aria-activedescendant");
+    assert.ok(active !== null && (await page.locator(`[id="${active}"]`).textContent())!.startsWith("other"), `ArrowDown makes the match active: ${active}`);
+    await page.keyboard.press("Escape");
+    assert.equal(await compare.getAttribute("aria-expanded"), "false", "Escape closes the list");
+    assert.ok(await dialog.isVisible(), "Escape on an open list leaves the review open");
+    assert.equal(await compare.inputValue(), "feat/x", "a closed list puts back the name chosen");
+    // Enter takes the active branch and loads it
+    await compare.selectText();
+    await page.keyboard.type("othe");
+    await page.keyboard.press("ArrowDown");
+    await page.keyboard.press("Enter");
+    await comparing("other", ["other.ts"]);
+    // the same name chosen again loads again: the only way to pick up commits made since
+    const again = page.waitForRequest((request) => {
+      const url = new URL(request.url());
+      return url.pathname === "/api/workspace/diff/files" && url.searchParams.get("head") === "other";
+    }, { timeout: 3000 });
+    await compare.selectText();
+    await page.keyboard.type("other");
+    await page.keyboard.press("Enter");
+    await again;
+    await comparing("other", ["other.ts"]);
+    // Enter on free text takes the text as typed; an unknown one is refused under its field, which stays editable
+    await base.selectText();
+    await page.keyboard.type("nope");
+    await page.keyboard.press("Enter");
+    const refusal = page.locator(".branch-combobox", { has: page.getByRole("combobox", { name: "Base", exact: true }) }).getByRole("alert");
+    assert.equal(await refusal.textContent(), "No commit by that name.", "an unknown base is refused under Base");
+    assert.equal(await base.getAttribute("aria-invalid"), "true", "the refused field says so");
+    await base.selectText();
+    await page.keyboard.type("main");
+    await page.keyboard.press("Enter");
+    await compare.selectText();
+    await page.keyboard.type("feat/x");
+    await page.keyboard.press("Enter");
+    await comparing("feat/x", [BRANCH_FILE]);
+    assert.equal(await refusal.count(), 0, "a known base clears the refusal");
+
+    // comments on every kind of line: a tap (the touch gesture, here from a desktop) on a row of the diff
+    const headHash = git(branchRepo.repo, "rev-parse", "feat/x").trim();
+    await page.locator(`.review-tree [data-item-path="${BRANCH_FILE}"]:not([data-file-tree-sticky-row])`).click();
+    await page.locator(".review-file[data-mode='diff'] .repo-diff-styles").waitFor();
+    /** The rows drawn for a line's text, in the shadow root: their number, kind, and whether they are in the split view's left column. */
+    const rowsOf = async (text: string): Promise<{ line: number; type: string; left: boolean }[]> => page.evaluate((text) =>
+      [...document.querySelector(".review-file diffs-container")?.shadowRoot?.querySelectorAll<HTMLElement>("[data-line][data-line-type]") ?? []]
+        .filter((row) => row.textContent === text)
+        .map((row) => ({ line: Number(row.dataset["line"]), type: row.dataset["lineType"] ?? "", left: row.closest("[data-deletions]") !== null })), text);
+    const rowsUntil = async (text: string, count: number): Promise<{ line: number; type: string; left: boolean }[]> => {
+      const started = Date.now();
+      for (;;) {
+        const rows = await rowsOf(text);
+        if (rows.length >= count) return rows;
+        assert.ok(Date.now() - started < 10_000, `the diff draws ${count} row(s) of ${text}: ${JSON.stringify(rows)}`);
+        await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+      }
+    };
+    const line = (n: number): string => `export const line${n} = ${n};`;
+    /** The branch comments the store holds for the pane, in the order they were saved. */
+    const stored = async (): Promise<BranchComment[]> => page.evaluate(() => {
+      const found: BranchComment[] = [];
+      for (let index = 0; index < localStorage.length; index++) {
+        const key = localStorage.key(index)!;
+        if (!key.startsWith("herdr-web-ui:block-comments:")) continue;
+        for (const comment of (JSON.parse(localStorage.getItem(key)!) as { comments: BranchComment[] }).comments) if (comment.kind === "branch") found.push(comment);
+      }
+      return found.sort((a, b) => a.created - b.created);
+    });
+    /** A tap on the row of `text` (in the left column, or not), the comment written and saved: the stored comment's quote, as a send writes it. */
+    const commentOn = async (text: string, left: boolean, note: string): Promise<{ quote: string; comment: BranchComment }> => {
+      const before = (await stored()).length;
+      const tapped = await page.evaluate(([text, left]) => {
+        const row = [...document.querySelector(".review-file diffs-container")!.shadowRoot!.querySelectorAll<HTMLElement>("[data-line][data-line-type]")]
+          .find((one) => one.textContent === text && (one.closest("[data-deletions]") !== null) === left);
+        if (row === undefined) return false;
+        const box = row.getBoundingClientRect();
+        const at = { bubbles: true, composed: true, pointerType: "touch", isPrimary: true, clientX: box.left + 40, clientY: box.top + box.height / 2 };
+        row.dispatchEvent(new PointerEvent("pointerdown", at));
+        row.dispatchEvent(new PointerEvent("pointerup", at));
+        return true;
+      }, [text, left] as const);
+      assert.ok(tapped, `a row of ${text} is drawn${left ? " in the left column" : ""}`);
+      const field = page.locator("[data-draft] textarea");
+      await field.fill(note);
+      await field.press("Enter");
+      await field.waitFor({ state: "detached" });
+      const all = await stored();
+      assert.equal(all.length, before + 1, `a comment on ${text} is stored`);
+      const comment = all.at(-1)!;
+      return { quote: branchQuote(comment), comment };
+    };
+    const onHead = (lines: string, text: string): string => `> ${BRANCH_FILE}:${lines} @ feat/x (${headHash.slice(0, 7)}) · worktree ${branchRepo.repo}\n> ${text}`;
+    const onBase = (lines: string, text: string): string => `> ${BRANCH_FILE}:${lines} @ main (${branchRepo.fork.slice(0, 7)})\n> ${text}`;
+
+    // unified: a context row carries the new number, a removed row the old one
+    assert.deepEqual(await rowsUntil(line(12), 1), [{ line: 14, type: "context", left: false }], "unified: an unchanged row carries its new number");
+    assert.deepEqual(await rowsOf(line(20)), [{ line: 20, type: "change-deletion", left: false }], "unified: a removed row carries its old number");
+    assert.equal((await commentOn("export const added1 = 1;", false, "Why two?")).quote, onHead("6", "export const added1 = 1;"), "unified: a comment on an added line");
+    assert.equal((await commentOn(line(12), false, "Still needed?")).quote, onHead("14", line(12)), "unified: a comment on an unchanged line is on the head's line");
+    const removed = await commentOn(line(20), false, "Why removed?");
+    assert.equal(removed.quote, onBase("20", line(20)), "unified: a comment on a removed line names the base at the merge base");
+    // the removed line's comment is drawn under its own row
+    const under = await page.evaluate(([text, note]) => {
+      const row = [...document.querySelector(".review-file diffs-container")!.shadowRoot!.querySelectorAll<HTMLElement>("[data-line][data-line-type]")].find((one) => one.textContent === text)!;
+      const card = [...document.querySelectorAll<HTMLElement>(".review-file .review-note")].find((one) => one.textContent?.includes(note));
+      return card === undefined ? null : { row: row.getBoundingClientRect().bottom, card: card.getBoundingClientRect().top };
+    }, [line(20), "Why removed?"] as const);
+    assert.ok(under !== null && under.card >= under.row - 1 && under.card <= under.row + 16, `unified: the removed line's comment is drawn under its row: ${JSON.stringify(under)}`);
+    if (evidence) await page.locator(".review-file").screenshot({ path: join(evidence, "review-branch-unified.png") });
+
+    // split: the left column carries the old numbers, the right the new
+    await page.locator(".repo-diff-styles").getByRole("button", { name: "Split" }).click();
+    const split = await rowsUntil(line(8), 2);
+    assert.deepEqual(split.map(({ line: n, left }) => [n, left]).sort(), [[10, false], [8, true]].sort(), `split: an unchanged line is 8 on the left, 10 on the right: ${JSON.stringify(split)}`);
+    assert.deepEqual((await rowsOf(line(10))).map(({ line: n, left }) => [n, left]), [[10, true]], "split: the removed line is on the left, by its old number");
+    assert.equal((await commentOn("export const line10 = 100;", false, "Why 100?")).quote, onHead("12", "export const line10 = 100;"), "split: a comment on an added line");
+    assert.equal((await commentOn(line(8), true, "Left side.")).quote, onHead("10", line(8)), "split: an unchanged line picked on the left is the head's line");
+    assert.equal((await commentOn(line(10), true, "Old value.")).quote, onBase("10", line(10)), "split: a comment on a removed line");
+    if (evidence) await page.locator(".review-file").screenshot({ path: join(evidence, "review-branch-split.png") });
+    // every comment is drawn in the diff
+    for (const note of ["Why two?", "Still needed?", "Why removed?", "Why 100?", "Left side.", "Old value."]) {
+      await page.locator(".review-file .review-note", { hasText: note }).waitFor();
+    }
+    assert.deepEqual(errors, [], "branches: no page errors");
+    await context.close();
+  }
+  // Branches while the branch list is still on its way: free text loads at once, without waiting for the list
+  {
+    const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+    await context.addInitScript(() => localStorage.setItem("herdr-web-ui:settings", JSON.stringify({ language: "en" })));
+    const page = await context.newPage();
+    page.setDefaultTimeout(15_000);
+    const errors: string[] = [];
+    page.on("pageerror", (error) => errors.push(error.message));
+    let release = (): void => {};
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    await page.route((url) => url.pathname === "/api/workspace/diff/branches", async (route) => { await held; await route.continue(); });
+    await page.goto(`http://127.0.0.1:${server.port}/`);
+    await page.evaluate(([pane, directory]) => window.reviewTreeQA.open(pane!, directory!), [BRANCH_PANE, branchRepo.repo]);
+    const dialog = page.getByRole("dialog", { name: "Review", exact: true });
+    await dialog.waitFor();
+    await dialog.getByRole("button", { name: "Branches", exact: true }).click();
+    const compare = dialog.getByRole("combobox", { name: "Compare", exact: true });
+    await compare.selectText();
+    await page.keyboard.type("other");
+    await page.keyboard.press("Enter");
+    await page.locator(".review-meta-branch").getByText("other → main", { exact: true }).waitFor();
+    await listedUntil(page, "free text loads while the branch list is held", (shown) => JSON.stringify(shown) === JSON.stringify(["other.ts"]));
+    release();
+    assert.deepEqual(errors, [], "branches, list held: no page errors");
+    await context.close();
+  }
+  // Branches on a phone: the fields stacked, a tap opens the list, which scrolls alone and stays in the visible area as
+  // a keyboard takes the bottom, and a tap on a branch chooses and loads it
+  {
+    const context = await browser.newContext({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true });
+    await context.addInitScript(() => localStorage.setItem("herdr-web-ui:settings", JSON.stringify({ language: "en" })));
+    const page = await context.newPage();
+    page.setDefaultTimeout(15_000);
+    const errors: string[] = [];
+    page.on("pageerror", (error) => errors.push(error.message));
+    page.on("console", (message) => { if (message.type() === "error") errors.push(`console: ${message.text()}`); });
+    await page.goto(`http://127.0.0.1:${server.port}/`);
+    await page.evaluate(([pane, directory]) => window.reviewTreeQA.open(pane!, directory!), [BRANCH_PANE, branchRepo.repo]);
+    const dialog = page.getByRole("dialog", { name: "Review", exact: true });
+    await dialog.waitFor();
+    await dialog.getByRole("button", { name: "Branches", exact: true }).tap();
+    const compare = dialog.getByRole("combobox", { name: "Compare", exact: true }), base = dialog.getByRole("combobox", { name: "Base", exact: true });
+    await page.locator(".review-meta-branch").getByText("feat/x → main", { exact: true }).waitFor();
+    const [top, bottom, pane] = [(await compare.boundingBox())!, (await base.boundingBox())!, (await page.locator(".review-tree-pane").boundingBox())!];
+    assert.ok(bottom.y >= top.y + top.height && Math.abs(bottom.x - top.x) <= 0.5 && Math.abs(bottom.width - top.width) <= 0.5, `phone: Base stands under Compare: ${JSON.stringify([top, bottom])}`);
+    assert.ok(top.width >= pane.width - 48, `phone: the fields take the column's width: ${top.width} of ${pane.width}`);
+
+    await compare.tap();
+    assert.equal(await compare.getAttribute("aria-expanded"), "true", "phone: a tap opens the list");
+    const list = page.getByRole("listbox", { name: "Compare", exact: true });
+    /** The scroll places of the list, the page and every scroll box of the review. */
+    const places = async (): Promise<{ list: number; others: number[] }> => page.evaluate(() => ({
+      list: document.querySelector<HTMLElement>(".branch-combobox-list:not(:empty)")!.scrollTop,
+      others: [document.scrollingElement!.scrollTop, ...[...document.querySelectorAll<HTMLElement>(".review-dialog, .review-dialog *")].filter((one) => !one.classList.contains("branch-combobox-list")).map((one) => one.scrollTop)],
+    }));
+    // the list where it settled: placed by its field once open, a frame after the tap
+    let box = (await list.boundingBox())!;
+    for (let frame = 0; frame < 30; frame++) {
+      await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+      const now = (await list.boundingBox())!;
+      if (JSON.stringify(now) === JSON.stringify(box)) break;
+      box = now;
+    }
+    const before = await places();
+    // a finger's swipe up the list, then a long one past its end: the scroll stays in the list
+    const cdp = await context.newCDPSession(page);
+    const swipe = async (distance: number): Promise<void> => {
+      const x = box.x + box.width / 2, from = box.y + box.height - 20;
+      await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x, y: from }] });
+      for (let step = 1; step <= 10; step++) await cdp.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x, y: from - distance * step / 10 }] });
+      await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+      await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+    };
+    await swipe(Math.min(300, box.height - 40));
+    assert.ok((await places()).list > before.list, "phone: a swipe scrolls the list");
+    for (let time = 0; time < 4; time++) await swipe(box.height - 40);
+    await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+    const after = await places();
+    assert.ok(after.list > before.list, `phone: the list scrolls: ${before.list} → ${after.list}`);
+    assert.deepEqual(after.others, before.others, "phone: nothing under the list scrolls with it");
+    if (evidence) await page.screenshot({ path: join(evidence, "review-branch-phone-list.png") });
+
+    // a soft keyboard takes the bottom of the screen: the list stays above it
+    await page.setViewportSize({ width: 390, height: 480 });
+    const menuInView = async (): Promise<{ top: number; bottom: number; height: number; view: number }> => page.evaluate(() => {
+      const menu = document.querySelector<HTMLElement>(".branch-combobox-menu:not([hidden])")!.getBoundingClientRect();
+      const view = window.visualViewport;
+      return { top: menu.top, bottom: menu.bottom, height: menu.height, view: view === null ? window.innerHeight : view.offsetTop + view.height };
+    });
+    const started = Date.now();
+    let inView = await menuInView();
+    while (inView.bottom > inView.view + 0.5 && Date.now() - started < 5_000) {
+      await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+      inView = await menuInView();
+    }
+    assert.ok(inView.top >= -0.5 && inView.bottom <= inView.view + 0.5 && inView.height >= 80, `phone: the open list stays in the visible area over a keyboard: ${JSON.stringify(inView)}`);
+    if (evidence) await page.screenshot({ path: join(evidence, "review-branch-phone-keyboard.png") });
+    await page.setViewportSize({ width: 390, height: 844 });
+
+    // a tap on a branch chooses it, closes the list and loads it
+    await list.getByRole("option", { name: /^other/ }).tap();
+    assert.equal(await compare.getAttribute("aria-expanded"), "false", "phone: a tap on a branch closes the list");
+    assert.equal(await compare.inputValue(), "other", "phone: the tapped branch is chosen");
+    await page.locator(".review-meta-branch").getByText("other → main", { exact: true }).waitFor();
+    await listedUntil(page, "phone: the tapped branch's changes load", (shown) => JSON.stringify(shown) === JSON.stringify(["other.ts"]));
+    assert.deepEqual(errors, [], "branches on a phone: no page errors");
+    await context.close();
+  }
+  console.log("review tree: browser OK (Branches load from the merge base, the fields work by keyboard and by touch on a phone, and every line of a branch diff takes a comment that names its version, in unified and split; front folders give way first to their first letter, the last folder and file names keep their end, short names whole; a level indents about 14px; Viewed is the file's last tool in every view; folders keep their state as viewed files drop out; every file viewed leaves a note and a way to show them again; a viewed file's check stays in sight, its name faded; rows show their path as a tooltip; the column drags, steps and resets, its limits drawn and never stored)");
 } finally {
   await browser?.close(); server?.stop(true); rmSync(root, { recursive: true, force: true });
 }

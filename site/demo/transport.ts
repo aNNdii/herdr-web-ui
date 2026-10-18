@@ -13,7 +13,7 @@
  * What does not: files, images, push and remote PCs, which need a real machine.
  */
 import type { AgentIntegration, AgentStatus, ConversationTurn, IntegrationsResponse, Machine, MachineEvent, PaneDirection, PaneFindMatch, PaneFindRequest, PanePlan, PaneResized, PaneSplit, PaneSubagents, PaneSwapped, PaneZoomed, PendingMessage, PlanStep, PluginActionResult, PluginActions, PluginActionsResponse, PortalStatus, ServerMessage, SessionSnapshot, TabMoved, UsageReport, WorkspaceCreated, WorkspaceInfo, WorktreeEntry, WorktreeListing, WorktreeOpened, WorktreeRemoved } from "../../shared/protocol.ts";
-import type { RepoDiffFile, RepoDiffFileList, RepoDiffFilePatch, RepoDiffRepository, RepoDiffScope, RepoDiffTree } from "../../shared/protocol.ts";
+import type { RepoBranch, RepoBranchList, RepoDiffFile, RepoDiffFileList, RepoDiffFilePatch, RepoDiffRepository, RepoDiffScope, RepoDiffTree } from "../../shared/protocol.ts";
 import { VOICE_DEFAULTS, type VoiceStatus } from "../../shared/voice.ts";
 import { isAgentName } from "../../shared/agent-name.ts";
 import { neighborPane } from "../../src/lib/layoutMap.ts";
@@ -409,7 +409,7 @@ function answerPrompt(paneId: string, optionIndex: number | undefined): void {
 
 const json = (body: unknown, status = 200, headers: Record<string, string> = {}) =>
   new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json; charset=utf-8", ...headers } });
-const error = (code: string, message: string, status: number) => json({ error: { code, message } }, status);
+const error = (code: string, message: string, status: number, param?: "base" | "head") => json({ error: { code, message, ...(param ? { param } : {}) } }, status);
 
 async function bodyOf(init: RequestInit | undefined, input: RequestInfo | URL): Promise<Record<string, unknown>> {
   try {
@@ -435,6 +435,17 @@ const DEMO_FILES = ["src/routes/payments.ts", "src/lib/idempotency.ts", "src/met
  * The demo repository's uncommitted work, as GET /api/workspace/diff/* answers it: one file of
  * each kind a diff view has to draw. The patches are what git would print, hunk counts included.
  */
+const DEMO_REMOTE_BRANCHES = ["origin/main", "origin/next"];
+/** where every demo branch forked off the others: a branch comparison's `merge_base` */
+const DEMO_MERGE_BASE = "7d3b9e2f1a6c4b8d0e5f7a9c1b3d5e7f9a2c4e6b";
+
+/** A made-up but stable full hash for a demo branch, so a review has hashes to hold on to. */
+function demoHash(name: string): string {
+  let hash = 0x811c9dc5;
+  for (const char of name) hash = Math.imul(hash ^ char.charCodeAt(0), 0x01000193) >>> 0;
+  return hash.toString(16).padStart(8, "0").repeat(5);
+}
+
 const DEMO_DIFF_LIMITS = { max_files: 2000, max_list_bytes: 2 * 1024 * 1024, max_patch_bytes: 1024 * 1024, context_lines: 3 };
 const DEMO_DIFF: { file: RepoDiffFile; patch: string | null }[] = [
   { file: { path: "docs/checkout-flow.png", old_path: null, status: "modified", additions: null, deletions: null, binary: true }, patch: null },
@@ -1048,7 +1059,7 @@ async function route(url: URL, method: string, init: RequestInit | undefined, in
   if (path === "/api/voice") return json({ configured: false, source: null, ...VOICE_DEFAULTS } satisfies VoiceStatus, 200, { "cache-control": "no-store" });
   if (path === "/api/voice/config") return error("demo", "the demo saves no OpenAI key", 409);
   if (path === "/api/voice/transcribe") return error("voice_not_configured", "transcription is unavailable in the demo", 409);
-  if (path === "/api/workspace/diff/files" || path === "/api/workspace/diff/file" || path === "/api/workspace/diff/tree") {
+  if (path === "/api/workspace/diff/files" || path === "/api/workspace/diff/file" || path === "/api/workspace/diff/tree" || path === "/api/workspace/diff/branches") {
     const root = snapshot().panes.find((pane) => pane.pane_id === paneId)?.cwd ?? query.get("directory") ?? "/home/demo/checkout-api";
     // a worktree's checkout is on its own branch, as the sidebar and the footer say
     const branch = [...repositories.values()].flatMap((repo) => repo.checkouts).find((checkout) => checkout.path === root)?.branch ?? "main";
@@ -1058,14 +1069,38 @@ async function route(url: URL, method: string, init: RequestInit | undefined, in
       const paths = [...new Set([...DEMO_FILES, ...DEMO_DIFF.filter((entry) => entry.file.status !== "deleted").map((entry) => entry.file.path)])].sort();
       return json({ repository, paths, ignored: [], truncated: false, limits: { max_files: DEMO_DIFF_LIMITS.max_files, max_list_bytes: DEMO_DIFF_LIMITS.max_list_bytes } } satisfies RepoDiffTree);
     }
+    // the repository's branches: each checkout's own (with its folder), then two of origin's
+    const repo = [...repositories.values()].find((candidate) => candidate.checkouts.some((checkout) => checkout.path === root));
+    const local = (repo?.checkouts ?? [{ path: root, branch }]).flatMap((checkout): RepoBranch[] => checkout.branch === null ? [] : [{ name: checkout.branch, remote: false, worktree: checkout.path }]);
+    const branches = [...local, ...DEMO_REMOTE_BRANCHES.map((name): RepoBranch => ({ name, remote: true, worktree: null }))];
+    if (path === "/api/workspace/diff/branches") {
+      return json({ repository, branches, default_base: "origin/main", truncated: false, limits: { max_branches: 1000 } } satisfies RepoBranchList);
+    }
     const scope = query.get("scope") || "workspace";
     if (scope !== "workspace" && scope !== "staged" && scope !== "commit") return error("invalid_scope", "scope must be workspace, staged or commit", 400);
-    // the demo keeps no history to name commits in
-    if (scope === "commit") return error("revision_not_found", "the demo repository has no commits to compare", 404);
-    // everything in the demo is unstaged work
-    const changed = scope === "workspace" ? DEMO_DIFF : [];
-    const compared: RepoDiffScope = scope;
-    const shared = { repository, scope: compared, base: null, head: null };
+    const fromMergeBase = query.get("merge_base") === "1";
+    if (scope !== "commit" && fromMergeBase) return error("invalid_scope", "merge_base applies to scope=commit only", 400);
+    let compared: { base: string | null; head: string | null; merge_base?: string } = { base: null, head: null };
+    if (scope === "commit") {
+      // a branch's hash is made up but stable; HEAD and the checkout's branch are the repository's head
+      const resolve = (name: string): string | null => {
+        if (name === "HEAD" || name === branch) return repository.head;
+        if (branches.some((candidate) => candidate.name === name)) return demoHash(name);
+        return /^[0-9a-f]{40}$/.test(name) ? name : null;
+      };
+      const baseName = query.get("base");
+      if (baseName === null) return error("invalid_revision", "scope=commit needs a base revision", 400, "base");
+      const headName = query.get("head") ?? "HEAD";
+      const base = resolve(baseName), head = resolve(headName);
+      if (base === null) return error("revision_not_found", `${baseName} names no commit in this repository`, 404, "base");
+      if (head === null) return error("revision_not_found", `${headName} names no commit in this repository`, 404, "head");
+      // a branch against itself forks at its own tip, so nothing changed
+      compared = { base, head, ...(fromMergeBase ? { merge_base: base === head ? head : DEMO_MERGE_BASE } : {}) };
+    }
+    // everything in the demo is unstaged work; a branch comparison shows the same changes, committed
+    const committed = DEMO_DIFF.map((entry) => entry.file.status === "untracked" ? { ...entry, file: { ...entry.file, status: "added" as const } } : entry);
+    const changed = scope === "workspace" ? DEMO_DIFF : scope === "commit" && compared.head !== (compared.merge_base ?? compared.base) ? committed : [];
+    const shared = { repository, scope: scope as RepoDiffScope, ...compared };
     if (path === "/api/workspace/diff/files") {
       return json({ ...shared, files: changed.map((entry) => entry.file), total: changed.length, truncated: false, limits: { max_files: DEMO_DIFF_LIMITS.max_files, max_list_bytes: DEMO_DIFF_LIMITS.max_list_bytes } } satisfies RepoDiffFileList);
     }

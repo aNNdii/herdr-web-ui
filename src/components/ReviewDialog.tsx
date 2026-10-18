@@ -1,18 +1,20 @@
-import { useEffect, useMemo, useState, type CSSProperties } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { ArrowLeft, Eye, EyeOff, GitBranch, PanelLeft, PanelLeftClose, X } from "lucide-react";
 
 import "./ReviewDialog.css";
+import { BranchCombobox } from "./BranchCombobox.tsx";
 import { RenderBoundary } from "./RenderBoundary.tsx";
 import { ReviewFile, ReviewLoading } from "./ReviewFile.tsx";
 import { ReviewTree } from "./ReviewTree.tsx";
 import { ReviewTreeResizer } from "./ReviewTreeResizer.tsx";
 
-import type { RepoDiffFile, RepoDiffFileList, RepoDiffTree } from "../../shared/protocol.ts";
+import type { RepoBranchList, RepoDiffFile, RepoDiffFileList, RepoDiffTree } from "../../shared/protocol.ts";
 import { paneStorageId } from "../../shared/machines.ts";
 import { useT } from "../lib/i18n.ts";
 import { useMachineApi, useMachineId } from "../lib/machineContext.tsx";
-import { diffErrorMessage, type RepoComparison } from "../lib/repoDiff.ts";
-import { ApiError } from "../lib/api.ts";
+import { diffErrorMessage } from "../lib/repoDiff.ts";
+import { ApiError, routeMissing } from "../lib/api.ts";
+import { branchChoices, branchDefaults, branchFieldError, branchHeading, listQuery, reviewComparison, type BranchPick, type ReviewChoice } from "../lib/branchReview.ts";
 import { storedHideViewed, storedShowIgnored, storedViewed, storeHideViewed, storeShowIgnored, storeViewed, treeMarks, type TreeMark, type ViewedFiles } from "../lib/review.ts";
 import { reviewList, type ReviewListNote } from "../lib/reviewList.ts";
 import { reviewTreeColumn, storedReviewTreeWidth } from "../lib/reviewTreeWidth.ts";
@@ -100,13 +102,17 @@ function notRepository(error: unknown): boolean {
 export function ReviewDialog({ paneId, directory, initialPath = null, onClose }: ReviewDialogProps) {
   const t = useT();
   const machineId = useMachineId();
-  const { fetchRepoDiffTree, fetchRepoDiffFiles, fetchFileInfo } = useMachineApi();
+  const { fetchRepoDiffTree, fetchRepoDiffFiles, fetchRepoBranches, fetchFileInfo } = useMachineApi();
   const surface = useFocusTrap<HTMLElement>(true);
   const narrow = useMediaQuery(SHEET_QUERY);
   // the folder whose repository (or, in none, whose own files) the left side shows: the pane's, or a shown file's
   const [base, setBase] = useState(directory);
   const [tree, setTree] = useState<Loaded<RepoDiffTree>>({ status: "pending", base: directory });
-  const [changeList, setChangeList] = useState<Loaded<RepoDiffFileList>>({ status: "pending", base: directory });
+  // the changes, for the folder and the comparison (`choice`) they were asked for
+  const [changeList, setChangeList] = useState<Loaded<RepoDiffFileList> & { choice: ReviewChoice | null }>({ status: "pending", base: directory, choice: null });
+  // the repository's branches the branch fields offer, read once per folder when Branches opens
+  const [refs, setRefs] = useState<Loaded<RepoBranchList> | null>(null);
+  const refsAsked = useRef<string | null | undefined>(undefined);
   // the file shown, by its absolute path; `decided` once its view is (opened by a path, it waits for its changes, so it
   // opens as its diff or its text and does not switch between them)
   const [file, setFile] = useState<string | null>(null);
@@ -116,9 +122,14 @@ export function ReviewDialog({ paneId, directory, initialPath = null, onClose }:
   const [query, setQuery] = useState("");
   // the changed files are the default: a changed file shows its diff, "All files" shows whole files
   const [scope, setScope] = useState<"all" | "changed">("changed");
-  // what the changes are compared with: the working tree (default), the index, or two revisions (`Branches`)
-  const [compareWith, setCompareWith] = useState<RepoComparison>({ scope: "workspace", base: null, head: null });
+  // what the changes are compared with: the working tree (default), the index, or two branches (`Branches`)
+  const [tip, setTip] = useState<"workspace" | "staged">("workspace");
   const [branchesOpen, setBranchesOpen] = useState(false);
+  // the branch fields as chosen; a field not chosen keeps its default
+  const [branchPick, setBranchPick] = useState<Partial<BranchPick> | null>(null);
+  // how often a branch was chosen: each choice resolves its names again, the same ones too (new commits since)
+  const [branchAsks, setBranchAsks] = useState(0);
+  const chooseBranches = (pick: Partial<BranchPick>): void => { setBranchPick((old) => ({ ...old, ...pick })); setBranchAsks((asks) => asks + 1); };
   const [treeShown, setTreeShown] = useState(() => !window.matchMedia(NARROW_PORTRAIT).matches);
   // the files git ignores, in All files: off until turned on (build output and dependencies are many), then kept per device
   const [showIgnored, setShowIgnored] = useState(storedShowIgnored);
@@ -127,10 +138,6 @@ export function ReviewDialog({ paneId, directory, initialPath = null, onClose }:
   const chooseHideViewed = (on: boolean): void => { storeHideViewed(on); setHideViewed(on); };
   // the tree column's width as the user dragged it, per device; null is its default width
   const [treeWidth, setTreeWidth] = useState(storedReviewTreeWidth);
-  const [baseText, setBaseText] = useState("main");
-  // Show changes with no base branch: the field says what is missing
-  const [branchMissing, setBranchMissing] = useState(false);
-  const [headText, setHeadText] = useState("");
   // the path to show (the opening's, then one a shown file links to), until it is found; one the server finds only
   // relative to the repository's root waits for the tree (`fallback`)
   const [wanted, setWanted] = useState(initialPath);
@@ -153,22 +160,54 @@ export function ReviewDialog({ paneId, directory, initialPath = null, onClose }:
     return () => { live = false; };
   }, [fetchRepoDiffTree, paneId, base, showIgnored]);
 
+  // the branches, once per folder as soon as Branches opens; an answer for another folder is left aside
+  useEffect(() => {
+    if (!branchesOpen || refsAsked.current === base) return;
+    refsAsked.current = base;
+    setRefs({ status: "pending", base });
+    fetchRepoBranches({ paneId, directory: base }).then(
+      (value) => setRefs((old) => (old?.base === base ? { status: "ready", value, base } : old)),
+      (error: unknown) => setRefs((old) => (old?.base === base ? { status: "failed", error, base } : old)),
+    );
+  }, [fetchRepoBranches, paneId, base, branchesOpen]);
+
+  const treeNow = tree.base === base ? tree : { status: "pending" as const, base };
+  const treeValue = treeNow.status === "ready" ? treeNow.value : null;
+  // the branch fields: as chosen, else the current branch against the default base, once the list (or its failure) is there
+  const refsNow = refs !== null && refs.base === base ? refs : null;
+  const choices = useMemo(() => (refsNow?.status === "ready" ? branchChoices(refsNow.value) : null), [refsNow]);
+  const fields: BranchPick = { ...branchDefaults(choices, treeValue?.repository ?? null), ...branchPick };
+  // without a list the defaults read the tree's branch; a field chosen does not wait for them (free text while the list loads)
+  const branchesReady = branchPick !== null || (refsNow !== null && refsNow.status !== "pending" && (choices !== null || treeNow.status !== "pending"));
+  const baseMissing = branchesOpen && branchesReady && fields.base.trim() === "";
+  // what is compared: nothing while the branch fields wait for their defaults or for a base. The fields count only under
+  // Branches, so the tree naming the branch later leaves the working tree's comparison (and its loaded list) as it was.
+  const picked = branchesOpen && branchesReady;
+  const pickCompare = picked ? fields.compare : "";
+  const pickBase = picked ? fields.base : "";
+  const choice = useMemo<ReviewChoice | null>(() => {
+    if (!branchesOpen) return { scope: tip };
+    return pickBase.trim() !== "" ? { scope: "branches", pick: { compare: pickCompare, base: pickBase } } : null;
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- branchAsks makes a choice of the same names a new one
+  }, [branchesOpen, tip, pickCompare, pickBase, branchAsks]);
+
   // the changes, for each folder and comparison; the file shown stays
   useEffect(() => {
+    if (choice === null) return;
     let live = true;
-    setChangeList({ status: "pending", base });
-    fetchRepoDiffFiles({ paneId, directory: base, ...compareWith, stamps: true }).then(
-      (value) => { if (live) setChangeList({ status: "ready", value, base }); },
-      (error: unknown) => { if (live) setChangeList({ status: "failed", error, base }); },
+    setChangeList({ status: "pending", base, choice });
+    fetchRepoDiffFiles({ paneId, directory: base, ...listQuery(choice), stamps: true }).then(
+      (value) => { if (live) setChangeList({ status: "ready", value, base, choice }); },
+      (error: unknown) => { if (live) setChangeList({ status: "failed", error, base, choice }); },
     );
     return () => { live = false; };
-  }, [fetchRepoDiffFiles, paneId, base, compareWith]);
+  }, [fetchRepoDiffFiles, paneId, base, choice]);
 
-  // the left side for `base`: the tree and the changes as far as they are there
-  const treeNow = tree.base === base ? tree : { status: "pending" as const, base };
-  const changesNow = changeList.base === base ? changeList : { status: "pending" as const, base };
-  const treeValue = treeNow.status === "ready" ? treeNow.value : null;
+  // the left side for `base`: the tree and the changes as far as they are there; an answer counts only for its own choice
+  const changesNow = changeList.base === base && changeList.choice === choice ? changeList : { status: "pending" as const, base };
   const changesValue = changesNow.status === "ready" ? changesNow.value : null;
+  // the comparison the answer resolved: its hashes for every patch and every comment (ReviewFile)
+  const review = useMemo(() => (choice === null ? null : reviewComparison(choice, changesValue, choices)), [choice, changesValue, choices]);
   // a folder of no repository: its own files, no changes
   const plain = treeValue?.plain === true || (changesNow.status === "failed" && notRepository(changesNow.error));
   // the changes cannot be read (git failing, an old bridge): the file is shown all the same, as text
@@ -321,9 +360,19 @@ export function ReviewDialog({ paneId, directory, initialPath = null, onClose }:
     && (treeValue.ignored?.includes(selected) === true || !listedPaths.has(selected));
   // where the repository stands: its branch (a detached HEAD's commit), or the two revisions compared
   const repository = plain ? null : changesValue?.repository ?? treeValue?.repository ?? null;
-  const where = compareWith.scope === "commit" && compareWith.base !== null ? `${compareWith.base}…${compareWith.head ?? "HEAD"}`
+  const where = choice?.scope === "branches" ? branchHeading(choice.pick, review?.scope === "branches" ? review.branches : null)
     : repository === null ? null : repository.branch ?? repository.head?.slice(0, 7) ?? null;
   const truncated = (treeValue?.truncated ?? false) || (changesValue?.truncated ?? false);
+  // a refused branch comparison under the field it names, a missing base under Base, an older bridge's tip-to-tip diff under Base
+  const refused = branchesOpen && changesNow.status === "failed" ? changesNow.error : null;
+  const errorAt = refused === null ? null : branchFieldError(refused);
+  const errorHint = { text: diffErrorMessage(t, refused), alert: true };
+  const refsFailed = refsNow?.status === "failed" && !routeMissing(refsNow.error);
+  const compareHint = errorAt === "compare" ? errorHint
+    : refsFailed ? { text: t("Branches could not be listed."), alert: false } : null;
+  const baseHint = baseMissing ? { text: t("Enter a base branch."), alert: true }
+    : errorAt === "base" ? errorHint
+    : review?.scope === "branches" && review.branches.mergeBase === null ? { text: t("This PC's bridge compares the branch tips."), alert: false } : null;
   const showFile = narrow && file !== null;
   // with no file chosen the tree shows, whatever it was folded to: else a narrow screen would show nothing
   const treeVisible = treeShown || file === null;
@@ -369,31 +418,17 @@ export function ReviewDialog({ paneId, directory, initialPath = null, onClose }:
             {/* what the changes are compared with: under Changed, the list it decides */}
             {!plain && scope === "changed" && <div className="review-compare">
               <div className="segmented review-scope" role="group" aria-label={t("Compare")}>
-                <button type="button" aria-pressed={!branchesOpen && compareWith.scope === "workspace"} onClick={() => { setBranchesOpen(false); setCompareWith({ scope: "workspace", base: null, head: null }); }}>{t("Working tree")}</button>
-                <button type="button" aria-pressed={!branchesOpen && compareWith.scope === "staged"} onClick={() => { setBranchesOpen(false); setCompareWith({ scope: "staged", base: null, head: null }); }}>{t("Staged")}</button>
-                <button type="button" aria-pressed={branchesOpen || compareWith.scope === "commit"} onClick={() => setBranchesOpen(true)}>{t("Branches")}</button>
+                <button type="button" aria-pressed={!branchesOpen && tip === "workspace"} onClick={() => { setBranchesOpen(false); setTip("workspace"); }}>{t("Working tree")}</button>
+                <button type="button" aria-pressed={!branchesOpen && tip === "staged"} onClick={() => { setBranchesOpen(false); setTip("staged"); }}>{t("Staged")}</button>
+                <button type="button" aria-pressed={branchesOpen} onClick={() => setBranchesOpen(true)}>{t("Branches")}</button>
               </div>
-              {branchesOpen && <form className="review-branches" noValidate onSubmit={(event) => {
-                event.preventDefault();
-                if (baseText.trim() === "") {
-                  setBranchMissing(true);
-                  return;
-                }
-                setBranchMissing(false);
-                setCompareWith({ scope: "commit", base: baseText.trim(), head: headText.trim() === "" ? null : headText.trim() });
-              }}>
-                <label className="field">
-                  <span className="field-label">{t("Base branch")}</span>
-                  <input className="input" value={baseText} onChange={(event) => { setBaseText(event.target.value); setBranchMissing(false); }} placeholder="main" aria-invalid={branchMissing} autoComplete="off" spellCheck={false} />
-                  {branchMissing && <span className="field-hint review-field-error" role="alert">{t("Enter a base branch.")}</span>}
-                </label>
-                <label className="field">
-                  <span className="field-label">{t("Branch")}</span>
-                  <input className="input" value={headText} onChange={(event) => setHeadText(event.target.value)} placeholder="HEAD" autoComplete="off" spellCheck={false} />
-                  <span className="field-hint">{t("HEAD when empty")}</span>
-                </label>
-                <button type="submit" className="btn btn-primary">{t("Show changes")}</button>
-              </form>}
+              {/* the branch compared on top, its base under it, as GitHub reads them; a choice loads at once */}
+              {branchesOpen && <div className="review-branches">
+                <BranchCombobox label={t("Compare")} value={fields.compare} branches={choices?.branches ?? null} truncated={choices?.truncated ?? false} hint={compareHint} placeholder="HEAD"
+                  onChoose={(name) => chooseBranches({ compare: name.trim() === "" ? "HEAD" : name })} />
+                <BranchCombobox label={t("Base")} value={fields.base} branches={choices?.branches ?? null} truncated={choices?.truncated ?? false} hint={baseHint} placeholder="main"
+                  onChoose={(name) => chooseBranches({ base: name })} />
+              </div>}
             </div>}
             <div className="review-filter">
               <input type="search" className="input review-search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder={t("Filter files")} aria-label={t("Filter files")} spellCheck={false} />
@@ -405,8 +440,8 @@ export function ReviewDialog({ paneId, directory, initialPath = null, onClose }:
               </button>}
             </div>
             {/* the tree loads on its own: its place holds a loader meanwhile, the file beside it is shown already */}
-            {listing.status === "pending" && <ReviewLoading />}
-            {listing.status === "failed" && <p className="repo-diff-note" role="alert">{diffErrorMessage(t, listing.error)}</p>}
+            {listing.status === "pending" && !(listShown === "changed" && baseMissing) && <ReviewLoading />}
+            {listing.status === "failed" && !(listShown === "changed" && errorAt !== null) && <p className="repo-diff-note" role="alert">{diffErrorMessage(t, listing.error)}</p>}
             {/* why the list is short; with every file viewed, a way to show them again. The file still shown stays under it */}
             {listReady && list.note !== null && <div className="review-list-note">
               <p className="repo-diff-note">{notes[list.note]}</p>
@@ -423,7 +458,7 @@ export function ReviewDialog({ paneId, directory, initialPath = null, onClose }:
             {file !== null && fileRoot !== null && decided === file
               ? <RenderBoundary resetKey={file} fallback={() => <p className="repo-diff-note" role="alert">{t("This file can't be shown.")}</p>}>
                 <ReviewFile key={file} owner={paneStorageId(machineId, paneId)} paneId={paneId} directory={base} root={fileRoot} path={file.slice(fileRoot.replace(/[\\/]+$/, "").length + 1)} change={plain ? null : change} plain={plain} ignored={ignoredFile}
-                  viewed={plain || change === null || change.stamp === undefined ? null : viewedPaths.has(change.path)} onViewed={(on) => { if (change !== null) setViewed(change, on); }} diffMode={!plain && scope === "changed"} comparison={compareWith} line={jump !== null && jump.file === file ? jump.line : undefined} onClose={closeFile} onOpen={openPath} />
+                  viewed={plain || change === null || change.stamp === undefined ? null : viewedPaths.has(change.path)} onViewed={(on) => { if (change !== null) setViewed(change, on); }} diffMode={!plain && scope === "changed"} comparison={review} line={jump !== null && jump.file === file ? jump.line : undefined} onClose={closeFile} onOpen={openPath} />
               </RenderBoundary>
               : file !== null || wanted !== null || fallback !== null ? <ReviewLoading />
               : missing !== null ? <p className="repo-diff-note" role="alert">{t("This file can't be shown.")}</p>

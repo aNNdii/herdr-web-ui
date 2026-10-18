@@ -12,6 +12,8 @@ export interface RepoComparison {
   /** `commit` only: full hashes once a list answered, the names typed before */
   base: string | null;
   head: string | null;
+  /** `commit` only: compare from where head forked off base (`merge_base=1`) */
+  mergeBase?: boolean;
 }
 
 /** One changed file of one comparison, on one PC's pane: what the diff viewer opens. */
@@ -74,6 +76,7 @@ export function diffErrorMessage(t: Translate, error: unknown): string {
     case "not_a_repository": return t("This folder is not in a git repository.");
     case "revision_not_found": return t("No commit by that name.");
     case "invalid_revision": return t("Name a commit, branch or tag.");
+    case "no_merge_base": return t("Base and head share no history.");
     case "git_unavailable": return t("git is not installed on that PC.");
     case "git_timeout": return t("git took too long to answer.");
     case "git_failed": return t("git could not compare these.");

@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "bun:test";
 
-import { storedHideViewed, storedShowIgnored, storeHideViewed, storeShowIgnored } from "./review.ts";
+import { storedHideViewed, storedShowIgnored, storeHideViewed, storeShowIgnored, workspacePick } from "./review.ts";
 
 const original = Object.getOwnPropertyDescriptor(globalThis, "window");
 
@@ -20,6 +20,25 @@ function memoryStorage(): Map<string, string> & Pick<Storage, "getItem" | "setIt
 afterEach(() => {
   if (original) Object.defineProperty(globalThis, "window", original);
   else delete (globalThis as { window?: unknown }).window;
+});
+
+describe("workspacePick", () => {
+  it("spans the working tree's lines of a selection, whichever way it was dragged", () => {
+    expect(workspacePick([{ line: 14, old: false }, { line: 12, old: false }, { line: 13, old: false }])).toEqual([12, 14]);
+  });
+
+  it("leaves out the old file's rows when the working tree's are in it", () => {
+    expect(workspacePick([{ line: 40, old: true }, { line: 30, old: false }, { line: 31, old: false }])).toEqual([30, 31]);
+  });
+
+  it("refuses a selection of removed lines only", () => {
+    expect(workspacePick([{ line: 30, old: true }, { line: 31, old: true }])).toBeNull();
+  });
+
+  it("finds nothing without a numbered line", () => {
+    expect(workspacePick([])).toBeNull();
+    expect(workspacePick([{ line: 0, old: false }, { line: Number.NaN, old: false }])).toBeNull();
+  });
 });
 
 describe("the review's per-device toggles", () => {

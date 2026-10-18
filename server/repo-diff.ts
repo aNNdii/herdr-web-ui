@@ -1,8 +1,8 @@
-import { closeSync, lstatSync, openSync, readSync } from "node:fs";
+import { closeSync, lstatSync, openSync, readSync, realpathSync } from "node:fs";
 import { readdir } from "node:fs/promises";
 import { join } from "node:path";
 
-import type { RepoDiffFile, RepoDiffFileList, RepoDiffFilePatch, RepoDiffRepository, RepoDiffScope, RepoDiffStatus, RepoDiffTree } from "../shared/protocol.ts";
+import type { RepoBranchList, RepoDiffFile, RepoDiffFileList, RepoDiffFilePatch, RepoDiffRepository, RepoDiffScope, RepoDiffStatus, RepoDiffTree } from "../shared/protocol.ts";
 import { errorResponse, jsonResponse } from "./http.ts";
 
 /**
@@ -48,11 +48,13 @@ export interface RepoDiffOptions {
   maxFiles?: number;
   maxListBytes?: number;
   maxPatchBytes?: number;
+  /** the branch list's cap, `REPO_BRANCHES_MAX` by default */
+  maxBranches?: number;
 }
 
-/** A refusal in the API's own words: it never carries git's stderr. */
+/** A refusal in the API's own words: it never carries git's stderr. `param` names the query parameter at fault, when one is. */
 export class RepoDiffError extends Error {
-  constructor(readonly code: string, message: string, readonly status: number) { super(message); }
+  constructor(readonly code: string, message: string, readonly status: number, readonly param: "base" | "head" | null = null) { super(message); }
 }
 
 interface GitRun { code: number | null; stdout: string; overflow: boolean }
@@ -142,11 +144,21 @@ async function repositoryOf(context: Context, cwd: string): Promise<RepoDiffRepo
 
 const REVISION = /^[A-Za-z0-9][A-Za-z0-9._/~^@{}-]{0,199}$/;
 
-async function resolveRevision(context: Context, root: string, name: string, value: string): Promise<string> {
-  if (!REVISION.test(value) || value.includes("..")) throw new RepoDiffError("invalid_revision", `${name} must name one commit: a hash, a branch, a tag or an expression such as HEAD~1`, 400);
+async function resolveRevision(context: Context, root: string, name: "base" | "head", value: string): Promise<string> {
+  if (!REVISION.test(value) || value.includes("..")) throw new RepoDiffError("invalid_revision", `${name} must name one commit: a hash, a branch, a tag or an expression such as HEAD~1`, 400, name);
   const parsed = await runGit(context, root, ["rev-parse", "--quiet", "--verify", "--end-of-options", `${value}^{commit}`], 1024);
   const oid = parsed.stdout.trim();
-  if (parsed.code !== 0 || !/^[0-9a-f]{40,64}$/.test(oid)) throw new RepoDiffError("revision_not_found", `${name} names no commit in this repository`, 404);
+  if (parsed.code !== 0 || !/^[0-9a-f]{40,64}$/.test(oid)) throw new RepoDiffError("revision_not_found", `${name} names no commit in this repository`, 404, name);
+  return oid;
+}
+
+/** The best common ancestor of two resolved commits, the first one git names when there are several. */
+async function mergeBaseOf(context: Context, root: string, base: string, head: string): Promise<string> {
+  const run = await runGit(context, root, ["merge-base", "--end-of-options", base, head], 1024);
+  // git answers 1, printing nothing, when the two share no history
+  if (run.code === 1) throw new RepoDiffError("no_merge_base", "base and head share no history", 409, "base");
+  const oid = run.stdout.split("\n", 1)[0]!.trim();
+  if (run.code !== 0 || !/^[0-9a-f]{40,64}$/.test(oid)) throw new RepoDiffError("git_failed", "git could not find where base and head forked", 500);
   return oid;
 }
 
@@ -165,19 +177,25 @@ function repositoryPath(name: string, value: string): string {
   return value;
 }
 
-interface Comparison { scope: RepoDiffScope; base: string | null; head: string | null; args: string[] }
+/** `mergeBase` is set only when `merge_base=1` asked for it: undefined keeps it out of the answer. */
+interface Comparison { scope: RepoDiffScope; base: string | null; head: string | null; mergeBase?: string; args: string[] }
 
 async function comparisonOf(context: Context, root: string, params: URLSearchParams): Promise<Comparison> {
   const scope = scopeOf(params.get("scope"));
   const base = params.get("base");
   const head = params.get("head");
+  const fromMergeBase = params.get("merge_base") === "1";
   if (scope !== "commit") {
     if (base !== null || head !== null) throw new RepoDiffError("invalid_revision", "base and head apply to scope=commit only", 400);
+    if (fromMergeBase) throw new RepoDiffError("invalid_scope", "merge_base applies to scope=commit only", 400);
     return { scope, base: null, head: null, args: scope === "staged" ? ["--cached"] : [] };
   }
-  if (base === null) throw new RepoDiffError("invalid_revision", "scope=commit needs a base revision", 400);
+  if (base === null) throw new RepoDiffError("invalid_revision", "scope=commit needs a base revision", 400, "base");
   const [from, to] = await Promise.all([resolveRevision(context, root, "base", base), resolveRevision(context, root, "head", head ?? "HEAD")]);
-  return { scope, base: from, head: to, args: [from, to] };
+  if (!fromMergeBase) return { scope, base: from, head: to, args: [from, to] };
+  // `base...head`, as a pull request shows it: what head changed since it forked from base
+  const fork = await mergeBaseOf(context, root, from, to);
+  return { scope, base: from, head: to, mergeBase: fork, args: [fork, to] };
 }
 
 const DIFF_FLAGS = ["--no-color", "--no-ext-diff", "--no-textconv", "--find-renames", "--ignore-submodules=dirty", "--src-prefix=a/", "--dst-prefix=b/"];
@@ -264,6 +282,7 @@ export async function repoDiffFiles(cwd: string, params: URLSearchParams, option
     scope: comparison.scope,
     base: comparison.base,
     head: comparison.head,
+    ...(comparison.mergeBase === undefined ? {} : { merge_base: comparison.mergeBase }),
     // with `stamps=1` each file says when it last changed on disk, for a review's Viewed mark
     files: params.get("stamps") === "1" ? files.map((file) => ({ ...file, stamp: fileStamp(repository.root, file) })) : files,
     total: listing.complete ? listing.files.length : null,
@@ -382,6 +401,7 @@ export async function repoDiffFile(cwd: string, params: URLSearchParams, options
     scope: comparison.scope,
     base: comparison.base,
     head: comparison.head,
+    ...(comparison.mergeBase === undefined ? {} : { merge_base: comparison.mergeBase }),
     file: described,
     patch,
     unavailable,
@@ -411,13 +431,99 @@ export async function repoDiffFile(cwd: string, params: URLSearchParams, options
   return answer(run.stdout, null, file.status === "untracked" ? { ...file, binary: false } : file);
 }
 
-/** The HTTP answer of either route, with every refusal in the `{ error: { code, message } }` envelope. */
-export async function repoDiffResponse(kind: "files" | "file" | "tree", cwd: string, params: URLSearchParams, options: RepoDiffOptions = {}): Promise<Response> {
+/** A review's branch list cut at this many entries; local branches are never left out. */
+export const REPO_BRANCHES_MAX = 1_000;
+
+/** The refs under `prefix` (`refs/heads/`, `refs/remotes/`), newest commit first, named without it; symbolic refs (`origin/HEAD`) left out. */
+async function refsUnder(context: Context, root: string, prefix: string): Promise<{ names: string[]; complete: boolean }> {
+  const run = await runGit(context, root, ["for-each-ref", "--sort=-committerdate", "--format=%(refname)%00%(symref)", prefix], context.maxListBytes);
+  if (!run.overflow && run.code !== 0) throw new RepoDiffError("git_failed", "git could not list the branches of this repository", 500);
+  const lines = run.stdout.split("\n");
+  // a cut listing ends inside its last line
+  if (run.overflow || lines.at(-1) === "") lines.pop();
+  const names: string[] = [];
+  for (const line of lines) {
+    const [ref = "", symref = ""] = line.split("\0");
+    if (symref === "" && ref.startsWith(prefix) && ref.length > prefix.length) names.push(ref.slice(prefix.length));
+  }
+  return { names, complete: !run.overflow };
+}
+
+/** Each local branch checked out in a worktree, with that worktree's folder; a detached worktree, or one whose folder is gone, names none. */
+async function worktreesOf(context: Context, root: string): Promise<Map<string, string>> {
+  const run = await runGit(context, root, ["worktree", "list", "--porcelain"], context.maxListBytes);
+  const found = new Map<string, string>();
+  if (run.overflow || run.code !== 0) return found;
+  for (const record of run.stdout.split("\n\n")) {
+    let path: string | null = null;
+    let branch: string | null = null;
+    let prunable = false;
+    for (const line of record.split("\n")) {
+      if (line.startsWith("worktree ")) path = line.slice("worktree ".length);
+      else if (line.startsWith("branch refs/heads/")) branch = line.slice("branch refs/heads/".length);
+      else if (line === "prunable" || line.startsWith("prunable ")) prunable = true;
+    }
+    if (path === null || branch === null || prunable) continue;
+    try {
+      found.set(branch, realpathSync(path));
+    } catch {
+      // gone since git last looked: no folder to name
+    }
+  }
+  return found;
+}
+
+/**
+ * GET /api/workspace/diff/branches: the branches a review can compare, read only. Every local branch is listed,
+ * then the newest remote ones up to the cap, so a repository with many remotes never pushes a local branch out.
+ */
+export async function repoBranches(cwd: string, options: RepoDiffOptions = {}): Promise<RepoBranchList> {
+  const context = contextOf(options);
+  const maxBranches = options.maxBranches ?? REPO_BRANCHES_MAX;
+  const repository = await repositoryOf(context, cwd);
+  const [locals, remotes, worktrees, originHead] = await Promise.all([
+    refsUnder(context, repository.root, "refs/heads/"),
+    refsUnder(context, repository.root, "refs/remotes/"),
+    worktreesOf(context, repository.root),
+    runGit(context, repository.root, ["symbolic-ref", "--quiet", "refs/remotes/origin/HEAD"], 16 * 1024),
+  ]);
+  const room = Math.max(0, maxBranches - locals.names.length);
+  const branches = [
+    ...locals.names.map((name) => ({ name, remote: false, worktree: worktrees.get(name) ?? null })),
+    ...remotes.names.slice(0, room).map((name) => ({ name, remote: true, worktree: null })),
+  ];
+  const target = originHead.code === 0 ? originHead.stdout.trim() : "";
+  const local = new Set(locals.names);
+  const defaultBase = target.startsWith("refs/remotes/") && target.length > "refs/remotes/".length ? target.slice("refs/remotes/".length) : local.has("main") ? "main" : local.has("master") ? "master" : null;
+  return {
+    repository,
+    branches,
+    default_base: defaultBase,
+    truncated: !remotes.complete || remotes.names.length > room,
+    limits: { max_branches: maxBranches },
+  };
+}
+
+/** The routes under `/api/workspace/diff/`, by their last path segment. */
+export const REPO_DIFF_ROUTES = ["files", "file", "tree", "branches"] as const;
+export type RepoDiffRoute = (typeof REPO_DIFF_ROUTES)[number];
+
+async function routeBody(route: RepoDiffRoute, cwd: string, params: URLSearchParams, options: RepoDiffOptions): Promise<unknown> {
+  switch (route) {
+    case "files": return repoDiffFiles(cwd, params, options);
+    case "file": return repoDiffFile(cwd, params, options);
+    case "tree": return repoDiffTree(cwd, params, options);
+    case "branches": return repoBranches(cwd, options);
+  }
+}
+
+/** The HTTP answer of each route, with every refusal in the `{ error: { code, message, param? } }` envelope. */
+export async function repoDiffResponse(route: RepoDiffRoute, cwd: string, params: URLSearchParams, options: RepoDiffOptions = {}): Promise<Response> {
   try {
-    const body = kind === "files" ? await repoDiffFiles(cwd, params, options) : kind === "tree" ? await repoDiffTree(cwd, params, options) : await repoDiffFile(cwd, params, options);
+    const body = await routeBody(route, cwd, params, options);
     return jsonResponse(body, 200, { "cache-control": "private, no-store" });
   } catch (error) {
-    if (error instanceof RepoDiffError) return jsonResponse({ error: { code: error.code, message: error.message } }, error.status);
+    if (error instanceof RepoDiffError) return jsonResponse({ error: { code: error.code, message: error.message, ...(error.param === null ? {} : { param: error.param }) } }, error.status);
     return errorResponse(error);
   }
 }

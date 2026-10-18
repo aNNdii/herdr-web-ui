@@ -1,6 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import { parseMarkdown, type ListBlock, type MarkdownBlock } from "./markdown.ts";
-import { anchorTurn, BLOCK_COMMENTS_PREFIX, BlockCommentStore, blockContent, blockTarget, commentTarget, composeWithComments, draftComment, hasQuotedLine, isBlockComment, isMarkdownBlock, isPaneComment, isReplyComment, outgoingMessage, partSegments, quoteExcerpt, quoteFor, replyPart, replyParts, SELECTION_QUOTE_MAX, selectionTarget, textRange, type BlockComment, type CommentTarget } from "./blockComments.ts";
+import { anchorTurn, BLOCK_COMMENTS_PREFIX, BlockCommentStore, blockContent, blockTarget, commentTarget, composeWithComments, draftComment, hasQuotedLine, isBlockComment, isBranchEntry, isFileEntry, isMarkdownBlock, isPaneComment, isReplyComment, outgoingMessage, partSegments, quoteExcerpt, quoteFor, replyPart, replyParts, SELECTION_QUOTE_MAX, selectionTarget, textRange, type BlockComment, type CommentTarget } from "./blockComments.ts";
+import { branchAnchor, type BranchComment, type BranchTarget } from "./branchComments.ts";
 import { fileAnchor, type FileComment, type FileTarget } from "./fileComments.ts";
 
 const TS = "2026-10-03T10:12:00Z";
@@ -1127,5 +1128,116 @@ describe("composeWithComments with file comments", () => {
 
   it("lets a file comment alone make a message", () => {
     expect(outgoingMessage([fileB], "").sendable).toBe(true);
+  });
+});
+
+const branchHead: BranchTarget = { path: "/repo/src/a.ts", label: "src/a.ts", lines: [30, 30], source: ["new()"], place: { side: "head", head: "feat/x", commit: "1a2b3c4d5e6f", worktree: "/wt/feat-x" } };
+const branchBase: BranchTarget = { ...branchHead, lines: [32, 33], source: ["gone1", "gone2"], place: { side: "base", head: "feat/x", base: "origin/next", commit: "9f8e7d6c5b4a" } };
+
+describe("branch comments in the store", () => {
+  it("keeps one per place, edits it keeping its creation time, and removes it when saved blank", () => {
+    let time = 10;
+    const { store } = storeAt(() => time);
+    const id = store.saveBranch("o", branchHead, "Name it newer().");
+    expect(store.list("o")).toEqual([{ ...branchHead, kind: "branch", id: id!, anchor: branchAnchor(branchHead), created: 10, comment: "Name it newer()." }]);
+    time = 20;
+    const edited = store.saveBranch("o", branchHead, "Name it newest().");
+    expect(edited).not.toBe(id);
+    expect(store.list("o")).toHaveLength(1);
+    expect(store.list("o")[0]).toMatchObject({ id: edited!, created: 10, comment: "Name it newest()." });
+    expect(store.saveBranch("o", branchHead, "Name it newest().")).toBe(edited);
+    expect(store.saveBranch("o", branchHead, "  ")).toBeNull();
+    expect(store.list("o")).toEqual([]);
+  });
+
+  it("round-trips through storage beside replies and file comments, which stay as they were", () => {
+    const { data, storage, store } = storeAt();
+    data.set(KEY, JSON.stringify({ version: 1, comments: [fileA, reply1] }));
+    store.saveBranch("o", branchBase, "Why drop these?");
+    store.saveBranch("o", branchHead, "Name it newer().");
+    const list = store.list("o");
+    expect(list.map((c) => c.kind)).toEqual(["reply", "file", "branch", "branch"]);
+    expect(list.find(isFileEntry)).toEqual(fileA);
+    expect(list.filter(isBranchEntry).map((c) => c.comment)).toEqual(["Name it newer().", "Why drop these?"]);
+    expect(new BlockCommentStore(() => storage).list("o")).toEqual(list);
+    const raw = JSON.parse(data.get(KEY)!) as { comments: unknown[] };
+    expect(raw.comments).toContainEqual(fileA);
+  });
+
+  it("is no reply and no file comment: get, a blank file save and moveFile leave it alone", () => {
+    const { store } = storeAt();
+    const id = store.saveBranch("o", branchHead, "branch")!;
+    const comment = store.list("o")[0]!;
+    expect(isReplyComment(comment)).toBe(false);
+    expect(isFileEntry(comment)).toBe(false);
+    expect(isBranchEntry(comment)).toBe(true);
+    store.saveFile("o", { ...fileTarget, path: branchHead.path, lines: [30, 30], source: ["new()"], quoteLines: ["new()"] }, "");
+    store.moveFile("o", id, [40, 40]);
+    expect(store.list("o")).toEqual([comment]);
+  });
+
+  it("moves lines and version together, and writes nothing for the lines it has or an unknown id", () => {
+    const { data, store } = storeAt();
+    const id = store.saveBranch("o", branchHead, "x")!;
+    const before = data.get(KEY);
+    store.moveBranch("o", id, { lines: [30, 30], place: { ...branchHead.place, commit: "3c4d5e6f" } });
+    store.moveBranch("o", "nope", { lines: [40, 40], place: branchHead.place });
+    expect(data.get(KEY)).toBe(before);
+    const place = { ...branchHead.place, commit: "3c4d5e6f" };
+    store.moveBranch("o", id, { lines: [40, 40], place });
+    expect(store.list("o")[0]).toMatchObject({ id, lines: [40, 40], place, anchor: branchAnchor({ ...branchHead, lines: [40, 40] }) });
+  });
+
+  it("keeps anchors unique: a move onto a held anchor keeps its own, a new comment there takes ~id", () => {
+    const { store } = storeAt();
+    const line40: BranchTarget = { ...branchHead, lines: [40, 40], source: ["other()"] };
+    const a = store.saveBranch("o", branchHead, "A")!;
+    store.saveBranch("o", line40, "B");
+    store.moveBranch("o", a, { lines: [40, 40], place: branchHead.place });
+    const byText = (text: string) => store.list("o").find((c) => c.comment === text)!;
+    expect(byText("A")).toMatchObject({ lines: [40, 40], anchor: branchAnchor(branchHead) });
+    // a new comment on line 30, whose place reads as A's kept anchor
+    const n = store.saveBranch("o", { ...branchHead, source: ["inserted()"] }, "N")!;
+    expect(byText("N").anchor).toBe(`${branchAnchor(branchHead)}~${n}`);
+    expect(new Set(store.list("o").map((c) => c.anchor)).size).toBe(3);
+    // an edit by the anchor it was kept under
+    store.saveBranch("o", { ...branchHead, lines: [40, 40], anchor: byText("A").anchor }, "A edited");
+    expect(store.list("o").map((c) => c.comment).sort()).toEqual(["A edited", "B", "N"]);
+  });
+
+  it("keeps nothing while comments are off", () => {
+    const { store } = storeAt();
+    const id = store.saveBranch("o", branchHead, "x")!;
+    store.setEnabled(false);
+    expect(store.saveBranch("o", branchBase, "y")).toBeNull();
+    store.moveBranch("o", id, { lines: [40, 40], place: branchHead.place });
+    store.setEnabled(true);
+    expect(store.list("o").map((c) => [c.comment, c.kind === "branch" ? c.lines : null])).toEqual([["x", [30, 30]]]);
+  });
+
+  it("drops a stored branch comment that does not validate", () => {
+    const { data, storage } = fixture();
+    const good: BranchComment = { ...branchHead, kind: "branch", id: "g", anchor: branchAnchor(branchHead), created: 1, comment: "g" };
+    const broken = { ...good, id: "bad", anchor: "z", place: { side: "base", head: "feat/x", commit: "1" } };
+    data.set(KEY, JSON.stringify({ version: 1, comments: [broken, good] }));
+    expect(new BlockCommentStore(() => storage).list("o")).toEqual([good]);
+    expect(isPaneComment(good)).toBe(true);
+    expect(isPaneComment(broken)).toBe(false);
+  });
+});
+
+describe("composing branch comments", () => {
+  const head: BranchComment = { ...branchHead, kind: "branch", id: "b1", anchor: branchAnchor(branchHead), created: 3, comment: "Name it newer()." };
+  const base: BranchComment = { ...branchBase, kind: "branch", id: "b2", anchor: branchAnchor(branchBase), created: 1, comment: "Why drop these?" };
+  it("sends replies, then file comments, then branch comments with their version, then the text", () => {
+    const message = composeWithComments([base, fileB, head, reply1], "Thanks");
+    expect(message).toBe([
+      "> backfill it from updated_at\nBackfill in batches.",
+      "> src/sync.ts:8\n> if (a < b) {\nCompare with <=.",
+      "> src/a.ts:30 @ feat/x (1a2b3c4) · worktree /wt/feat-x\n> new()\nName it newer().",
+      "> src/a.ts:32-33 @ origin/next (9f8e7d6)\n> gone1\n> gone2\nWhy drop these?",
+      "Thanks",
+    ].join("\n\n"));
+    expect(outgoingMessage([base, fileB, head, reply1], "").sentIds).toEqual(["r1", "f2", "b1", "b2"]);
   });
 });

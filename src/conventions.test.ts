@@ -172,6 +172,18 @@ describe("icon cache", () => {
   });
 });
 
+describe("comment kinds", () => {
+  // A pane keeps several kinds of comment (src/lib/blockComments.ts `PaneComment`). "Not a reply" reads as "a file
+  // comment" only while there are two; a new kind then leaks into every place that assumed so (a file viewer showing a
+  // branch diff's comments).
+  it("narrows a comment by naming its kind, never by `!isReplyComment(`", () => {
+    const offenders = scan("src/**/*.{ts,tsx}")
+      .filter((file) => !file.endsWith(".test.ts"))
+      .flatMap((file) => read(file).split("\n").flatMap((line, index) => line.includes("!isReplyComment(") ? [`${file}:${index + 1}: ${line.trim()}`] : []));
+    fail(offenders, "Name the kind a comment must be: isFileEntry or isBranchEntry from src/lib/blockComments.ts, not !isReplyComment(…), which lets every other kind through.");
+  });
+});
+
 describe("UI wording", () => {
   // "Session" means the herdr server session or an agent's history; the dialog that makes a
   // workspace says "New workspace" (AGENTS.md).

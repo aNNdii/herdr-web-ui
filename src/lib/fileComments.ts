@@ -101,7 +101,7 @@ export function linesText(lines: LineRange): string {
   return lines[0] === lines[1] ? String(lines[0]) : `${lines[0]}-${lines[1]}`;
 }
 
-function sameAt(source: readonly string[], lines: readonly string[], at: number): boolean {
+function sameAt(source: readonly string[], lines: readonly (string | undefined)[], at: number): boolean {
   return source.every((line, i) => lines[at + i] === line);
 }
 
@@ -111,8 +111,9 @@ function sameAt(source: readonly string[], lines: readonly string[], at: number)
  * are complete; nothing past it is trusted, so a comment reaching past it is outdated too. In a
  * `truncated` file (cut at the load limit) a comment is never moved: a second copy of its lines
  * may lie past the cut, so "the one other place" cannot be told, and the spec says never to guess.
+ * A gap in `lines` (`undefined`: a line a diff's side does not show, `DiffSide`) never matches, not even an empty line.
  */
-export function placeFileComment(comment: Pick<FileTarget, "lines" | "source">, lines: readonly string[], loaded: number, truncated = false): LineRange | null {
+export function placeFileComment(comment: Pick<FileTarget, "lines" | "source">, lines: readonly (string | undefined)[], loaded: number, truncated = false): LineRange | null {
   const { source } = comment;
   const count = source.length;
   if (count === 0 || comment.lines[1] > loaded) return null;
@@ -139,9 +140,10 @@ function quoteLine(line: string): string {
  * one as a bare `>`. With a `selection` the lines are the selected words (its text, a table's cells
  * already joined by " | "), else the whole lines the comment is on. Limits: `QUOTE_LINE_MAX` per
  * line (cut at its start), `QUOTE_LINES_MAX` lines and `SELECTION_QUOTE_MAX` characters after the
- * header; the lines dropped are counted in a last `> … (+N lines)`.
+ * header; the lines dropped are counted in a last `> … (+N lines)`. A `place` follows the range in the header, after a
+ * space: which version the lines are of (`branchQuote`).
  */
-export function fileQuote(comment: Pick<FileTarget, "label" | "lines" | "quoteLines" | "selection">): string {
+export function fileQuote(comment: Pick<FileTarget, "label" | "lines" | "quoteLines" | "selection">, place?: string): string {
   const { selection } = comment;
   const lines = selection === undefined ? comment.quoteLines : selection.text.split("\n");
   const quoted = lines.map((line) => {
@@ -154,7 +156,8 @@ export function fileQuote(comment: Pick<FileTarget, "label" | "lines" | "quoteLi
   };
   let kept = Math.min(quoted.length, QUOTE_LINES_MAX);
   while (kept > 0 && Array.from(body(kept)).length > SELECTION_QUOTE_MAX) kept--;
-  return `> ${comment.label}:${linesText(comment.lines)}\n${body(kept)}`.replace(/\n$/, "");
+  const at = place === undefined ? "" : ` ${place}`;
+  return `> ${comment.label}:${linesText(comment.lines)}${at}\n${body(kept)}`.replace(/\n$/, "");
 }
 
 function startOf(comment: FileComment): [number, number] {
@@ -175,10 +178,10 @@ export function sortFileComments(comments: readonly FileComment[]): FileComment[
   });
 }
 
-const isStrings = (value: unknown): value is string[] => Array.isArray(value) && value.every((v) => typeof v === "string");
+export const isStrings = (value: unknown): value is string[] => Array.isArray(value) && value.every((v) => typeof v === "string");
 const isCount = (value: unknown): value is number => typeof value === "number" && Number.isInteger(value);
 
-function isLineRange(value: unknown): value is LineRange {
+export function isLineRange(value: unknown): value is LineRange {
   return Array.isArray(value) && value.length === 2 && isCount(value[0]) && isCount(value[1]) && value[0] >= 1 && value[1] >= value[0];
 }
 

@@ -4,10 +4,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parsePatchFiles } from "@pierre/diffs";
 
-import type { ApiError, RepoDiffFileList, RepoDiffFilePatch } from "../shared/protocol.ts";
+import type { ApiError, RepoBranchList, RepoDiffFileList, RepoDiffFilePatch } from "../shared/protocol.ts";
 import { DeviceStore } from "./devices.ts";
 import { createServer } from "./index.ts";
-import { REPO_DIFF_CONTEXT_LINES, REPO_DIFF_MAX_FILES, REPO_DIFF_MAX_LIST_BYTES, REPO_DIFF_MAX_PATCH_BYTES, repoDiffFile, repoDiffFiles } from "./repo-diff.ts";
+import { REPO_BRANCHES_MAX, REPO_DIFF_CONTEXT_LINES, REPO_DIFF_MAX_FILES, REPO_DIFF_MAX_LIST_BYTES, REPO_DIFF_MAX_PATCH_BYTES, repoBranches, repoDiffFile, repoDiffFiles, repoDiffResponse } from "./repo-diff.ts";
 
 /**
  * Real git repositories in a temp folder: the routes are only as right as what git prints, so a
@@ -208,6 +208,82 @@ describe("comparing two commits", () => {
   });
 });
 
+describe("comparing a branch from where it forked", () => {
+  let root: string;
+  let forkPoint: string;
+  let next: string;
+  let feature: string;
+  beforeAll(() => {
+    root = repository("fork");
+    writeFileSync(join(root, "shared.txt"), "one\n");
+    git(root, "add", ".");
+    git(root, "commit", "-q", "-m", "first");
+    forkPoint = git(root, "rev-parse", "HEAD").trim();
+    git(root, "checkout", "-q", "-b", "next");
+    git(root, "checkout", "-q", "-b", "feat/x");
+    writeFileSync(join(root, "feature.txt"), "feature\n");
+    git(root, "add", ".");
+    git(root, "commit", "-q", "-m", "feature");
+    feature = git(root, "rev-parse", "HEAD").trim();
+    // next moves on after feat/x forked from it
+    git(root, "checkout", "-q", "next");
+    writeFileSync(join(root, "next.txt"), "later\n");
+    writeFileSync(join(root, "shared.txt"), "one\ntwo\n");
+    git(root, "add", ".");
+    git(root, "commit", "-q", "-m", "next moves on");
+    next = git(root, "rev-parse", "HEAD").trim();
+    // a branch with no history in common with the others
+    git(root, "checkout", "-q", "--orphan", "orphan");
+    git(root, "rm", "-q", "-rf", ".");
+    writeFileSync(join(root, "alone.txt"), "alone\n");
+    git(root, "add", ".");
+    git(root, "commit", "-q", "-m", "alone");
+    git(root, "checkout", "-q", "main");
+  });
+
+  it("lists only the branch's own changes and names the merge base git names", async () => {
+    expect(git(root, "merge-base", "next", "feat/x").trim()).toBe(forkPoint);
+    const list = await repoDiffFiles(root, query({ scope: "commit", base: "next", head: "feat/x", merge_base: "1" }));
+    expect(list).toMatchObject({ scope: "commit", base: next, head: feature, merge_base: forkPoint, total: 1, truncated: false });
+    expect(list.files.map((file) => [file.path, file.status])).toEqual([["feature.txt", "added"]]);
+    const answer = await repoDiffFile(root, query({ scope: "commit", base: "next", head: "feat/x", merge_base: "1", path: "feature.txt" }));
+    expect(answer).toMatchObject({ base: next, head: feature, merge_base: forkPoint, unavailable: null });
+    expect(parsed(answer.patch).map((file) => [file.name, file.type])).toEqual([["feature.txt", "new"]]);
+    // what next did since is no part of the branch's change
+    await expect(repoDiffFile(root, query({ scope: "commit", base: "next", head: "feat/x", merge_base: "1", path: "next.txt" }))).rejects.toMatchObject({ code: "not_found", status: 404 });
+  });
+
+  it("keeps a commit comparison two-dot without the parameter, and says nothing of a merge base", async () => {
+    const list = await repoDiffFiles(root, query({ scope: "commit", base: "next", head: "feat/x" }));
+    expect(list).toMatchObject({ base: next, head: feature });
+    expect("merge_base" in list).toBeFalse();
+    expect(list.files.map((file) => [file.path, file.status])).toEqual([["feature.txt", "added"], ["next.txt", "deleted"], ["shared.txt", "modified"]]);
+    const answer = await repoDiffFile(root, query({ scope: "commit", base: "next", head: "feat/x", path: "next.txt" }));
+    expect("merge_base" in answer).toBeFalse();
+    expect(parsed(answer.patch).map((file) => [file.name, file.type])).toEqual([["next.txt", "deleted"]]);
+  });
+
+  it("refuses branches with no history in common, naming the base", async () => {
+    const refused = repoDiffFiles(root, query({ scope: "commit", base: "orphan", head: "feat/x", merge_base: "1" }));
+    await expect(refused).rejects.toMatchObject({ code: "no_merge_base", status: 409, param: "base" });
+    await expect(repoDiffFile(root, query({ scope: "commit", base: "orphan", head: "feat/x", merge_base: "1", path: "feature.txt" }))).rejects.toMatchObject({ code: "no_merge_base", status: 409, param: "base" });
+  });
+
+  it("names the field a refused revision came from", async () => {
+    await expect(repoDiffFiles(root, query({ scope: "commit", base: "next", head: "no-such-branch", merge_base: "1" }))).rejects.toMatchObject({ code: "revision_not_found", status: 404, param: "head" });
+    await expect(repoDiffFiles(root, query({ scope: "commit", base: "no-such-branch", head: "feat/x" }))).rejects.toMatchObject({ code: "revision_not_found", status: 404, param: "base" });
+    await expect(repoDiffFiles(root, query({ scope: "commit", base: "next", head: "HEAD..main" }))).rejects.toMatchObject({ code: "invalid_revision", status: 400, param: "head" });
+    await expect(repoDiffFiles(root, query({ scope: "commit", head: "feat/x" }))).rejects.toMatchObject({ code: "invalid_revision", status: 400, param: "base" });
+  });
+
+  it("refuses a merge base outside the commit scope", async () => {
+    for (const scope of ["workspace", "staged"]) {
+      await expect(repoDiffFiles(root, query({ scope, merge_base: "1" }))).rejects.toMatchObject({ status: 400 });
+      await expect(repoDiffFile(root, query({ scope, merge_base: "1", path: "shared.txt" }))).rejects.toMatchObject({ status: 400 });
+    }
+  });
+});
+
 describe("repositories in an unusual state", () => {
   it("reads a repository with no commit yet: nothing, then untracked, then staged", async () => {
     const root = repository("unborn");
@@ -255,6 +331,110 @@ describe("repositories in an unusual state", () => {
     expect(Bun.spawnSync(["git", "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "-C", root, "merge", "side"], { stdout: "ignore", stderr: "ignore" }).exitCode).toBe(1);
     expect((await repoDiffFiles(root, query())).files).toEqual([{ path: "c.txt", old_path: null, status: "unmerged", additions: null, deletions: null, binary: null }]);
     expect(await repoDiffFile(root, query({ path: "c.txt" }))).toMatchObject({ patch: null, unavailable: "unmerged", truncated: false });
+  });
+});
+
+describe("the branches a review can compare", () => {
+  let root: string;
+  let checkedOut: string;
+  let linked: string;
+  /** A commit on `parent`, `seconds` after a fixed committer time, made without moving any branch. */
+  const commitAt = (cwd: string, parent: string, seconds: number): string => {
+    const result = Bun.spawnSync(["git", "-C", cwd, "commit-tree", `${parent}^{tree}`, "-p", parent, "-m", `at ${seconds}`], {
+      stdout: "pipe",
+      stderr: "pipe",
+      env: { ...process.env, GIT_AUTHOR_NAME: "Fixture", GIT_AUTHOR_EMAIL: "fixture@example.invalid", GIT_COMMITTER_NAME: "Fixture", GIT_COMMITTER_EMAIL: "fixture@example.invalid", GIT_COMMITTER_DATE: `${1_700_000_000 + seconds} +0000` },
+    });
+    if (result.exitCode !== 0) throw new Error(`git commit-tree failed: ${result.stderr.toString()}`);
+    return result.stdout.toString().trim();
+  };
+  beforeAll(() => {
+    root = repository("branches");
+    writeFileSync(join(root, "a.txt"), "one\n");
+    git(root, "add", ".");
+    git(root, "commit", "-q", "-m", "first");
+    const first = git(root, "rev-parse", "HEAD").trim();
+    git(root, "reset", "-q", "--hard", commitAt(root, first, 1_000));
+    git(root, "branch", "feat/old", commitAt(root, "main", 2_000));
+    git(root, "branch", "feat/new", commitAt(root, "main", 4_000));
+    git(root, "branch", "feat/gone", commitAt(root, "main", 1_500));
+    git(root, "update-ref", "refs/remotes/origin/main", "main");
+    git(root, "update-ref", "refs/remotes/origin/next", commitAt(root, "main", 3_000));
+    git(root, "update-ref", "refs/remotes/upstream/feat", commitAt(root, "main", 5_000));
+    git(root, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/next");
+    // feat/new in a worktree of its own, feat/old in one reached through a link, feat/gone in one whose folder is gone
+    checkedOut = join(scratch, "branches-new");
+    git(root, "worktree", "add", "-q", checkedOut, "feat/new");
+    mkdirSync(join(scratch, "branches-real"));
+    symlinkSync(join(scratch, "branches-real"), join(scratch, "branches-link"));
+    git(root, "worktree", "add", "-q", join(scratch, "branches-link", "old"), "feat/old");
+    linked = realpathSync(join(scratch, "branches-link", "old"));
+    git(root, "worktree", "add", "-q", join(scratch, "branches-gone"), "feat/gone");
+    rmSync(join(scratch, "branches-gone"), { recursive: true, force: true });
+    git(root, "worktree", "add", "-q", "--detach", join(scratch, "branches-detached"), "main");
+  });
+
+  it("lists local branches, then remote ones, each newest first, without a remote's HEAD, with where each is checked out", async () => {
+    const list = await repoBranches(root);
+    expect(list.repository).toMatchObject({ root, branch: "main" });
+    expect(list.branches).toEqual([
+      { name: "feat/new", remote: false, worktree: checkedOut },
+      { name: "feat/old", remote: false, worktree: linked },
+      { name: "feat/gone", remote: false, worktree: null },
+      { name: "main", remote: false, worktree: root },
+      { name: "upstream/feat", remote: true, worktree: null },
+      { name: "origin/next", remote: true, worktree: null },
+      { name: "origin/main", remote: true, worktree: null },
+    ]);
+    expect(list).toMatchObject({ default_base: "origin/next", truncated: false, limits: { max_branches: REPO_BRANCHES_MAX } });
+    // the same list from inside another worktree of the repository
+    expect((await repoBranches(checkedOut)).branches.map((branch) => branch.name)).toEqual(list.branches.map((branch) => branch.name));
+  });
+
+  it("keeps every local branch at the cap and fills the rest with the newest remote ones", async () => {
+    const some = await repoBranches(root, { maxBranches: 5 });
+    expect(some.branches.map((branch) => branch.name)).toEqual(["feat/new", "feat/old", "feat/gone", "main", "upstream/feat"]);
+    expect(some).toMatchObject({ truncated: true, limits: { max_branches: 5 } });
+    const locals = await repoBranches(root, { maxBranches: 2 });
+    expect(locals.branches.map((branch) => branch.name)).toEqual(["feat/new", "feat/old", "feat/gone", "main"]);
+    expect(locals.truncated).toBeTrue();
+    expect((await repoBranches(root, { maxBranches: 7 })).truncated).toBeFalse();
+  });
+
+  it("names the default base: origin/HEAD's branch, else main, else master, else none", async () => {
+    const named = repository("default-main");
+    writeFileSync(join(named, "a.txt"), "one\n");
+    git(named, "add", ".");
+    git(named, "commit", "-q", "-m", "first");
+    git(named, "branch", "master");
+    expect((await repoBranches(named)).default_base).toBe("main");
+    git(named, "branch", "-q", "-m", "main", "trunk");
+    expect((await repoBranches(named)).default_base).toBe("master");
+    git(named, "branch", "-q", "-D", "master");
+    expect((await repoBranches(named)).default_base).toBeNull();
+  });
+
+  it("lists nothing in a repository with no commit, or with no branch left", async () => {
+    const unborn = repository("branches-unborn");
+    expect(await repoBranches(unborn)).toMatchObject({ repository: { root: unborn, unborn: true }, branches: [], default_base: null, truncated: false });
+    const none = repository("branches-none");
+    writeFileSync(join(none, "a.txt"), "one\n");
+    git(none, "add", ".");
+    git(none, "commit", "-q", "-m", "first");
+    git(none, "checkout", "-q", "--detach");
+    git(none, "branch", "-q", "-D", "main");
+    expect(await repoBranches(none)).toMatchObject({ repository: { detached: true }, branches: [], default_base: null, truncated: false });
+    await expect(repoBranches(join(scratch, "missing"))).rejects.toMatchObject({ code: "not_a_repository", status: 409 });
+  });
+
+  it("answers as the other diff routes do, refusals in the error envelope", async () => {
+    const answered = await repoDiffResponse("branches", root, query());
+    expect(answered.status).toBe(200);
+    expect(answered.headers.get("cache-control")).toBe("private, no-store");
+    expect((await answered.json() as RepoBranchList).default_base).toBe("origin/next");
+    const refused = await repoDiffResponse("branches", join(scratch, "missing"), query());
+    expect(refused.status).toBe(409);
+    expect((await refused.json() as ApiError).error.code).toBe("not_a_repository");
   });
 });
 
@@ -381,6 +561,7 @@ describe("GET /api/workspace/diff/*", () => {
       [`${directory()}&scope=all`, 400, "invalid_scope"],
       [`${directory()}&scope=commit&base=--output%3D%2Ftmp%2Fx`, 400, "invalid_revision"],
       [`${directory()}&scope=commit&base=nope`, 404, "revision_not_found"],
+      [`${directory()}&merge_base=1`, 400, "invalid_scope"],
     ];
     for (const [search, status, code] of cases) {
       const response = await files(search);
@@ -394,6 +575,11 @@ describe("GET /api/workspace/diff/*", () => {
       expect(response.status).toBe(status);
       expect((await response.json() as ApiError).error.code).toBe(code);
     }
+    const named = await files(`${directory()}&scope=commit&base=HEAD&head=nope&merge_base=1`);
+    expect(named.status).toBe(404);
+    expect((await named.json() as ApiError).error).toMatchObject({ code: "revision_not_found", param: "head" });
+    const unnamed = await files(`${directory()}&scope=all`);
+    expect("param" in (await unnamed.json() as ApiError).error).toBeFalse();
     const posted = await files(directory(), { ...owner, "x-herdr-machine": "1" }, "POST");
     expect(posted.status).toBe(400);
     expect((await posted.json() as ApiError).error.code).toBe("method_not_allowed");

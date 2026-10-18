@@ -2,6 +2,7 @@ import { afterAll, describe, expect, it } from "bun:test";
 
 import { handleMachineRequest } from "./machine-api.ts";
 import type { MachineManager } from "./machines.ts";
+import { REPO_DIFF_ROUTES } from "./repo-diff.ts";
 
 // A remote bridge that answers like the local conversation route: an ETag, then 304 while unchanged.
 const asked: (string | null)[] = [];
@@ -108,7 +109,7 @@ it("refuses a path with an empty segment instead of forwarding it as another rou
 it("forwards a repository diff read with its query and the bridge's own credential, and nothing of the browser's", async () => {
   const before = diffAsked.length;
   const search = "?pane_id=w1%3Ap1&scope=commit&base=HEAD~1&path=dir%20with%20space%2Fa.txt";
-  for (const route of ["files", "file"]) {
+  for (const route of REPO_DIFF_ROUTES) {
     const response = await handleMachineRequest(new Request(`http://127.0.0.1/api/machines/pc1/workspace/diff/${route}${search}`, {
       headers: { cookie: "herdr_web_token=browser-secret; herdr_web_device=device-secret", authorization: "Bearer browser-secret", "x-forwarded-for": "203.0.113.9" },
     }), manager);
@@ -117,9 +118,9 @@ it("forwards a repository diff read with its query and the bridge's own credenti
     expect(response.headers.get("cache-control")).toBe("no-store");
     expect(await response.json()).toEqual({ files: [], total: 0, truncated: false });
   }
-  expect(diffAsked.slice(before)).toEqual(["files", "file"].map((route) => ({ path: `/api/workspace/diff/${route}`, search, authorization: "Bearer remote-token", cookie: null, forwarded: null })));
-  // only the two reads are routes: nothing else under that name reaches the PC
-  for (const path of ["workspace/diff", "workspace/diff/file/extra", "workspace/diff/apply", "workspace/diffs/file"]) {
+  expect(diffAsked.slice(before)).toEqual(REPO_DIFF_ROUTES.map((route) => ({ path: `/api/workspace/diff/${route}`, search, authorization: "Bearer remote-token", cookie: null, forwarded: null })));
+  // only the reads are routes: nothing else under that name reaches the PC
+  for (const path of ["workspace/diff", "workspace/diff/file/extra", "workspace/diff/branches/extra", "workspace/diff/apply", "workspace/diffs/file"]) {
     const response = await handleMachineRequest(new Request(`http://127.0.0.1/api/machines/pc1/${path}${search}`), manager);
     expect(response.status).toBe(404);
     expect(await response.json()).toMatchObject({ error: { code: "not_found" } });
@@ -127,7 +128,7 @@ it("forwards a repository diff read with its query and the bridge's own credenti
   const crossSite = await handleMachineRequest(new Request(`http://127.0.0.1/api/machines/pc1/workspace/diff/file${search}`, { headers: { "sec-fetch-site": "cross-site", "sec-fetch-mode": "navigate" } }), manager);
   expect(crossSite.status).toBe(403);
   expect(await crossSite.json()).toMatchObject({ error: { code: "invalid_origin" } });
-  expect(diffAsked.length).toBe(before + 2);
+  expect(diffAsked.length).toBe(before + REPO_DIFF_ROUTES.length);
 });
 
 it("gives a watching device a PC's plan card without Claude's plan file, even from a PC that ignores the ask", async () => {

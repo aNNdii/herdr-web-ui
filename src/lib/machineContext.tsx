@@ -50,6 +50,7 @@ export function useMachineApi() {
     fetchRepoDiffFiles: (query: api.RepoDiffQuery & { stamps?: boolean }) => api.fetchRepoDiffFiles(query, id),
     fetchRepoDiffFile: (query: api.RepoDiffQuery, path: string, oldPath: string | null) => api.fetchRepoDiffFile(query, path, oldPath, id),
     fetchRepoDiffTree: (query: Pick<api.RepoDiffQuery, "paneId" | "directory"> & { ignored?: boolean; folder?: boolean }) => api.fetchRepoDiffTree(query, id),
+    fetchRepoBranches: (query: Pick<api.RepoDiffQuery, "paneId" | "directory">) => api.fetchRepoBranches(query, id),
     createWorkspace: (request: api.CreateWorkspaceRequest) => api.createWorkspace(request, id),
     createTab: (request: api.CreateTabRequest) => api.createTab(request, id),
     renameTab: (tab: string, label: string) => api.renameTab(tab, label, id),

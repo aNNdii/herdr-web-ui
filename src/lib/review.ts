@@ -1,4 +1,5 @@
 import type { RepoDiffFile, RepoDiffStatus } from "../../shared/protocol.ts";
+import type { DiffRow } from "./diffSides.ts";
 import type { FileTarget, LineRange } from "./fileComments.ts";
 
 /** The marks `@pierre/trees` draws on a row (its own names for git's statuses). */
@@ -33,6 +34,15 @@ export function treeMarks(files: readonly RepoDiffFile[]): TreeMark[] {
 /** The lines a selection spans, first line first, whichever way it was dragged. */
 export function rangeOf(start: number, end: number): LineRange {
   return start <= end ? [start, end] : [end, start];
+}
+
+/**
+ * The working tree's lines a selection of drawn diff rows comments on: the rows of the old file are left out, and a
+ * selection of removed lines only is refused (null), as a working-tree comment has no line in the old file.
+ */
+export function workspacePick(rows: readonly DiffRow[]): LineRange | null {
+  const lines = rows.filter((row) => !row.old).map((row) => row.line).filter((line) => Number.isFinite(line) && line > 0);
+  return lines.length === 0 ? null : [Math.min(...lines), Math.max(...lines)];
 }
 
 /**
