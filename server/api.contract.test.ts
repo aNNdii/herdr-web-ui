@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { ConversationMonitor } from "./conversation-monitor.ts";
 import { createServer } from "./index.ts";
-import type { AgentKind, AgentStatus, ApiError, HealthAuth, IntegrationsResponse, LanExposure, PortalStatus, PushKey, RemoteAccess, SessionSnapshot, TabMoved, PaneFindResponse, PaneReadResult, UsageReport, WorkspaceCreated, WorktreeListing, WorktreeOpened, WorktreeRemoved } from "../shared/protocol.ts";
+import type { AgentKind, AgentStatus, ApiError, HealthAuth, HerdrPane, IntegrationsResponse, LanExposure, OmoActivity, PortalStatus, PushKey, RemoteAccess, ServerMessage, SessionSnapshot, TabMoved, PaneFindResponse, PaneReadResult, UsageReport, WorkspaceCreated, WorktreeListing, WorktreeOpened, WorktreeRemoved } from "../shared/protocol.ts";
 import { HerdrUpdater } from "./herdr-update.ts";
 import { PortalService } from "./portal.ts";
 import { noInstalledNotes, unmanagedUpdateStatus, type HerdrUpdateStatus, type InstalledNotes, type UpdateNotes } from "../shared/update.ts";
@@ -1527,6 +1527,128 @@ describe("GET /api/pane/omo-tasks", () => {
     expect(body.runs).toEqual([]);
     expect(Number.isFinite(Date.parse(body.server_time))).toBe(true);
   });
+
+  it.skipIf(process.platform !== "linux")("lists, counts and holds a Pi pane's pi-subagents agents uncapped, and a Pi pane without them as before", async () => {
+    const root = mkdtempSync(join(tmpdir(), "herdr-web-ui-pi-subagents-contract-"));
+    const slug = `--${root.replaceAll("/", "-")}--`;
+    const SESSION = "33333333-3333-4333-8333-333333333333";
+    /** a profile pi runs in (its own agent dir and TMPDIR), with pi-subagents loaded or not */
+    const profile = (name: string, subagents: boolean) => {
+      const dir = join(root, name);
+      mkdirSync(join(dir, "sessions", slug), { recursive: true });
+      mkdirSync(join(dir, "tmp"), { recursive: true });
+      if (subagents) {
+        const pkg = join(dir, "npm", "node_modules", "@tintinweb", "pi-subagents");
+        mkdirSync(join(pkg, "src"), { recursive: true });
+        writeFileSync(join(pkg, "package.json"), JSON.stringify({ name: "@tintinweb/pi-subagents", pi: { extensions: ["./src/index.ts"] } }));
+        writeFileSync(join(pkg, "src", "index.ts"), "export default () => {};\n");
+        writeFileSync(join(dir, "settings.json"), JSON.stringify({ packages: ["npm:@tintinweb/pi-subagents@0.22.0"] }));
+      }
+      const executable = join(root, `${name}-pi`);
+      writeFileSync(executable, `#!/bin/bash\nexport PI_CODING_AGENT_DIR='${dir}'\nexport TMPDIR='${join(dir, "tmp")}'\nexec -a pi /bin/sleep 600\n`);
+      chmodSync(executable, 0o755);
+      return { executable, session: join(dir, "sessions", slug, `2026-10-18T11-00-00-000Z_${SESSION}.jsonl`) };
+    };
+    let seq = Date.now() * 1000;
+    const workspaces: string[] = [];
+    const piPane = async (executable: string, session: string): Promise<string> => {
+      const created = await workspaceCreate({ cwd: root, label: "herdr-web-ui-test-pi-subagents" });
+      workspaces.push(created.workspace.workspace_id);
+      const paneId = created.root_pane.pane_id;
+      await herdrRpc("pane.send_text", { pane_id: paneId, text: `${executable}\n` });
+      for (const deadline = Date.now() + 10_000;;) {
+        if ((await sessionSnapshot()).panes.find((pane) => pane.pane_id === paneId)?.agent === "pi") break;
+        if (Date.now() > deadline) throw new Error("fixture pi process did not start");
+        await Bun.sleep(50);
+      }
+      await herdrRpc("pane.report_agent", { pane_id: paneId, source: "herdr:pi", agent: "pi", state: "idle", seq: ++seq, agent_session_path: session });
+      await herdrRpc("pane.report_agent_session", { pane_id: paneId, source: "herdr:pi", agent: "pi", seq: ++seq, agent_session_path: session, session_start_source: "startup" });
+      return paneId;
+    };
+    let clock = Date.now();
+    let n = 0;
+    const write = (path: string, ...entries: Record<string, unknown>[]) => appendFileSync(path, entries.map((entry) => JSON.stringify({ ...entry, id: `e${++n}`, parentId: null, timestamp: new Date(clock).toISOString() }) + "\n").join(""));
+    const header = (path: string) => writeFileSync(path, JSON.stringify({ type: "session", version: 3, id: SESSION, timestamp: new Date(clock).toISOString(), cwd: root }) + "\n");
+    const record = (id: string, status: string) => ({ type: "custom", customType: "subagents:record", data: { id, type: "Explore", description: `task ${id}`, status, result: "done", startedAt: clock - 1000, completedAt: clock } });
+
+    const loaded = profile("with", true);
+    const bare = profile("without", false);
+    header(loaded.session);
+    write(loaded.session, record("a0", "completed"));
+    header(bare.session);
+    write(bare.session, { type: "message", message: { role: "user", content: [{ type: "text", text: "hi" }], timestamp: clock } });
+    const pi = await piPane(loaded.executable, loaded.session);
+    const other = await piPane(bare.executable, bare.session);
+    // a hold measured in moments: the limit a Claude turn is held at most, and the grace after the work ended
+    const app = createServer({ port: 0, hostname: "127.0.0.1", token: "", stateDir: join(root, "state"), statusNow: () => clock, backgroundWait: { grace: 1500, limit: 1000 } });
+    const frames: ServerMessage[] = [];
+    const socket = new WebSocket(`ws://127.0.0.1:${app.port}/ws`);
+    socket.addEventListener("message", (event) => frames.push(JSON.parse(String(event.data))));
+    const url = (path: string, paneId: string) => `http://127.0.0.1:${app.port}${path}?pane_id=${encodeURIComponent(paneId)}`;
+    const tasks = async (paneId: string): Promise<OmoActivity> => await (await fetch(url("/api/pane/omo-tasks", paneId))).json();
+    const shown = async (paneId: string): Promise<HerdrPane | undefined> =>
+      ((await (await fetch(`http://127.0.0.1:${app.port}/api/session`)).json()) as { snapshot: SessionSnapshot }).snapshot.panes.find((pane) => pane.pane_id === paneId);
+    const until = async <T>(read: () => Promise<T> | T, check: (value: T) => boolean, label: string): Promise<T> => {
+      for (const deadline = Date.now() + 10_000;;) {
+        const value = await read();
+        if (check(value)) return value;
+        if (Date.now() > deadline) throw new Error(`${label}: ${JSON.stringify(value)}`);
+        await Bun.sleep(50);
+      }
+    };
+    const status = (paneId: string, check: (frame: Extract<ServerMessage, { type: "pane-status" }>) => boolean, from = frames.length) =>
+      until(() => frames.slice(from).find((frame): frame is Extract<ServerMessage, { type: "pane-status" }> => frame.type === "pane-status" && frame.pane_id === paneId && check(frame)), (frame) => frame !== undefined, `pane-status of ${paneId}`);
+    // pi's own integration names its session with each state, or herdr drops it
+    const report = async (paneId: string, session: string, state: "working" | "idle") => {
+      const from = frames.length;
+      await herdrRpc("pane.report_agent", { pane_id: paneId, source: "herdr:pi", agent: "pi", state, seq: ++seq, agent_session_path: session });
+      return (await status(paneId, (frame) => frame.agent_status === (state === "working" ? "working" : "done"), from))!;
+    };
+    try {
+      await app.statusReady;
+      // the route finds the pane's session itself: the ended agent is listed once it has
+      await until(() => tasks(pi), (body) => body.tasks.some((task) => task.id === "a0"), "ended agent listed");
+      expect(await tasks(pi)).toMatchObject({ tasks: [{ id: "a0", title: "task a0", category: "Explore", status: "completed" }], runs: [] });
+
+      // a turn starts a background agent and ends while it runs: held, uncapped
+      await report(pi, loaded.session, "working");
+      clock += 500;
+      write(loaded.session,
+        { type: "message", message: { role: "user", content: [{ type: "text", text: "look around" }], timestamp: clock } },
+        { type: "message", message: { role: "assistant", content: [{ type: "toolCall", id: "call_a1", name: "Agent", arguments: { description: "task a1", subagent_type: "Explore", prompt: "look", run_in_background: true } }], stopReason: "toolUse", timestamp: clock } },
+        { type: "message", message: { role: "toolResult", toolCallId: "call_a1", toolName: "Agent", content: [{ type: "text", text: "Agent started in background.\nAgent ID: a1" }], details: { description: "task a1", subagentType: "Explore", modelName: "haiku 4.5", status: "background", agentId: "a1" }, isError: false, timestamp: clock } });
+      await status(pi, (frame) => frame.background_tasks === 1, 0);
+      expect(await until(() => shown(pi), (pane) => pane?.background_tasks === 1, "counted in the snapshot")).toMatchObject({ background_tasks: 1 });
+      expect((await tasks(pi)).tasks.map((task) => [task.id, task.status])).toEqual([["a1", "running"], ["a0", "completed"]]);
+      clock += 500;
+      expect(await report(pi, loaded.session, "idle")).toMatchObject({ agent_status: "done", background_tasks: 1, background_wait: true });
+      clock += 10_000;
+      // fixed wait: proving the hold outlasts the limit needs a wait tick (every second) to pass with nothing released
+      await Bun.sleep(1500);
+      expect(await shown(pi)).toMatchObject({ background_tasks: 1, background_wait: true });
+
+      // the agent ends: the count drops, and the hold lets go once the grace has passed
+      const ended = frames.length;
+      write(loaded.session, record("a1", "completed"));
+      await status(pi, (frame) => frame.background_tasks === 0, ended);
+      clock += 2000;
+      await status(pi, (frame) => frame.background_wait !== true, ended);
+      expect(await shown(pi)).not.toHaveProperty("background_wait");
+
+      // a Pi pane whose pi does not load pi-subagents answers as before: no list, no count, no hold
+      expect(await tasks(other)).toMatchObject({ tasks: [], runs: [] });
+      await report(other, bare.session, "working");
+      const idle = await report(other, bare.session, "idle");
+      expect(idle).not.toHaveProperty("background_tasks");
+      expect(idle).not.toHaveProperty("background_wait");
+    } finally {
+      socket.close();
+      app.stop();
+      for (const workspace of workspaces) await workspaceClose(workspace);
+      forgetTranscriptState();
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, 40_000);
 });
 
 describe("GET /api/session", () => {

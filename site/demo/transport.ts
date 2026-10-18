@@ -12,7 +12,7 @@
  * one notice instead of a TUI. A message sent from a chat gets a demo answer.
  * What does not: files, images, push and remote PCs, which need a real machine.
  */
-import type { AgentIntegration, AgentStatus, ConversationTurn, IntegrationsResponse, Machine, MachineEvent, PaneDirection, PaneFindMatch, PaneFindRequest, PanePlan, PaneResized, PaneSplit, PaneSubagents, PaneSwapped, PaneZoomed, PendingMessage, PlanStep, PluginActionResult, PluginActions, PluginActionsResponse, PortalStatus, ServerMessage, SessionSnapshot, TabMoved, UsageReport, WorkspaceCreated, WorkspaceInfo, WorktreeEntry, WorktreeListing, WorktreeOpened, WorktreeRemoved } from "../../shared/protocol.ts";
+import type { AgentIntegration, AgentStatus, ConversationTurn, IntegrationsResponse, Machine, MachineEvent, OmoActivity, PaneDirection, PaneFindMatch, PaneFindRequest, PanePlan, PaneResized, PaneSplit, PaneSubagents, PaneSwapped, PaneZoomed, PendingMessage, PlanStep, PluginActionResult, PluginActions, PluginActionsResponse, PortalStatus, ServerMessage, SessionSnapshot, TabMoved, UsageReport, WorkspaceCreated, WorkspaceInfo, WorktreeEntry, WorktreeListing, WorktreeOpened, WorktreeRemoved } from "../../shared/protocol.ts";
 import type { RepoBranch, RepoBranchList, RepoDiffFile, RepoDiffFileList, RepoDiffFilePatch, RepoDiffRepository, RepoDiffScope, RepoDiffTree } from "../../shared/protocol.ts";
 import { VOICE_DEFAULTS, type VoiceStatus } from "../../shared/voice.ts";
 import { isAgentName } from "../../shared/agent-name.ts";
@@ -20,7 +20,7 @@ import { neighborPane } from "../../src/lib/layoutMap.ts";
 import { closeLayoutPane, resizeLayout, setLayoutSplitRatio, splitLayout, swapLayoutPanes } from "../../src/lib/layoutTree.ts";
 import { rollupStatus } from "../../src/lib/status.ts";
 import { movedTabOrder } from "../../src/lib/tabOrder.ts";
-import { CHATS, PROMPT, SPECS, type DemoSpec } from "./fixtures.ts";
+import { CHATS, DEMO_PI_AGENTS, PROMPT, SPECS, t, type DemoSpec } from "./fixtures.ts";
 import { DemoHistory } from "./history.ts";
 import machinesFixture from "./fixtures/machines.json";
 import agentsFixture from "./fixtures/agents.json";
@@ -70,7 +70,7 @@ const chats = new Map<string, { turns: ConversationTurn[]; metadata: { model: st
 );
 // The fixtures' clocks say September 25th; the demo happens now. Every timestamp moves by the same
 // amount, so "Worked for" stays what it was and the newest turn ended three minutes ago.
-{
+const fixtureShift = (() => {
   const stamps = [...chats.values()].flatMap((chat) => chat.turns.flatMap((turn) => [turn.ts, turn.end_ts].filter((v): v is string => typeof v === "string")));
   const newest = Math.max(...stamps.map((v) => Date.parse(v)));
   const shift = Date.now() - 3 * 60_000 - newest;
@@ -78,7 +78,23 @@ const chats = new Map<string, { turns: ConversationTurn[]; metadata: { model: st
     if (turn.ts) turn.ts = new Date(Date.parse(turn.ts) + shift).toISOString();
     if (turn.end_ts) turn.end_ts = new Date(Date.parse(turn.end_ts) + shift).toISOString();
   }
-}
+  return shift;
+})();
+/** a fixture timestamp on the demo's clock, as the chats' turns were moved */
+const demoAt = (stamp: string) => new Date(Date.parse(stamp) + fixtureShift).toISOString();
+/**
+ * what /api/pane/omo-tasks answers for the pi pane: the explore agent its chat's card reports,
+ * the smoke test still running, and the help-text workflow halfway through its agents
+ */
+const DEMO_PI_ACTIVITY: Omit<OmoActivity, "server_time"> = {
+  tasks: [
+    { id: DEMO_PI_AGENTS.smoke, title: "Run the release smoke test", category: "general-purpose", model: "anthropic/claude-sonnet-5", status: "running", started_at: demoAt(t(24, 20)), ended_at: null, turns: 4, tool_calls: 7, tokens: 18_400 },
+    { id: DEMO_PI_AGENTS.explore, title: "Find the RELEASE_ variables", category: "explore", model: "anthropic/claude-haiku-5", status: "completed", started_at: demoAt(t(21, 36)), ended_at: demoAt(t(23)), turns: 6, tool_calls: 9, tokens: 41_200 },
+  ],
+  runs: [
+    { id: DEMO_PI_AGENTS.workflow, name: "help-text-review", status: "running", started_at: demoAt(t(24, 25)), ended_at: null, waves: [], agents_done: 3, agents_failed: 1 },
+  ],
+};
 let promptOpen = true;
 let promptId = PROMPT.id;
 let nextWorkspace = 100;
@@ -229,6 +245,8 @@ function layOutRoster(): void {
 }
 layOutRoster();
 for (const pane of snapshot().panes) if (keyOfPane.get(pane.pane_id) === "api") Object.assign(pane, { plan: { done: 1, total: planSteps.length, current: "Adding the replay metric" } });
+// the pi pane's running smoke-test agent and help-text workflow
+for (const pane of snapshot().panes) if (keyOfPane.get(pane.pane_id) === "cli") Object.assign(pane, { background_tasks: DEMO_PI_ACTIVITY.tasks.filter((task) => task.status === "running").length + DEMO_PI_ACTIVITY.runs.filter((run) => run.status === "running").length });
 
 // The last workspace can be closed in a demo, so creation keeps templates independent of it.
 const newPaneTemplate = structuredClone(snapshot().panes[0]!);
@@ -720,7 +738,10 @@ async function route(url: URL, method: string, init: RequestInit | undefined, in
     if (request.jump !== false && result.match) redrawHistory(target);
     return json(result);
   }
-  if (path === "/api/pane/omo-tasks") return json({ tasks: [], runs: [] });
+  if (path === "/api/pane/omo-tasks") {
+    const activity = keyOfPane.get(paneId) === "cli" ? DEMO_PI_ACTIVITY : { tasks: [], runs: [] };
+    return json({ ...activity, server_time: new Date().toISOString() } satisfies OmoActivity);
+  }
   if (path === "/api/pane/files") {
     const q = (query.get("q") ?? "").toLowerCase();
     return json({ files: DEMO_FILES.filter((file) => file.toLowerCase().includes(q)).slice(0, Number(query.get("limit") ?? 20)) });

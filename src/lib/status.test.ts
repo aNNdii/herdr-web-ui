@@ -28,6 +28,17 @@ describe("paneStatus", () => {
     expect(paneStatus({ agent_status: "done" })).toBe("done");
   });
 
+  it("reads a Pi or OmO pane at rest with agents running as BG, held or not; a Claude one only while held", () => {
+    expect(paneStatus({ agent: "pi", agent_status: "done", background_tasks: 1 })).toBe("waiting");
+    expect(paneStatus({ agent: "omo", agent_status: "idle", background_tasks: 2 })).toBe("waiting");
+    expect(paneStatus({ agent: "pi", agent_status: "working", background_tasks: 1 })).toBe("working");
+    expect(paneStatus({ agent: "pi", agent_status: "blocked", background_tasks: 1 })).toBe("blocked");
+    expect(paneStatus({ agent: "pi", agent_status: "done", background_tasks: 0 })).toBe("done");
+    // Claude's count holds commands a turn left running, a dev server too
+    expect(paneStatus({ agent: "claude", agent_status: "done", background_tasks: 1 })).toBe("done");
+    expect(paneStatus({ agent: null, agent_status: "done", background_tasks: 1 })).toBe("done");
+  });
+
   it("is unknown only when no pane says more", () => {
     expect(rollupStatus([undefined, "unknown", "something-new"])).toBe("unknown");
     expect(rollupStatus([])).toBe("unknown");

@@ -26,6 +26,27 @@ describe("BackgroundWait", () => {
     expect(waits.waiting("omo")).toBe(false);
   });
 
+  it("holds a Pi turn past the limit while the agents its prompt started run, and none that came before the prompt", () => {
+    const time = clock();
+    const waits = new BackgroundWait(time.now);
+    // index.ts subagentsChanged: a Pi pane's counts and promptAt, uncapped
+    waits.status("pi", "working");
+    time.pass(1000);
+    waits.running("pi", 1, 500, false);
+    waits.status("pi", "done");
+    expect(waits.waiting("pi")).toBe(true);
+    time.pass(WAIT_LIMIT_MS + 1000);
+    expect(waits.tick()).toEqual([]);
+    expect(waits.waiting("pi")).toBe(true);
+    // the agent ends: held for the grace, then let go
+    waits.running("pi", 0, 500, false);
+    time.pass(WAIT_GRACE_MS);
+    expect(waits.tick()).toEqual(["pi"]);
+    // a newer prompt, after the rest: the agents still running are an older turn's
+    waits.running("pi", 1, time.now() + 1, false);
+    expect(waits.waiting("pi")).toBe(false);
+  });
+
   it("holds an OmO turn that ends in the same read as its running tasks are counted", () => {
     const time = clock();
     const waits = new BackgroundWait(time.now);

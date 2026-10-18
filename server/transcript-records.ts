@@ -1,5 +1,6 @@
 /** Shared native-record rules keep paging, rendering and on-demand results consistent. */
 import type { ConversationPart, ConversationTurn, OmoTaskResult } from "../shared/protocol.ts";
+import { workflowTitle } from "../shared/workflow-title.ts";
 import type { SubagentDetail, TaskNotification } from "./claude-subagents.ts";
 import { skillInvocationPrompt, skillPromptMessage } from "./skill-activity.ts";
 import { trimOutput } from "./tool-output.ts";
@@ -215,6 +216,10 @@ export function toolSummary(name: string, input: Record<string, unknown>): strin
     const titles = items.map((item) => label(item["task_summary"]) ?? label(item["description"])).filter((title) => title !== null);
     if (titles.length > 0) return titles.join(" · ").slice(0, 120);
   }
+  // a pi-subagents workflow: its name, else its script's file, never the `description` it ignores
+  if (name === "SubagentWorkflow") {
+    return workflowTitle(label(input["name"]), label(input["scriptPath"])).slice(0, 120);
+  }
   // what the agent itself said the call is for: OmO's eval `summary`, the `description` Claude
   // gives a Bash command or a subagent's prompt. Another tool's `description` is its own data.
   const said = typeof input["code"] === "string" ? label(input["summary"])
@@ -235,7 +240,7 @@ export function toolSummary(name: string, input: Record<string, unknown>): strin
  * was woken by something nobody typed, such as omo's hidden monitor or background-task
  * notification. Merging across it folded the answer before it into the next turn's work block.
  */
-export function parseOmpTranscript(text: string, maxTurns = MAX_TURNS, options: { toolImages?: boolean; taskTitles?: Map<string, string> } = {}): ConversationTurn[] {
+export function parseOmpTranscript(text: string, maxTurns = MAX_TURNS, options: { toolImages?: boolean; taskTitles?: Map<string, string>; subagentCards?: (entry: unknown) => OmoTaskResult[] | null } = {}): ConversationTurn[] {
   const turns: ConversationTurn[] = [];
   /** tool parts still waiting for their result, by toolCall id */
   const pending = new Map<string, Extract<ConversationPart, { kind: "tool" }>>();
@@ -269,6 +274,12 @@ export function parseOmpTranscript(text: string, maxTurns = MAX_TURNS, options: 
     const skillPrompt = skillPromptMessage(entry);
     if (skillPrompt !== null) {
       turns.push({ role: "user", ts: timestamp ?? null, parts: [{ kind: "text", text: skillPrompt.request }, ...skillPrompt.skills.map((skill) => ({ kind: "skill" as const, skill }))] });
+      continue;
+    }
+    // a pi-subagents notification is the end of background work: its card, not its envelope
+    const cards = options.subagentCards?.(entry) ?? null;
+    if (cards !== null) {
+      turns.push({ role: "user", ts: timestamp ?? null, parts: [{ kind: "task_result", tasks: cards }] });
       continue;
     }
     const notice = piNotice(entry);

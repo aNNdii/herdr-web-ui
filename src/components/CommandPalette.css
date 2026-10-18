@@ -104,11 +104,16 @@
   color: var(--status-blocked);
 }
 
-.palette-filter[data-status="working"][aria-checked="true"],
-.palette-filter[data-status="waiting"][aria-checked="true"] {
+.palette-filter[data-status="working"][aria-checked="true"] {
   background: var(--status-working-tint);
   border-color: transparent;
   color: var(--status-working);
+}
+
+.palette-filter[data-status="waiting"][aria-checked="true"] {
+  background: var(--status-waiting-tint);
+  border-color: transparent;
+  color: var(--status-waiting);
 }
 
 .palette-filter[data-status="done"][aria-checked="true"] {

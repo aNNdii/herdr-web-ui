@@ -3,6 +3,8 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { paneSubagents } from "../commands.ts";
+import { piRunsSubagents } from "./pi-agents.ts";
+import { readPiConfig } from "./pi-config.ts";
 
 const roots: string[] = [];
 const previousHome = process.env.HOME;
@@ -239,5 +241,28 @@ describe("paneSubagents", () => {
     expect(paneSubagents("claude", cwd, home)).toEqual([]);
     expect(paneSubagents(null, cwd, home)).toEqual([]);
     expect(paneSubagents("nope", cwd, home)).toEqual([]);
+  });
+});
+
+describe("piRunsSubagents", () => {
+  const runs = (home: string, cwd: string) => piRunsSubagents(readPiConfig({ home, cwd, repoRoot: null, env: null, roots: {} }));
+
+  it("is true only while pi loads the pi-subagents extension", () => {
+    const { settings, root, home, cwd } = setup();
+    expect(runs(home, cwd)).toBe(false);
+    settings({ packages: [`${SUBAGENTS}@0.22.0`] });
+    expect(runs(home, cwd)).toBe(true);
+    settings({ packages: [{ source: SUBAGENTS, extensions: [] }] });
+    expect(runs(home, cwd)).toBe(false);
+    settings({ packages: [SUBAGENTS] });
+    rmSync(root, { recursive: true });
+    expect(runs(home, cwd)).toBe(false);
+  });
+
+  it("ignores agentMentions: off silences the menu, not the extension", () => {
+    const { settings, subagentsJson, home, cwd } = setup();
+    settings({ packages: [SUBAGENTS] });
+    subagentsJson({ agentMentions: "off" });
+    expect(runs(home, cwd)).toBe(true);
   });
 });

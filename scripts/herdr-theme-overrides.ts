@@ -307,6 +307,33 @@ export const OVERRIDES: readonly ThemeOverride[] = [
   {"theme":"rose-pine-dawn","mode":"light","role":"syntax-type","value":"#9e5600","dE":23.02522815963855,"reason":"AA lightness repair on serialized hex (target 4.6; chroma reduction at most 5%)"},
   {"theme":"rose-pine-dawn","mode":"light","role":"syntax-meta","value":"#33717c","dE":11.64373069428541,"reason":"AA lightness repair on serialized hex (target 4.6; chroma reduction at most 5%)"},
   {"theme":"rose-pine-dawn","mode":"light","role":"primary","value":"#7e659b","dE":6.5855528356763084,"reason":"AA lightness repair of the primary fill under primary-text (target 4.5)"},
+  // --status-waiting (BG): the mapTheme mauve/peach rule, AA-repaired as proposeTheme reports it.
+  {"theme":"tokyo-night-day","mode":"light","role":"status-waiting","value":"#5e299f","dE":9.23647261560602,"reason":"AA lightness repair on serialized hex (target 4.6; chroma reduction at most 5%)"},
+  {"theme":"tokyo-night-day","mode":"light","role":"status-waiting-tint","value":"rgba(94, 41, 159, 0.12)","dE":9.23647261560602,"reason":"Recomputed default from AA-repaired foreground"},
+  {"theme":"gruvbox","mode":"dark","role":"status-waiting","value":"#f5a6bb","dE":10.209325626163269,"reason":"AA lightness repair on serialized hex (target 4.6; chroma reduction at most 5%)"},
+  {"theme":"gruvbox","mode":"dark","role":"status-waiting-tint","value":"rgba(245, 166, 187, 0.14)","dE":10.209325626163269,"reason":"Recomputed default from AA-repaired foreground"},
+  {"theme":"gruvbox-light","mode":"light","role":"status-waiting","value":"#87386a","dE":2.4608323243229298,"reason":"AA lightness repair on serialized hex (target 4.6; chroma reduction at most 5%)"},
+  {"theme":"gruvbox-light","mode":"light","role":"status-waiting-tint","value":"rgba(135, 56, 106, 0.12)","dE":2.4608323243229298,"reason":"Recomputed default from AA-repaired foreground"},
+  {"theme":"one-dark","mode":"dark","role":"status-waiting","value":"#e999ff","dE":10.456415487993418,"reason":"AA lightness repair on serialized hex (target 4.6; chroma reduction at most 5%)"},
+  {"theme":"one-dark","mode":"dark","role":"status-waiting-tint","value":"rgba(233, 153, 255, 0.14)","dE":10.456415487993418,"reason":"Recomputed default from AA-repaired foreground"},
+  {"theme":"one-light","mode":"light","role":"status-waiting","value":"#930692","dE":5.702704900880043,"reason":"AA lightness repair on serialized hex (target 4.6; chroma reduction at most 5%)"},
+  {"theme":"one-light","mode":"light","role":"status-waiting-tint","value":"rgba(147, 6, 146, 0.12)","dE":5.702704900880043,"reason":"Recomputed default from AA-repaired foreground"},
+  {"theme":"solarized","mode":"dark","role":"status-waiting","value":"#ffb3f6","dE":28.683756502332532,"reason":"AA lightness repair on serialized hex (target 4.6; chroma reduction at most 5%)"},
+  {"theme":"solarized","mode":"dark","role":"status-waiting-tint","value":"rgba(255, 179, 246, 0.14)","dE":28.683756502332532,"reason":"Recomputed default from AA-repaired foreground"},
+  {"theme":"solarized-light","mode":"light","role":"status-waiting","value":"#af0065","dE":10.061708912454097,"reason":"AA lightness repair on serialized hex (target 4.6; chroma reduction at most 5%)"},
+  {"theme":"solarized-light","mode":"light","role":"status-waiting-tint","value":"rgba(175, 0, 101, 0.12)","dE":10.061708912454097,"reason":"Recomputed default from AA-repaired foreground"},
+  {"theme":"kanagawa-lotus","mode":"light","role":"status-waiting","value":"#862d00","dE":21.150083946135826,"reason":"AA lightness repair on serialized hex (target 4.6; chroma reduction at most 5%)"},
+  {"theme":"kanagawa-lotus","mode":"light","role":"status-waiting-tint","value":"rgba(134, 45, 0, 0.12)","dE":21.150083946135826,"reason":"Recomputed default from AA-repaired foreground"},
+  // Dracula's proposal stops at status-blocked; its peach repair is the same bounded lightness search, run by hand.
+  {"theme":"dracula","mode":"dark","role":"status-waiting","value":"#ffcd80","dE":4.935238746764036,"reason":"AA lightness repair on serialized hex (target 4.6; chroma reduction at most 5%)"},
+  {"theme":"dracula","mode":"dark","role":"status-waiting-tint","value":"rgba(255, 205, 128, 0.14)","dE":4.935238746764036,"reason":"Recomputed default from AA-repaired foreground"},
+  // Where the rule's AA-repaired colour lands within dE 5 of an agent state or the accent, a reviewed hand-pick.
+  {"theme":"nord","mode":"dark","role":"status-waiting","value":"#e8d5ff","dE":23.859896016278395,"reason":"Reviewed hand-picked lavender: the rule's peach, AA-repaired to #ffd3ba, sits dE 4.2 from --status-blocked; passes 4.6 on serialized hex"},
+  {"theme":"nord","mode":"dark","role":"status-waiting-tint","value":"rgba(232, 213, 255, 0.14)","dE":23.859896016278395,"reason":"Recomputed default from the reviewed --status-waiting"},
+  {"theme":"rose-pine-dawn","mode":"light","role":"status-waiting","value":"#872d83","dE":26.585194176949866,"reason":"Reviewed hand-picked magenta: mauve is the iris accent and the rule's peach, AA-repaired to #893c3a, sits dE 3.9 from --status-blocked; passes 4.6 on serialized hex"},
+  {"theme":"rose-pine-dawn","mode":"light","role":"status-waiting-tint","value":"rgba(135, 45, 131, 0.12)","dE":26.585194176949866,"reason":"Recomputed default from the reviewed --status-waiting"},
+  {"theme":"vesper","mode":"dark","role":"status-waiting","value":"#b288f6","dE":27.63259831307099,"reason":"Reviewed hand-picked violet: Vesper has none, and its mauve and peach both sit within dE 2.6 of its accent; passes 4.6 on serialized hex"},
+  {"theme":"vesper","mode":"dark","role":"status-waiting-tint","value":"rgba(178, 136, 246, 0.14)","dE":27.63259831307099,"reason":"Recomputed default from the reviewed --status-waiting"},
 ];
 
 /** Pure policy used by the test and by temporary-copy QA. A diagnostic always names entry/role. */

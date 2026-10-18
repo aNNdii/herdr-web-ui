@@ -64,9 +64,11 @@ Only tokens overridden by `[data-theme="light"]` have a light value. Both column
 | Status/working | `--status-working` | `#6cb8d6` | `#155a72` |
 | Status/blocked | `--status-blocked` | `#ff7b70` | `#a82323` |
 | Status/done | `--status-done` | `#93c36b` | `#2f6317` |
+| Status/waiting | `--status-waiting` | `#b49aed` | `#654793` |
 | Working/tint | `--status-working-tint` | `rgba(108, 184, 214, 0.14)` | `rgba(21, 90, 114, 0.12)` |
 | Blocked/tint | `--status-blocked-tint` | `rgba(255, 123, 112, 0.14)` | `rgba(168, 35, 35, 0.12)` |
 | Done/tint | `--status-done-tint` | `rgba(147, 195, 107, 0.14)` | `rgba(47, 99, 23, 0.12)` |
+| Waiting/tint | `--status-waiting-tint` | `rgba(180, 154, 237, 0.14)` | `rgba(101, 71, 147, 0.12)` |
 | Indicator/working | `--indicator-working` | `#f9e2af` | `#df8e1d` |
 | Indicator/blocked | `--indicator-blocked` | `#f38ba8` | `#d20f39` |
 | Indicator/done | `--indicator-done` | `#94e2d5` | `#179299` |
@@ -161,6 +163,13 @@ starts from `bun scripts/herdr-theme-proposal.ts`. Every role whose value differ
 herdr mapping (`mapTheme`), including repairs the proposal tool already made, is listed in
 `scripts/herdr-theme-overrides.ts` with its dE and reason; every entry passes AA on its
 committed hex.
+
+`--status-waiting` (BG) is a fourth agent-state colour, apart from working, done and blocked: a
+herdr theme takes its mauve, or its peach where mauve sits within dE 15 of the accent or primary
+or dE 8 of a state or `--notice` (`waitingCandidate` in `scripts/herdr-theme-proposal.ts`). Nord,
+Rose Pine Dawn and Vesper, where the AA-repaired result still lands within dE 5 of a state or the
+accent, take a reviewed hand-pick; amber, charcoal and codex a hand-picked violet; Catppuccin
+peach in dark and, since peach darkened for AA turns red, a darkened Catppuccin pink in light.
 
 `--bubble-border` is the edge of the chat's user bubble. It is `transparent` where `--bg-elevated`
 alone parts the bubble from `--bg`: dark amber and dark charcoal. It is `var(--border)`
@@ -849,24 +858,31 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   whose turn ended while work it started still runs in the background (`background_wait`): it
   stands in for DONE or READY until that work's turn ends.
 - Idle is elevated/dim; working, blocked and done use their own tint and text. RUN carries a small
-  breathing dot before the word; the word itself never fades. BG takes the working tint and text,
-  holding still; a tab's dot for it is a working-coloured ring.
+  breathing dot before the word; the word itself never fades. BG takes its own tint and text
+  (`--status-waiting`) and a 5px ring before the word that breathes slowly (`--dur-breathe-bg`);
+  a tab's dot for it is a ring of that colour, held still as every tab mark is. A Pi or OmO
+  pane at rest reads BG whenever its agents or workflows run, held or not (`paneStatus`).
 - The written label and unknown dashed edge keep color from being the only signal.
 - The sidebar's compact variant weights each state by how much it asks of the user. Waiting for
   an answer is the one filled glyph, a filled message circle in `--status-blocked`; finished and
   not yet looked at is an 8px dot in `--status-done`, as an unread mark is; working is the same
   dot in `--status-working` that breathes (`--dur-breathe`); BG is an 8px ring in
-  `--status-working` held still, since nothing about it moves until its work ends; ready and
+  `--status-waiting` with a 2px stroke that breathes twice as slowly and only down to 0.75
+  (`--dur-breathe-bg`), since its work still runs while the agent rests: the ring and the slower,
+  shallower breath tell it from working, and 0.75 keeps the ring at 3:1 in every theme; ready and
   unknown draw nothing. A pane herdr could not restore
   draws a warning triangle in `--status-blocked`. The element, its label and its tooltip are there
   for every state, and each drawn state has its own glyph as well as its color. Background tasks
-  are a quiet count beside it (`.background-count`), not a badge.
+  still running are a quiet `--text-dim` count just before the state cell (`.background-count`),
+  not a badge, so BG's colour is said once in a row, by its ring: on an agent row the pane's, on a
+  workspace row the sum of the panes it stands for.
 - Settings → Status indicators can trade that default (Classic) for herdr's TUI marks, as its
   `[ui] status_indicators` draws them, for every state in mono text. Dots: `●` for working,
   blocked and done, `○` for ready, `·` for unknown. Symbols: `◐` working, `×` blocked, `✓` done,
   `○` ready, `·` unknown. Their colors are herdr's default theme's, the `--indicator-*` tokens
   (Catppuccin Mocha, Latte in light): working yellow, blocked red, done teal, ready green, unknown
-  grey. Working breathes as the dot does; BG, which herdr does not have, holds working's glyph still.
+  grey. Working breathes as the dot does; BG, which herdr does not have, holds working's glyph still,
+  so the motion tells them apart. Under `prefers-reduced-motion` no state mark moves.
   A tab's mark follows the same choice, held still.
 
 ### Pill (`.pill`)
@@ -1712,19 +1728,25 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   `--text`, the agent as a hairline mono pill, the prompt in the bounded mono input box.
 
 ### Plan (`.bg-tasks-plan`, `.bg-step`, `.plan-count`)
-- A pane's plan has no control of its own: it shares the composer's background-task chip
-  (`.bg-tasks-toggle`, beside the add button in the input card's last row). With a plan the chip
-  starts with the list-checks glyph, the word **Plan** and `done/total` in tabular figures; running
-  background tasks follow after a hairline as their glyph and number. The chip keeps the working
-  tint while a step or a task is left, and goes quiet once every step is done and nothing runs. A
-  narrow card drops the words and keeps the glyphs and numbers; a finger gets a `--touch-target` hit
-  area through an invisible expander while the chip stays the `--chip-h` pill it is beside a mouse. The chip shows only in the chat lens, and not for an offline PC's cached
+- A pane's plan has no control of its own: it shares the composer's background-task control
+  (`.bg-tasks-toggle`). Where the strip under the card shows (a wide screen) it is one of the
+  strip's items, before the branch, in the strip's `--fs-xs` text with its words; elsewhere (a
+  phone) it sits beside the add button in the card's last row as the icon buttons there are: its
+  glyphs and numbers at `--control-h`, no words and no fill. With a plan it starts with the
+  list-checks glyph, the word **Plan** (strip only) and `done/total` in tabular figures; background
+  tasks follow after a hairline as their glyph and count. Its glyphs and figures take
+  `--status-waiting` while a background task runs and stay `--text-dim` otherwise: a plan is not
+  an agent state, its figures say how far it got. A card narrower than `640px` (a split pane)
+  drops the strip's words as well, keeping glyphs and numbers. A finger gets a `--touch-target`
+  hit area and a mouse in the strip a `--pointer-target` one through an invisible expander, while
+  the control keeps its size. The control shows only in the chat lens, and not for an offline PC's cached
   plan. The sidebar's agent row repeats the count beside the background count, in its quiet mono
   figures and with no box (`.plan-count`).
-- The chip opens one list above the card: a **Plan** heading with `N of M done`, the steps in wave
+- The control opens one list above the card: a **Plan** heading with `N of M done`, the steps in wave
   order (a status glyph, the name, what a running step does now, then a dim state · time · teammate
   line; a waiting step's name is dim), then a **Background tasks** heading over the tasks list when
   the pane has tasks to show. The steps are read again every few seconds while the list is open.
+  In the list a running step or task takes `--status-working` on its glyph: that agent works.
 
 ### Background tasks ended (`.chat-task-results`)
 - Where OmO reports background tasks that ended, or a Claude Code subagent ends (its
@@ -1816,7 +1838,7 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   coarse pointer the button itself grows to `--touch-target` wide and `--touch-target` plus
   `--space-1` tall), then ONE row of controls under it:
   on the left the add button (lucide `Plus`, named "Attach files"), the mic when voice input
-  shows it (see Voice input), and the background-task chip; on the right the status content and ONE round Send/Stop button.
+  shows it (see Voice input), and the background-task control where there is no strip; on the right the status content and ONE round Send/Stop button.
   The message's text starts `--space-4` in (`--space-3` on a phone, `480px` and below).
 - The strip (`.composer-strip`) tucked under the card, as t3code's composer context strip: the
   card's own `--bg-elevated` with a `--border` hairline, inset on each side by the card's radius
@@ -1828,8 +1850,10 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   `title`) and the branch at its end (lucide `GitBranch`), each a glyph the text's size and a
   name in `--text-dim` at `--fs-xs`, `--chip-h` tall; a name that does not fit is cut short.
   A linked worktree's folder takes lucide `FolderGit2` and the word Worktree after its name, in
-  a `--border` hairline box with `--radius-sm` corners.
-  Nothing in it is pressed. `composerStrip` (`src/lib/composerStrip.ts`) decides what it draws from
+  a `--border` hairline box with `--radius-sm` corners. The background-task and plan control
+  (see Plan) sits before the branch, its words beside its glyphs; its list still opens above the
+  card, over the card's width. It is the one thing in the strip that is pressed; the folder and
+  the branch only name. `composerStrip` (`src/lib/composerStrip.ts`) decides what it draws from
   the composer's optional `cwd` and `branch`: a blank one is absent, and with neither there is no
   strip at all. A phone (`640px` and below, or a coarse pointer) draws no strip: the screen is the
   conversation's. The card stands over it (`z-index: 1`, so its popovers go with it and still rise
@@ -1858,7 +1882,7 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   circle inside a transparent `--touch-target` / `44px` button, so tapping remains easy.
 - The status content (`.composer-status`, `role="status"`) sits between the two control groups,
   pushed to the button's side. It draws, at `--fs-xs`: the model pill and the uploading
-  or reconnecting sentence in `--text-dim`. The background-task chip is a button in the left controls;
+  or reconnecting sentence in `--text-dim`. The background-task control is a button in the strip or the left controls;
   its count is repeated here as `.visually-hidden` text, so a change is still announced. The agent's written name, its separator, the state words
   `READY` / `RUN` / `INPUT` / `DONE` / `BG` and the sentence `Reasoning high` stay in it for assistive tech only
   (`.visually-hidden`): the header names the pane, and the state is told by Stop, the live row
@@ -1888,8 +1912,7 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   space) — is drawn exactly as received in
   `--font-mono` at regular weight (`.composer-model.is-id`), so it reads as an identifier and no
   suffix is dropped.
-- What does not fit the row gives way in this order: the task chip's words (icon and count below
-  a `640px` card), then the reasoning level and model name according to the measured row. A long
+- What does not fit the row gives way in this order: the reasoning level and model name according to the measured row. A long
   identifier can shorten inside the pill; the context ring remains visible: a name that would
   be cut to its floor (the `3ch` the box keeps) steps out whole instead, with its mark and its
   pill (`composerLabelDraw`, `src/lib/composerLabelFit.ts`, measured again with the level
@@ -2359,6 +2382,7 @@ The values are the ones in `src/styles.css`.
 | Pulse | `--dur-pulse` | `1600ms` | Working and reconnecting dots (trough opacity 0.35; text never pulses) |
 | Spin | `--dur-spin` | `1600ms` | One turn of a stepped spinner (the command palette's busy arc); the step count sets the frame rate |
 | Breathe | `--dur-breathe` | `2000ms` | The sidebar's working dot: full for 40% of the cycle, six steps down to opacity 0.5, held, six steps back; every dot shares the document clock's phase, so several runs breathe together. It replaced a spinning arc that read as flicker beside the rows |
+| Breathe BG | `--dur-breathe-bg` | `4000ms` | BG's ring in the sidebar and the BG badge: full for 30% of the cycle, eight steps down to opacity 0.75, held, back; on the working dot's clock. Twice as slow and half as deep as working's, so an agent resting on background work never reads as running |
 | Easing | `--ease-out` | `cubic-bezier(0.2, 0, 0, 1)` | Finite transitions |
 | Pulse easing | `--ease-pulse` | `steps(2, jump-none)` | Endless working and reconnecting dots; avoids drawing every display refresh |
 | Spring easing | `--ease-spring` | `cubic-bezier(0.32, 0.72, 0, 1)` | Voice recording pill enter (180ms, scale 0.96->1 + opacity, from the mic button) and exit (120ms); a phone's sheet rising and springing back |

@@ -63,6 +63,7 @@ import { invokedSkill } from "./skill-activity.ts";
 import { claudeCommandEcho } from "./skill-invocations/claude.ts";
 import { agentTaskResult, claudePeerId, claudePeerNotice, isContextClear, MAX_TURNS, parseOmpTranscript, piImageBlock, piMessage, piResults, toolSummary } from "./transcript-records.ts";
 import { forgetSubagents, lineNotifications, subagentDetails, taskNotification, type SubagentDetail } from "./claude-subagents.ts";
+import { forgetPiSubagents, piSubagentCards } from "./pi-subagents.ts";
 import { launchedAgents } from "./launched-agents.ts";
 import { readsStartScreen, startScreenMetadata } from "./start-screen.ts";
 
@@ -932,7 +933,8 @@ function parseTurns(source: RecognizedConversation["source"], path: string, text
     // only pi keeps a tool's images in the entry as base64; omp, omo and gjc are read the same
     // way but would carry image refs nothing can answer, so the option stays with pi alone
     : source === "claude-transcript" ? parseClaudeTranscript(text, Infinity, { subagents: subagentsOnPage(path, text), noticed })
-      : parseOmpTranscript(text, Infinity, { toolImages: source === "pi-transcript", taskTitles });
+      // a pi page's pi-subagents notifications become result cards, from the session's own index
+      : parseOmpTranscript(text, Infinity, { toolImages: source === "pi-transcript", taskTitles, subagentCards: source === "pi-transcript" ? piSubagentCards(path, text) : undefined });
 }
 
 interface LiveCodexTurn {
@@ -1046,6 +1048,7 @@ export function forgetTranscriptState(): void {
   forgetClaudeSessions();
   forgetGjcState();
   forgetSubagents();
+  forgetPiSubagents();
   forgetOpencodeState();
   liveScans.clear();
   settledTurns.clear();

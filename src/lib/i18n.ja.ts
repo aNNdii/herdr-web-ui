@@ -1120,6 +1120,8 @@ export const JA: Record<string, string> = {
   "Nothing running right now": "現在実行中のものはありません",
   "{done} of {total} done": "{total} 件中 {done} 件完了",
   "{n} running": "{n} 件実行中",
+  "{n} agent finished": "エージェント {n} 件完了",
+  "{n} agents finished": "エージェント {n} 件完了",
   "Workflows": "ワークフロー",
   "waiting": "待機中",
   "skipped": "スキップ",

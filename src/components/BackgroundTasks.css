@@ -1,5 +1,9 @@
-/* The toggle sits beside the add button in the input card's last row; the list opens above the
-   card, as the slash menu does, so it never covers what is being typed. */
+/* On a wide screen the toggle is one of the strip's items under the card, with its words (below).
+   Without the strip (a phone) it sits beside the add button in the input card's last row, drawn as
+   the icon buttons there are: an icon and a number, no words and no fill, so it never outweighs
+   them. Running background work colours the icon and the number; the words are the button's name
+   and title. The list opens above the card, as the slash menu does, so it never covers what is
+   being typed. */
 .bg-tasks {
   display: inline-flex;
   flex: none;
@@ -8,94 +12,124 @@
 .bg-tasks-toggle {
   display: inline-flex;
   align-items: center;
+  justify-content: center;
   gap: var(--space-1);
-  min-height: var(--chip-h);
+  min-width: var(--control-h);
+  height: var(--control-h);
   padding: 0 var(--space-2);
-  background: var(--status-working-tint);
+  background: transparent;
   border: 0;
   border-radius: var(--radius-pill);
-  color: var(--status-working);
+  color: var(--text-dim);
   font-size: var(--fs-xs);
+  font-variant-numeric: tabular-nums;
   cursor: pointer;
 }
 
 .bg-tasks-toggle svg {
-  width: 12px;
-  height: 12px;
+  width: var(--icon-size);
+  height: var(--icon-size);
   flex: none;
 }
 
-.bg-tasks-count {
+/* background work running: BG's colour, on the glyphs alone. A plan is not an agent state, so a
+   plan under way with nothing running stays quiet (its numbers say how far it got) */
+.bg-tasks-toggle.is-running {
+  color: var(--status-waiting);
+}
+
+@media (hover: hover) {
+  .bg-tasks-toggle:hover {
+    background: var(--bg-hover);
+  }
+}
+
+.bg-tasks-toggle[aria-expanded="true"] {
+  background: var(--bg-elevated);
+  color: var(--text-strong);
+}
+
+/* the words are read, not drawn: the icon and the number say it (aria-label and title have them) */
+.bg-tasks-label {
   display: none;
 }
 
-/* the plan's progress is the chip's number: always drawn, the words beside it give way first */
-.bg-tasks-plan {
-  font-variant-numeric: tabular-nums;
-}
-
-/* a plan and running tasks share the chip: a hairline between them, the tasks as icon and number */
+/* a plan and running tasks share the toggle: a hairline between them */
 .bg-tasks-sep {
-  align-self: stretch;
+  align-self: center;
   width: var(--hairline);
-  margin: var(--space-1) var(--space-1);
+  height: var(--icon-size);
+  margin: 0 var(--space-1);
   background: currentColor;
   opacity: 0.4;
 }
 
-.bg-tasks-label.is-secondary {
-  display: none;
+/* in the strip under the card (a wide screen) the toggle is one of its items: the strip's text size,
+   with its words, so the number is part of them */
+.bg-tasks.is-strip {
+  margin-inline-start: auto;
 }
 
-.bg-tasks-label.is-secondary + .bg-tasks-count {
+.bg-tasks.is-strip + .composer-strip-branch {
+  margin-inline-start: var(--space-3);
+}
+
+.bg-tasks.is-strip .bg-tasks-toggle {
+  position: relative;
+  min-width: 0;
+  height: var(--chip-h);
+  padding: 0 var(--space-1);
+  border-radius: var(--radius-sm);
+}
+
+/* a mouse gets --pointer-target through an invisible expander, as the other --chip-h buttons do;
+   the strip is not drawn for a finger (Composer.tsx) */
+.bg-tasks.is-strip .bg-tasks-toggle::before {
+  content: "";
+  position: absolute;
+  inset: calc((var(--chip-h) - var(--pointer-target)) / 2) 0;
+}
+
+.bg-tasks.is-strip .bg-tasks-toggle svg {
+  width: var(--fs-xs);
+  height: var(--fs-xs);
+}
+
+.bg-tasks.is-strip .bg-tasks-label {
   display: inline;
 }
 
-/* a narrow card (a phone, or a lane beside the sidebar): the chip gives up its words before the
-   model gives up its letters. The icon and the number say it, the button's name has the words.
-   The composer marks the card from its own width (composerStatusCompact) */
-.composer-surface[data-compact] .bg-tasks-toggle {
-  justify-content: center;
-}
-
-.composer-surface[data-compact] .bg-tasks-label {
+.bg-tasks.is-strip .bg-tasks-count {
   display: none;
 }
 
-.composer-surface[data-compact] .bg-tasks-count {
+.bg-tasks.is-strip .bg-tasks-sep {
+  height: var(--fs-xs);
+}
+
+/* a narrow card (a split pane: data-compact is the card's own width) leaves the folder and the branch
+   no room beside the words: the toggle keeps its glyphs and numbers, as in the card's row */
+.composer-surface[data-compact] ~ .composer-strip .bg-tasks.is-strip .bg-tasks-label {
+  display: none;
+}
+
+.composer-surface[data-compact] ~ .composer-strip .bg-tasks.is-strip .bg-tasks-count {
   display: inline;
 }
 
-/* without its words the chip would be a 28px target, an icon alone while nothing runs */
-@media (max-width: 480px), (pointer: coarse) {
-  .composer-surface[data-compact] .bg-tasks-toggle {
-    min-width: var(--touch-target);
-  }
-}
-
-/* a finger gets the target's height through an invisible expander: the chip itself stays the
-   --chip-h pill it is beside a mouse, not a --touch-target badge heavier than the buttons around it
-   (the border is 0, so the expander is measured from the chip's own box) */
+/* a finger gets the target's size through an invisible expander: the toggle itself stays as tall
+   as the icon buttons beside it (the border is 0, so the expander is measured from its own box) */
 @media (pointer: coarse) {
-  .composer-surface[data-compact] .bg-tasks-toggle {
+  .bg-tasks-toggle {
     position: relative;
   }
 
-  .composer-surface[data-compact] .bg-tasks-toggle::before {
+  .bg-tasks-toggle::before {
     content: "";
     position: absolute;
-    inset: calc((var(--chip-h) - var(--touch-target)) / 2) 0;
+    inset: calc((var(--control-h) - var(--touch-target)) / 2) min(0px, calc((100% - var(--touch-target)) / 2));
   }
-}
 
-/* nothing running: the list of what ran stays at hand, without the working tint */
-.bg-tasks-toggle.is-idle {
-  background: transparent;
-  color: var(--text-dim);
-}
-
-.bg-tasks-toggle[aria-expanded="true"] {
-  color: var(--text-strong);
 }
 
 /* opened from the card's last row: the list wraps as a page does. It is anchored
@@ -104,9 +138,10 @@
    the list keeps to it, a gap from each end, and scrolls; never less than one row */
 .bg-tasks-menu {
   position: absolute;
-  right: 0;
-  bottom: calc(100% + var(--space-2));
-  left: 0;
+  /* from the strip under the card the list is placed over the card by measure (BackgroundTasks.tsx) */
+  right: var(--bg-tasks-right, 0);
+  bottom: calc(var(--bg-tasks-bottom, 100%) + var(--space-2));
+  left: var(--bg-tasks-left, 0);
   z-index: var(--z-popover);
   max-height: max(var(--row-h), min(calc(var(--row-h) * 9), calc(var(--bg-tasks-room, 100vh) - var(--space-2) * 2)));
   overflow-y: auto;
@@ -242,7 +277,8 @@
 
 .bg-run.is-running .bg-run-head .bg-task-icon { color: var(--status-working); }
 .bg-run.is-completed .bg-run-head .bg-task-icon { color: var(--status-done); }
-.bg-run.is-failed .bg-run-head .bg-task-icon { color: var(--status-blocked); }
+.bg-run.is-failed .bg-run-head .bg-task-icon,
+.bg-run.is-lost .bg-run-head .bg-task-icon { color: var(--status-blocked); }
 
 .bg-run-waves {
   display: flex;

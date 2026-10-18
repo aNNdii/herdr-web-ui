@@ -94,6 +94,8 @@ describe("shown status", () => {
     expect(shownStatus(held)).toBe("waiting");
     expect(shownStatus({ ...held, agent_status: "blocked" })).toBe("blocked");
     expect(shownStatus(pane("a", "done"))).toBe("done");
+    // a Pi pane with agents running is not done, held or not
+    expect(shownStatus({ ...pane("a", "done"), agent: "pi", background_tasks: 1 })).toBe("waiting");
   });
 });
 

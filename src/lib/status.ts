@@ -1,3 +1,4 @@
+import { countsOnlyWakingWork } from "../../shared/background-work.ts";
 import type { AgentStatus } from "../../shared/protocol.ts";
 
 export type KnownStatus = "idle" | "working" | "blocked" | "done" | "waiting" | "unknown";
@@ -40,11 +41,15 @@ export function knownStatus(status?: AgentStatus): KnownStatus {
 /**
  * What a pane reads as. One at rest while work its turn started still runs in the background
  * (`background_wait`, server/background-wait.ts) is waiting on it, and says BG in place of DONE
- * or READY: that work's end starts the next turn by itself.
+ * or READY: that work's end starts the next turn by itself. A pane whose count holds only such
+ * work (shared/background-work.ts: Pi, OmO) says BG too at rest while any of it runs, whichever
+ * turn started it and whether or not the server saw that turn end: what runs there is not done.
  */
-export function paneStatus(pane: { agent_status?: AgentStatus; background_wait?: true }): KnownStatus {
+export function paneStatus(pane: { agent_status?: AgentStatus; background_wait?: true; background_tasks?: number; agent?: string | null }): KnownStatus {
   const known = knownStatus(pane.agent_status);
-  return pane.background_wait && known !== "working" && known !== "blocked" ? "waiting" : known;
+  if (known === "working" || known === "blocked") return known;
+  const running = (pane.background_tasks ?? 0) > 0 && countsOnlyWakingWork(pane.agent);
+  return pane.background_wait || running ? "waiting" : known;
 }
 
 /**

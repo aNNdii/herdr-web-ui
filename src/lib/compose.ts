@@ -214,8 +214,9 @@ export function composerStatusWord(status?: AgentStatus): string {
 }
 
 /**
- * Below this card width the controls row cannot hold the background-task chip's words beside the
- * model, the effort and the offline sentence, so the chip shows its icon and count instead.
+ * Below this card width the controls row cannot hold the status words, and the strip under the card
+ * cannot hold the background tasks control's words beside the folder and the branch, so the control
+ * shows its icons and numbers only (BackgroundTasks.css).
  * The input card is at most 820px wide (`--content-w`); a 1024px window with the sidebar open
  * still has a 672px card and keeps the words, a 940px one has 588px and gives them up.
  */

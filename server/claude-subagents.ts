@@ -39,18 +39,18 @@ import type { HerdrPane, OmoTask } from "../shared/protocol.ts";
  * of the `TaskStop` (`KillShell` in older Claude Code) that stopped it, which no notice follows.
  * It lives in the Claude process that started it, as a running agent does.
  */
-const READ_BUDGET = 8 * 1024 * 1024;
+export const READ_BUDGET = 8 * 1024 * 1024;
 /** how much of a parent transcript is read the first time: older notices are not found */
 const PARENT_WINDOW = 16 * 1024 * 1024;
 const MAX_META_BYTES = 64 * 1024;
 const MAX_AGENTS = 200;
 const MAX_NAMES = 5000;
-const RECENT_MS = 24 * 60 * 60 * 1000;
-const RECENT_LIMIT = 10;
+export const RECENT_MS = 24 * 60 * 60 * 1000;
+export const RECENT_LIMIT = 10;
 /** how much of the end of an agent's file tells its status, whatever else has been read of it */
 const TAIL_BYTES = 64 * 1024;
 /** a process's start is known to the second, and the clock can step: only an agent quiet this long before the start is taken for another process's */
-const START_SLACK_MS = 60_000;
+export const START_SLACK_MS = 60_000;
 /** an agent id is a file name's part: nothing that could leave the folder */
 const AGENT_ID = /^[A-Za-z0-9_-]+$/;
 

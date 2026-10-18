@@ -1122,6 +1122,8 @@ export const ZH: Record<string, string> = {
   "Nothing running right now": "当前没有正在运行的任务",
   "{done} of {total} done": "已完成 {done}/{total}",
   "{n} running": "{n} 个运行中",
+  "{n} agent finished": "{n} 个代理已完成",
+  "{n} agents finished": "{n} 个代理已完成",
   "Workflows": "工作流",
   "waiting": "等待中",
   "skipped": "已跳过",

@@ -31,7 +31,7 @@ import type { AgentStatus, PaneInfo, PaneScrollInfo, SessionSnapshot, TabInfo, W
 export type HerdrWorkspace = WorkspaceInfo;
 export type HerdrTab = TabInfo;
 /**
- * `background_tasks`: an OmO pane's `task` children, or a Claude Code pane's subagents and background commands, still running, counted by the server; absent when none.
+ * `background_tasks`: an OmO pane's `task` children, a Claude Code pane's subagents and background commands, or a Pi pane's pi-subagents agents and workflows, still running, counted by the server; absent when none.
  * `background_wait`: the pane is at rest while work its turn started still runs, and the turn goes on when it ends (server/background-wait.ts); absent when not.
  * `plan`: how far the pane's agent's task list or checklist has progressed; absent when it keeps none.
  */
@@ -159,7 +159,8 @@ export type { Machine, MachineEvent, PaneTarget, SetupJob, SetupRequest, SetupAc
  *  GET    /api/pane/commands?pane_id=   -> { commands: SlashCommand[] } (the agent's slash
  *         commands: built-ins per agent kind + the user's and the project's custom commands)
  *  GET    /api/pane/omo-tasks?pane_id=  -> OmoActivity (the background tasks and workflows the
- *         pane's OmO session started, or a Claude Code pane's subagents (no workflows): running ones, then
+ *         pane's OmO session started, a Claude Code pane's subagents (no workflows), or the agents and
+ *         `SubagentWorkflow` runs of a Pi pane that loads pi-subagents: running ones, then
  *         those that ended in the last day; empty for any other pane or one whose session is not
  *         known yet. server_time: that PC's clock, which the times are on)
  *  GET    /api/pane/plan?pane_id=       -> PanePlan (the plan the pane's Claude Code, Codex or OmO session
@@ -551,15 +552,21 @@ export interface OmoRunNode {
   error: string | null;
 }
 
-/** One OmO workflow (a DAG run): its steps by wave, a wave's steps able to run side by side. */
+/**
+ * One OmO workflow (a DAG run): its steps by wave, a wave's steps able to run side by side. Or
+ * one Pi `SubagentWorkflow` run, whose steps pi keeps only in memory (`waves: []`).
+ */
 export interface OmoRun {
   id: string;
   name: string;
-  /** `pending` and `paused` have not ended either */
-  status: "pending" | "running" | "paused" | "completed" | "failed" | "cancelled";
+  /** `pending` and `paused` have not ended either. `lost`: a Pi workflow whose pi process went away (or restarted) before it ended */
+  status: "pending" | "running" | "paused" | "completed" | "failed" | "cancelled" | "lost";
   started_at: string | null;
   ended_at: string | null;
   waves: OmoRunNode[][];
+  /** Pi workflows only: how many of its agents finished (its journal's lines with ok true) and failed (ok false). Absent for OmO runs */
+  agents_done?: number;
+  agents_failed?: number;
 }
 
 /** GET /api/pane/omo-tasks */

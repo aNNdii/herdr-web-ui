@@ -1129,6 +1129,110 @@ describe("OmO background task results", () => {
   });
 });
 
+describe("pi-subagents notifications", () => {
+  const roots: string[] = [];
+  afterEach(() => {
+    forgetTranscriptState();
+    for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
+  });
+  const ts = (minute: number) => `2026-10-18T11:${String(minute).padStart(2, "0")}:00.000Z`;
+  /** a pi session file as pi 1.3 and pi-subagents 0.22.0 write it: a tree of entries under a header */
+  const piFile = () => {
+    const root = mkdtempSync(join(tmpdir(), "herdr-pi-cards-"));
+    roots.push(root);
+    const path = join(root, "2026-10-18T11-00-00-000Z_33333333-3333-4333-8333-333333333333.jsonl");
+    writeFileSync(path, `${JSON.stringify({ type: "session", version: 3, id: "33333333-3333-4333-8333-333333333333", timestamp: ts(0), cwd: "/work/app" })}\n`);
+    let n = 0;
+    const entry = (minute: number, fields: Record<string, unknown>) => appendFileSync(path, `${JSON.stringify({ ...fields, id: `e${++n}`, parentId: n > 1 ? `e${n - 1}` : null, timestamp: ts(minute) })}\n`);
+    const message = (minute: number, message: Record<string, unknown>) => entry(minute, { type: "message", message: { ...message, timestamp: Date.parse(ts(minute)) } });
+    return {
+      path,
+      prompt: (minute: number, text: string) => message(minute, { role: "user", content: [{ type: "text", text }] }),
+      say: (minute: number, text: string) => message(minute, { role: "assistant", content: [{ type: "text", text }], stopReason: "stop" }),
+      call: (minute: number, id: string, name: string, args: Record<string, unknown>, details: Record<string, unknown>) => {
+        message(minute, { role: "assistant", content: [{ type: "toolCall", id, name, arguments: args }], stopReason: "toolUse" });
+        message(minute, { role: "toolResult", toolCallId: id, toolName: name, content: [{ type: "text", text: "started" }], details, isError: false });
+      },
+      record: (minute: number, data: Record<string, unknown>) => entry(minute, { type: "custom", customType: "subagents:record", data }),
+      notify: (minute: number, content: string, details: Record<string, unknown>) => entry(minute, { type: "custom_message", customType: "subagent-notification", content, display: true, details }),
+    };
+  };
+  const background = (agentId: string) => ({ displayName: "Explore", description: `task ${agentId}`, subagentType: "Explore", modelName: "haiku 4.5", toolUses: 0, tokens: "", durationMs: 0, status: "background", agentId });
+  const agentBlock = (id: string, result: string) => `<task-notification>\n<task-id>${id}</task-id>\n<status>completed</status>\n<summary>Agent "task ${id}" completed</summary>\n<result>${result}</result>\n</task-notification>`;
+  const cards = (path: string, source: "pi-transcript" | "omp-transcript" = "pi-transcript") => transcriptPage(source, path).turns.flatMap((turn) => turn.parts).filter((part) => part.kind === "task_result" || part.kind === "notice");
+
+  it("draws a combined notification as one card, an entry per id: agents from their records, a workflow from its block", () => {
+    const pi = piFile();
+    pi.prompt(1, "go");
+    pi.call(2, "c1", "Agent", { description: "task a1", subagent_type: "Explore", prompt: "look", run_in_background: true }, background("a1"));
+    pi.call(2, "c2", "Agent", { description: "task a2", subagent_type: "Explore", prompt: "look", run_in_background: true }, background("a2"));
+    pi.call(3, "c3", "SubagentWorkflow", { name: "review-call", script: "…" }, { taskId: "wf_0123456789ab" });
+    pi.record(5, { id: "a1", type: "Explore", description: "task a1", status: "completed", result: "x".repeat(16_005) });
+    const workflowBlock = "<task-notification>\n<task-id>wf_0123456789ab</task-id>\n<status>Done</status>\n<summary>Workflow \"split 1/2 agents\" completed — 3/4 agents, 1 replayed from wf_2</summary>\n<result>a &lt;b&gt; &amp;amp; c</result>\n</task-notification>";
+    pi.notify(6, `3 background tasks finished.\n\n${agentBlock("a1", "preview")}\n\n${agentBlock("a2", "preview")}\n\n${workflowBlock}`, {
+      id: "a1", description: "task a1", status: "completed", toolUses: 4, turnCount: 3, totalTokens: 12_345, durationMs: 60_000, resultPreview: "short a1",
+      others: [
+        { id: "a2", description: "task a2", status: "aborted", toolUses: 9, turnCount: 10, totalTokens: 500, durationMs: 1000, resultPreview: "what a2 got to" },
+        { id: "wf_0123456789ab", description: "Workflow review", status: "completed", toolUses: 20, turnCount: 0, totalTokens: 90_000, durationMs: 120_000, resultPreview: "a <b>" },
+      ],
+    });
+    pi.say(7, "all done");
+    expect(cards(pi.path)).toEqual([{ kind: "task_result", tasks: [
+      { id: "a1", title: "task a1", agent: "Explore", model: "haiku 4.5", status: "completed", duration_ms: 60_000, turns: 3, tool_calls: 4, tokens: 12_345, result: "x".repeat(16_000), result_cut: true },
+      // no record read: the preview the notification carries
+      { id: "a2", title: "task a2", agent: "Explore", model: "haiku 4.5", status: "failed", duration_ms: 1000, turns: 10, tool_calls: 9, tokens: 500, result: "what a2 got to" },
+      { id: "wf_0123456789ab", title: "review", agent: "3/4 agents", model: null, status: "completed", duration_ms: 120_000, turns: null, tool_calls: 20, tokens: 90_000, result: "a <b> &amp; c" },
+    ] }]);
+  });
+
+  it("gives a resumed agent's earlier card the record it had then, not the later one", () => {
+    const pi = piFile();
+    pi.prompt(1, "go");
+    pi.call(2, "c1", "Agent", { description: "task a1", prompt: "look", run_in_background: true }, background("a1"));
+    pi.record(4, { id: "a1", status: "completed", result: "first answer" });
+    pi.notify(5, agentBlock("a1", "first"), { id: "a1", status: "completed", totalTokens: 10, resultPreview: "first" });
+    pi.call(6, "c2", "Agent", { resume: "a1", prompt: "more", run_in_background: true }, background("a1"));
+    pi.record(8, { id: "a1", status: "error", result: "second answer" });
+    pi.notify(9, agentBlock("a1", "second"), { id: "a1", status: "error", totalTokens: 20, resultPreview: "second" });
+    const page = cards(pi.path);
+    expect(page.map((part) => part.kind === "task_result" ? part.tasks.map((task) => `${task.status} ${task.result} ${task.tokens}`) : part.kind)).toEqual([["completed first answer 10"], ["failed second answer 20"]]);
+    // a cold read draws the same cards
+    forgetTranscriptState();
+    expect(cards(pi.path)).toEqual(page);
+  });
+
+  it("leaves a notification that names no id a notice, and every other runtime's page as it was", () => {
+    const pi = piFile();
+    pi.prompt(1, "go");
+    pi.notify(2, "<task-notification>\n<task-id>a1</task-id>\n</task-notification>", { description: "no id", status: "completed" });
+    pi.notify(3, agentBlock("a1", "done"), { id: "a1", status: "completed", resultPreview: "done" });
+    expect(cards(pi.path).map((part) => part.kind)).toEqual(["notice", "task_result"]);
+    // omp has no pi-subagents: its custom messages stay notices
+    expect(cards(pi.path, "omp-transcript").map((part) => part.kind)).toEqual(["notice", "notice"]);
+  });
+
+  it("draws no card on a page without a notification", () => {
+    const pi = piFile();
+    pi.prompt(1, "go");
+    pi.call(2, "c1", "Agent", { description: "task a1", prompt: "look", run_in_background: true }, background("a1"));
+    // the result was taken with get_subagent_result: a record, and no notification
+    pi.record(4, { id: "a1", status: "completed", result: "answer" });
+    pi.say(5, "read it");
+    expect(cards(pi.path)).toEqual([]);
+  });
+
+  it("names a SubagentWorkflow call's chip after the workflow: its name, the script's file, else workflow", () => {
+    const pi = piFile();
+    pi.prompt(1, "go");
+    pi.call(2, "c1", "SubagentWorkflow", { name: "review-call", script: "export const meta = {}" }, { taskId: "wf_000000000001" });
+    pi.call(3, "c2", "SubagentWorkflow", { scriptPath: "/tmp/runs/fix-tests.js", description: "ignored" }, { taskId: "wf_000000000002" });
+    pi.call(4, "c3", "SubagentWorkflow", { script: "export const meta = {}" }, { taskId: "wf_000000000003" });
+    pi.say(5, "started");
+    const chips = transcriptPage("pi-transcript", pi.path).turns.flatMap((turn) => turn.parts).flatMap((part) => part.kind === "tool" ? [part.summary] : []);
+    expect(chips).toEqual(["review-call", "fix-tests", "workflow"]);
+  });
+});
+
 const omoUser = (ts: string, text: string) => JSON.stringify({ type: "message", timestamp: ts, message: { role: "user", content: [{ type: "text", text }] } });
 /** an OmO `task` call and the result that names the tasks it started */
 const omoSpawn = (ts: string, id: string, input: Record<string, unknown>, details: Record<string, unknown>) => [
