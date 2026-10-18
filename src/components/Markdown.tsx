@@ -246,8 +246,11 @@ function sourceAttributes(source: SourceLines | undefined): { "data-source-line"
  * item's box stands in for its bullet. */
 function List({ block, path, commentable }: { block: ListBlock; path: number[]; commentable: boolean }) {
   const Tag = block.ordered ? "ol" : "ul";
+  // an ordered list's markers take as many digits as its last number: the indent (ChatView.css) makes room for them
+  const digits = block.ordered ? String((block.start ?? 1) + block.items.length - 1).length : 1;
+  const style = digits > 1 ? { "--markdown-list-digits": digits } as CSSProperties : undefined;
   return (
-    <Tag className="markdown-list" start={block.ordered ? block.start : undefined}>
+    <Tag className="markdown-list" start={block.ordered ? block.start : undefined} style={style}>
       {block.items.map((_, index) => <ItemView key={index} list={block} index={index} path={[...path, index]} commentable={commentable} />)}
     </Tag>
   );

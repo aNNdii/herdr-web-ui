@@ -471,6 +471,16 @@ describe("numbered lists as agents write them", () => {
     expect(html.match(/<ol/g)).toHaveLength(1);
   });
 
+  it("makes room for an ordered list's markers by the digits of its last number", () => {
+    // one digit: the stylesheet's default indent holds it
+    expect(render("1. a\n2. b")).toContain('<ol class="markdown-list">');
+    // a list going past 9, also one that goes on from a later number, takes the wider indent
+    expect(render(Array.from({ length: 10 }, (_, index) => `${index + 1}. item`).join("\n"))).toContain('<ol class="markdown-list" style="--markdown-list-digits:2">');
+    expect(render("99. a\n100. b")).toContain('style="--markdown-list-digits:3"');
+    // a bullet list has no numbers to make room for
+    expect(render("- a\n- b")).toContain('<ul class="markdown-list">');
+  });
+
   it("keeps a table and a nested list under one item in the order they were written", () => {
     const [list] = parseMarkdown("- item\n  - sub\n\n  | a | b |\n  |---|---|\n  | 1 | 2 |\n\n  - more\n- next");
     expect((list as ListBlock).items[0]?.blocks?.map((block) => block.type)).toEqual(["list", "table", "list"]);

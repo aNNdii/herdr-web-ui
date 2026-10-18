@@ -54,12 +54,13 @@
   color: var(--text);
 }
 
-/* Viewed: an action as the file's other tools, a circle that takes a check (in the done colour) once it is pressed */
+/* Viewed: the last of the file's tools (ReviewFile.tsx), a circle that takes a check (in the done colour) once it is pressed */
 .review-tools .review-viewed[aria-pressed="true"] {
   color: var(--status-done);
 }
 
-/* the tree's filter: the app's field, on the tree's full width, the ignored files' toggle beside it in All files */
+/* the tree's filter: the app's field, on the tree's full width, the ignored files' toggle beside it in All files (Hide
+   viewed files in Changed files) */
 .review-filter {
   flex: none;
   display: flex;
@@ -74,8 +75,18 @@
   box-sizing: border-box;
 }
 
-.review-ignored {
+.review-ignored,
+.review-hide-viewed {
   flex: none;
+}
+
+/* why the list is short, and under it Show viewed files once every file is viewed; a file still shown follows */
+.review-list-note {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-2);
 }
 
 /* a file git ignores: the tree's dim mark */
@@ -177,13 +188,56 @@
 }
 
 /* the tree on the left, the file on the right. The row is 1fr, not auto: an auto row grows with its
-   content and nothing inside scrolls. */
+   content and nothing inside scrolls. The tree's track, with its limits, comes from
+   `reviewTreeColumn` (src/lib/reviewTreeWidth.ts), set on the body as `--review-tree-column`. The body
+   is positioned for the column's grip, which sits in the column's grid area. */
 .review-body {
+  position: relative;
   flex: 1 1 auto;
   min-height: 0;
   display: grid;
-  grid-template-columns: minmax(220px, 300px) minmax(0, 1fr);
+  grid-template-columns: var(--review-tree-column) minmax(0, 1fr);
   grid-template-rows: minmax(0, 1fr);
+}
+
+/* the tree column's right edge, an unseen grip centred on its seam (as the file panel's,
+   FilePanelResizer.css): nothing shows until a pointer is over it, it is held, or it has the keyboard's
+   focus. Absolute in the first grid area, so it takes no cell and the area's right edge is the seam (both
+   lines named: an absolute item's `auto` line is the body's own edge). */
+.review-tree-resizer {
+  position: absolute;
+  grid-area: 1 / 1 / 2 / 2;
+  top: 0;
+  right: calc(var(--space-1) * -1);
+  bottom: 0;
+  z-index: var(--z-banner);
+  width: var(--space-2);
+  cursor: col-resize;
+  touch-action: none;
+}
+
+.review-tree-resizer::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: calc(50% - var(--hairline));
+  width: calc(var(--hairline) * 2);
+  background: transparent;
+  transition: background-color var(--dur-fast) var(--ease-out);
+}
+
+.review-tree-resizer:focus-visible { outline: none; }
+
+@media (hover: hover) {
+  .review-tree-resizer:hover::after { background: var(--accent); }
+}
+
+.review-tree-resizer.is-dragging::after,
+.review-tree-resizer:focus-visible::after { background: var(--accent); }
+
+@media (prefers-reduced-motion: reduce) {
+  .review-tree-resizer::after { transition: none; }
 }
 
 /* the tree takes its own palette from the app's tokens (@pierre/trees reads these custom properties
@@ -241,6 +295,9 @@
   border-radius: var(--radius-md);
   --trees-padding-inline: var(--space-1);
   --trees-padding-inline-override: var(--space-1);
+  /* a level indents about 14px instead of 22px, the indent guides kept; `0px`, not `0`: the library takes 1px off
+     it in a `calc()`, where a bare zero is no length */
+  --trees-level-gap-override: 0px;
   overflow: hidden;
 }
 
@@ -389,7 +446,7 @@
   position: relative;
 }
 
-/* the view switch (Preview | Source, Unified | Split) and the tools (comments, wrap, fold) of the file: one bar in every
+/* the view switch (Preview | Source, Unified | Split) and the tools (comments, wrap, fold, viewed) of the file: one bar in every
    view, apart by a rule where a switch stands before them */
 .review-tools .repo-diff-group.review-tools-rest {
   padding-left: var(--space-2);

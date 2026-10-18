@@ -855,7 +855,8 @@ export function ReviewFile({ owner, paneId, directory, root, path, change, diffM
   // what the file is, beside its title: its change (and in the diff its counts), that git ignores it, or a long text's length
   const status = change !== null ? <span className="repo-diff-status" data-status={change.status}>{statusWord(t, change.status)}</span>
     : ignored ? <span className="repo-diff-status" data-status="ignored">{t("Ignored")}</span> : null;
-  // a changed file is marked as viewed here, as on a pull request: the tree checks it until the file changes again
+  // a changed file is marked as viewed here, as on a pull request: the tree checks it until the file changes again.
+  // The last of the file's tools in every view, at the header's right end
   const viewedBox = viewed !== null && <button type="button" className="icon-button repo-diff-action review-viewed" aria-pressed={viewed}
     aria-label={t("Viewed")} title={viewed ? t("Viewed") : t("Mark as viewed")} onClick={() => onViewed?.(!viewed)}>
     {viewed ? <CircleCheck aria-hidden="true" /> : <Circle aria-hidden="true" />}
@@ -863,31 +864,9 @@ export function ReviewFile({ owner, paneId, directory, root, path, change, diffM
   const long = !showDiff && lines !== null && lines.length > VIRTUAL_HIGHLIGHT_LINES
     ? <span className="review-file-fact">{t("{count} lines", { count: lines.length.toLocaleString() })} · {t("without colours")}</span> : null;
 
-  // a file the review cannot draw is the file viewer's view, filling the pane under the review's own header (the
-  // viewer's header and toolbar are hidden, ReviewDialog.css): its size, and a text's partial view said; a large text
-  // file's diff stays the review's
-  if (source.status === "viewer" && (source.media || !showDiff)) return <div className="review-file review-viewer">
-    <div className="review-file-head">
-      <div className="review-file-title">
-        {title}
-        <div className="review-file-facts">
-          {status}
-          <span className="review-file-fact">{formatBytes(source.size)}{source.media ? "" : ` · ${t("Partial view")}`}</span>
-        </div>
-      </div>
-      <div className="review-tools">
-        {viewedBox}
-        <div className="repo-diff-group">
-          <a className="icon-button repo-diff-action" href={fileUrl(absolute, paneId)} target="_blank" rel="noopener" aria-label={t("Open in a new tab")} title={t("Open in a new tab")}><ExternalLink aria-hidden="true" /></a>
-          <a className="icon-button repo-diff-action" href={fileUrl(absolute, paneId, true)} download={fileName} aria-label={t("Download")} title={t("Download")}><Download aria-hidden="true" /></a>
-        </div>
-      </div>
-    </div>
-    <FileViewer docked path={absolute} paneId={paneId} machineId={machineId} paneFolder={directory} onClose={onClose} onOpen={onOpen} keyboardActive={false} />
-  </div>;
-
   // the line asked for, once its row is drawn: in the middle of the view. Looked for a few seconds (the library draws
-  // later than React); once found, never again, so the user's own scrolling stays
+  // later than React); once found, never again, so the user's own scrolling stays. Above the viewer's early return, so
+  // a file that turns out to be the viewer's keeps the same hooks
   const jumped = useRef(false);
   const drawnBody = source.status === "ready" && !showDiff && !preview;
   useEffect(() => {
@@ -908,6 +887,29 @@ export function ReviewFile({ owner, paneId, directory, root, path, change, diffM
     return () => cancelAnimationFrame(frame);
   }, [line, drawnBody]);
 
+  // a file the review cannot draw is the file viewer's view, filling the pane under the review's own header (the
+  // viewer's header and toolbar are hidden, ReviewDialog.css): its size, and a text's partial view said; a large text
+  // file's diff stays the review's
+  if (source.status === "viewer" && (source.media || !showDiff)) return <div className="review-file review-viewer">
+    <div className="review-file-head">
+      <div className="review-file-title">
+        {title}
+        <div className="review-file-facts">
+          {status}
+          <span className="review-file-fact">{formatBytes(source.size)}{source.media ? "" : ` · ${t("Partial view")}`}</span>
+        </div>
+      </div>
+      <div className="review-tools">
+        <div className="repo-diff-group">
+          <a className="icon-button repo-diff-action" href={fileUrl(absolute, paneId)} target="_blank" rel="noopener" aria-label={t("Open in a new tab")} title={t("Open in a new tab")}><ExternalLink aria-hidden="true" /></a>
+          <a className="icon-button repo-diff-action" href={fileUrl(absolute, paneId, true)} download={fileName} aria-label={t("Download")} title={t("Download")}><Download aria-hidden="true" /></a>
+          {viewedBox}
+        </div>
+      </div>
+    </div>
+    <FileViewer docked path={absolute} paneId={paneId} machineId={machineId} paneFolder={directory} onClose={onClose} onOpen={onOpen} keyboardActive={false} />
+  </div>;
+
   return <div ref={bodyRef} className="review-file" data-mode={showDiff ? "diff" : "file"}>
     <div className="review-file-head">
       <div className="review-file-title">
@@ -919,7 +921,6 @@ export function ReviewFile({ owner, paneId, directory, root, path, change, diffM
         </div>}
       </div>
       <div className="review-tools">
-        {viewedBox}
         {isMarkdown && source.status === "ready" && <div className="segmented review-mode" role="group" aria-label={t("View")}>
           <button type="button" aria-pressed={preview} onClick={() => setPreview(true)}>{t("Preview")}</button>
           <button type="button" aria-pressed={!preview} onClick={() => setPreview(false)}>{t("Source")}</button>
@@ -933,6 +934,7 @@ export function ReviewFile({ owner, paneId, directory, root, path, change, diffM
           {settings.comments && <CommentModeToggle className="review-comments" count={preview && isMarkdown ? previewComments.shown.length : savedHere.length} hintOn={preview && isMarkdown ? "select" : settings.mobileCommentGesture} showHint={showHint} />}
           <button type="button" className="icon-button repo-diff-action" aria-pressed={settings.wrapCode} aria-label={t("Wrap lines")} title={t("Wrap lines")} onClick={() => update({ wrapCode: !settings.wrapCode })}><WrapText aria-hidden="true" /></button>
           {showDiff && <button type="button" className="icon-button repo-diff-action" aria-pressed={folded} aria-label={t("Fold context")} title={folded ? t("Showing one line around each change") : t("Fold context")} disabled={diffPatch === null} onClick={() => setFolded(!folded)}><FoldVertical aria-hidden="true" /></button>}
+          {viewedBox}
         </div>
       </div>
     </div>

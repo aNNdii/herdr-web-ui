@@ -469,6 +469,12 @@
   padding-left: var(--space-5);
 }
 
+/* an ordered list's marker ("5. ", "10. ") sits in the indent: it holds the digits (Markdown.tsx sets
+   --markdown-list-digits past one), the dot and the space, or the number is cut at the left edge */
+ol.markdown-list {
+  padding-left: max(var(--space-5), calc((var(--markdown-list-digits, 1) + 2) * 1ch));
+}
+
 .markdown-list .markdown-list {
   margin: var(--space-1) 0 0;
 }

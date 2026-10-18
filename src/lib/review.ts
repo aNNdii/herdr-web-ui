@@ -57,24 +57,44 @@ export function repositoryFile(root: string, relativePath: string): string {
   return `${root.replace(/[\\/]+$/, "")}/${relativePath}`;
 }
 
-/** Whether the review's tree shows the files git ignores: per device, kept in localStorage like the file panel's width. */
-const SHOW_IGNORED_KEY = "herdr-web-ui:review-show-ignored";
-
-export function storedShowIgnored(): boolean {
+/** A toggle of the review's tree, per device, kept in localStorage like the file panel's width: off until turned on. */
+function storedFlag(key: string): boolean {
   try {
-    return window.localStorage.getItem(SHOW_IGNORED_KEY) === "1";
+    return window.localStorage.getItem(key) === "1";
   } catch {
     return false;
   }
 }
 
-export function storeShowIgnored(shown: boolean): void {
+function storeFlag(key: string, on: boolean): void {
   try {
-    if (shown) window.localStorage.setItem(SHOW_IGNORED_KEY, "1");
-    else window.localStorage.removeItem(SHOW_IGNORED_KEY);
+    if (on) window.localStorage.setItem(key, "1");
+    else window.localStorage.removeItem(key);
   } catch {
     // private mode: it holds for this opening only
   }
+}
+
+/** Whether the review's tree shows the files git ignores (in All files). */
+const SHOW_IGNORED_KEY = "herdr-web-ui:review-show-ignored";
+
+export function storedShowIgnored(): boolean {
+  return storedFlag(SHOW_IGNORED_KEY);
+}
+
+export function storeShowIgnored(shown: boolean): void {
+  storeFlag(SHOW_IGNORED_KEY, shown);
+}
+
+/** Whether the review's tree leaves out the viewed files (in Changed files). */
+const HIDE_VIEWED_KEY = "herdr-web-ui:review-hide-viewed";
+
+export function storedHideViewed(): boolean {
+  return storedFlag(HIDE_VIEWED_KEY);
+}
+
+export function storeHideViewed(hidden: boolean): void {
+  storeFlag(HIDE_VIEWED_KEY, hidden);
 }
 
 /**

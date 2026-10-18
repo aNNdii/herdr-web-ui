@@ -137,12 +137,11 @@
   color: var(--accent);
 }
 
+/* a deep folder gives way at its front segments first (PathText.css); its tooltip is the whole path */
 .repo-change-folder-name {
   flex: 1 1 auto;
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  display: flex;
   font-family: var(--font-mono);
   font-size: var(--fs-xs);
   font-weight: var(--fw-medium);
@@ -206,17 +205,28 @@
   color: var(--text-dim);
 }
 
+/* a name keeps its end (PathText.css); a renamed file's old name gives way first, down to nothing, and its
+   new one after, with the arrow between them kept */
 .repo-change-path {
   flex: 1 1 auto;
   min-width: 0;
+  display: flex;
   overflow: hidden;
-  text-overflow: ellipsis;
   white-space: nowrap;
   font-family: var(--font-mono);
   font-size: var(--fs-xs);
 }
 
 .repo-change-old {
+  flex: 0 1e6 auto;
+  min-width: 0;
+  display: flex;
+  color: var(--text-dim);
+}
+
+.repo-change-arrow {
+  flex: none;
+  white-space: pre;
   color: var(--text-dim);
 }
 

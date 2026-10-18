@@ -3,6 +3,7 @@ import { ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown, Folder, Fold
 
 import "./RepoChanges.css";
 import { FileGlyph } from "./FileGlyph.tsx";
+import { FileNameText, FolderPathText } from "./PathText.tsx";
 import { Skeleton } from "./Skeleton.tsx";
 
 import type { RepoDiffFile, RepoDiffFileList, RepoDiffScope } from "../../shared/protocol.ts";
@@ -95,7 +96,7 @@ export function RepoChanges({ paneId, directory, onOpenDiff }: RepoChangesProps)
         <button type="button" className="repo-change-folder" style={indent} aria-expanded={open} onClick={() => toggle(entry.path)}>
           <span className="repo-change-caret" aria-hidden="true">{open ? <ChevronDown /> : <ChevronRight />}</span>
           {open ? <FolderOpen className="repo-change-glyph" aria-hidden="true" /> : <Folder className="repo-change-glyph" aria-hidden="true" />}
-          <span className="repo-change-folder-name">{entry.name}</span>
+          <span className="repo-change-folder-name" dir="ltr" title={entry.path}><FolderPathText path={entry.name} /></span>
           <span className="repo-change-folder-count" aria-hidden="true">{entry.files.toLocaleString(locale)}</span>
         </button>
         {open && <ul className="repo-change-children">{rows(entry.entries, files, comparison)}</ul>}
@@ -113,7 +114,7 @@ export function RepoChanges({ paneId, directory, onOpenDiff }: RepoChangesProps)
         <span className="visually-hidden">{word}</span>
         <FileGlyph name={file.path} className="repo-change-glyph" />
         <span className="repo-change-path" title={file.old_path === null ? file.path : t("Renamed from {path}", { path: file.old_path })}>
-          {file.old_path !== null && <span className="repo-change-old">{sameFolder && folder !== "" && <span className="visually-hidden">{folder}</span>}{sameFolder ? file.old_path.slice(folder.length) : file.old_path} → </span>}{folder !== "" && <span className="visually-hidden">{folder}</span>}{entry.name}
+          {file.old_path !== null && <><span className="repo-change-old">{sameFolder && folder !== "" && <span className="visually-hidden">{folder}</span>}<FileNameText name={sameFolder ? file.old_path.slice(folder.length) : file.old_path} /></span><span className="repo-change-arrow"> → </span></>}{folder !== "" && <span className="visually-hidden">{folder}</span>}<FileNameText name={entry.name} />
         </span>
         {file.binary === true
           ? <span className="repo-change-counts">{t("Binary")}</span>
