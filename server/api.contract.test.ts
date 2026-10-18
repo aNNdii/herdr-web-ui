@@ -1238,6 +1238,11 @@ describe("workspace and discovery endpoints", () => {
     expect(commands.status).toBe(200);
     expect(await commands.json()).toEqual({ commands: [] });
 
+    // a shell pane routes no leading @handle, so it lists no agents
+    const subagents = await fetch(`${base()}/api/pane/subagents?pane_id=${encodeURIComponent(paneId)}`);
+    expect(subagents.status).toBe(200);
+    expect(await subagents.json()).toEqual({ subagents: [] });
+
     const files = await fetch(`${base()}/api/pane/files?pane_id=${encodeURIComponent(paneId)}&q=${encodeURIComponent(fileName)}&limit=5`);
     expect(files.status).toBe(200);
     expect(((await files.json()) as { files: string[] }).files).toContain(fileName);

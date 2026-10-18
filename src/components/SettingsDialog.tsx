@@ -372,6 +372,15 @@ function ChatPage() {
         <SettingsRow label={t("Send queued messages automatically")} description={t("A message sent while the agent works goes by itself when the turn ends. When off, it waits until you press Send now.")}>
           <Toggle label={t("Send queued messages automatically")} checked={settings.autoSendQueued} onChange={(autoSendQueued) => update({ autoSendQueued })} />
         </SettingsRow>
+        <SettingsRow label={t("Suggest agents after @")} description={t("An @ at the start of a pi message lists the agents pi-subagents can start, before the files. When off, it lists only files; a typed @agent still works.")}>
+          <Toggle label={t("Suggest agents after @")} checked={settings.suggestAgents} onChange={(suggestAgents) => update({ suggestAgents })} />
+        </SettingsRow>
+        <SettingsRow label={t("Suggest skills after /")} description={t("Skills in the / menu, for every agent. When off, they can still be typed; a $ menu keeps listing them.")}>
+          <Toggle label={t("Suggest skills after /")} checked={settings.suggestSkills} onChange={(suggestSkills) => update({ suggestSkills })} />
+        </SettingsRow>
+        <SettingsRow label={t("Suggest built-in commands after /")} description={t("The agent's own commands in the / menu, pi's /llama and /mcp included. When off, they can still be typed.")}>
+          <Toggle label={t("Suggest built-in commands after /")} checked={settings.suggestBuiltins} onChange={(suggestBuiltins) => update({ suggestBuiltins })} />
+        </SettingsRow>
         {touch && (
           <SettingsRow label={t("Suggestion chip")} description={t("A chip above the message box puts the prompt Claude Code suggests next into the box. With a keyboard, Tab does it.")}>
             <Toggle label={t("Suggestion chip")} checked={settings.suggestionChip} onChange={(suggestionChip) => update({ suggestionChip })} />

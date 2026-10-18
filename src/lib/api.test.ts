@@ -1,7 +1,7 @@
 import { afterEach, expect, it } from "bun:test";
 import { MAX_ATTACHMENT_BYTES } from "../../shared/attachments.ts";
 import { NOTICE_VERSION } from "../../shared/telemetry.ts";
-import { AttachmentTooLargeError, ApiError, changeTelemetry, fetchTelemetry, uploadPaneImage } from "./api.ts";
+import { AttachmentTooLargeError, ApiError, changeTelemetry, fetchPaneSubagents, fetchTelemetry, uploadPaneImage } from "./api.ts";
 import { DEFAULT_SETTINGS, telemetrySettingsSnapshot } from "./settings.ts";
 
 const realFetch = globalThis.fetch;
@@ -84,4 +84,21 @@ it("treats a missing telemetry route as unavailable for reads and an API error f
   const error = await changeTelemetry({ enabled: true }).catch((failure: unknown) => failure);
   expect(error).toBeInstanceOf(ApiError);
   expect(error).toMatchObject({ status: 404, code: "not_found" });
+});
+
+it("reads a pane's subagents through the PC's path, and an older bridge without the route as none", async () => {
+  const requests: string[] = [];
+  globalThis.fetch = (async (url: string) => {
+    requests.push(url);
+    return Response.json({ subagents: [{ handle: "explore", description: "Fast codebase exploration" }] });
+  }) as typeof fetch;
+  expect(await fetchPaneSubagents("w1:p1")).toEqual([{ handle: "explore", description: "Fast codebase exploration" }]);
+  expect(await fetchPaneSubagents("w1:p1", "pc-2")).toHaveLength(1);
+  expect(requests).toEqual(["/api/pane/subagents?pane_id=w1%3Ap1", "/api/machines/pc-2/pane/subagents?pane_id=w1%3Ap1"]);
+
+  globalThis.fetch = (async (_url: string) => Response.json({ error: { code: "not_found", message: "Not found" } }, { status: 404 })) as typeof fetch;
+  expect(await fetchPaneSubagents("w1:p1", "pc-2")).toEqual([]);
+
+  globalThis.fetch = (async (_url: string) => Response.json({ error: { code: "pane_not_found", message: "pane not found" } }, { status: 404 })) as typeof fetch;
+  expect(await fetchPaneSubagents("w1:p1").catch((failure: unknown) => failure)).toMatchObject({ status: 404, code: "pane_not_found" });
 });

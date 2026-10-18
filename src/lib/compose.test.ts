@@ -1,8 +1,8 @@
 import { describe, expect, it } from "bun:test";
 
 import { skillSyntax } from "../../shared/skill-syntax.ts";
-import { agentDisplayLabel, composerDelivery, composerMessage, terminalOnlyCommand, composerSendShown, composerPayload, composerModelDraw, composerStatusCompact, composerStatusHint, composerStatusWord, COMPOSER_STATUS_COMPACT_BELOW, contextLeftPercent, formatTokens, imageMention, insertLeadingMention, MAX_COMPOSER_CHARS, QUEUE_READY_STATUS, rankSlashCommands, submitNote, submitNotTyped, submitRefusal, sameMessage } from "./compose.ts";
-import { briefDescription, commandGroup, commandsForTrigger, slashCommandReplacement } from "./compose.ts";
+import { agentDisplayLabel, composerDelivery, composerMessage, terminalOnlyCommand, composerSendShown, composerPayload, composerModelDraw, composerStatusCompact, composerStatusHint, composerStatusWord, COMPOSER_STATUS_COMPACT_BELOW, contextLeftPercent, formatTokens, holdsLeadingMention, imageMention, insertLeadingMention, MAX_COMPOSER_CHARS, needsAgentList, QUEUE_READY_STATUS, rankSlashCommands, submitNote, submitNotTyped, submitRefusal, sameMessage } from "./compose.ts";
+import { briefDescription, commandGroup, commandsForTrigger, slashCommandReplacement, visibleCommands } from "./compose.ts";
 import { activeTrigger, applyCompletion, type ActiveTrigger } from "./mentions.ts";
 
 describe("menu rows", () => {
@@ -28,6 +28,44 @@ describe("menu rows", () => {
     expect(commandGroup({ name: "model", description: "", source: "builtin" })).toBe("builtin");
     // a plugin's command file is not a skill: it keeps its own group
     expect(commandGroup({ name: "hud:configure", description: "", source: "plugin" })).toBe("plugin");
+  });
+});
+
+describe("menu settings (AC13, AC14)", () => {
+  const builtin = { name: "model", description: "", source: "builtin" as const };
+  const bundled = { name: "llama", description: "", source: "builtin" as const };
+  const prompt = { name: "flow", description: "", source: "user" as const };
+  const project = { name: "deploy", description: "", source: "project" as const };
+  const plugin = { name: "hud:setup", description: "", source: "plugin" as const };
+  const skill = { name: "skill:as-plan", description: "", source: "skill" as const, origin: "plugin" as const };
+  const commands = [builtin, bundled, prompt, project, plugin, skill];
+  const slash: ActiveTrigger = { kind: "slash", query: "", start: 0, end: 1 };
+  const dollar: ActiveTrigger = { ...slash, prefix: "$" };
+  const all = { skills: true, builtins: true };
+
+  it("lists every command while both settings are on", () => {
+    expect(visibleCommands(commands, all, slash)).toEqual(commands);
+    expect(visibleCommands(commands, all, dollar)).toEqual(commands);
+  });
+
+  it("leaves out skills when they are off", () => {
+    expect(visibleCommands(commands, { ...all, skills: false }, slash)).toEqual([builtin, bundled, prompt, project, plugin]);
+    expect(visibleCommands(commands, { ...all, skills: false }, { ...slash, start: 4, end: 5 })).toEqual([builtin, bundled, prompt, project, plugin]);
+  });
+
+  it("leaves out the agent's built-in commands, pi's bundled ones included, when they are off", () => {
+    expect(visibleCommands(commands, { ...all, builtins: false }, slash)).toEqual([prompt, project, plugin, skill]);
+  });
+
+  it("keeps prompts and plugin commands with both off", () => {
+    expect(visibleCommands(commands, { skills: false, builtins: false }, slash)).toEqual([prompt, project, plugin]);
+  });
+
+  it("keeps skills for a typed $, whose menu lists nothing else", () => {
+    const codexSkill = { name: "delegate", description: "", source: "skill" as const, trigger: "$" as const };
+    const codexDollar = commandsForTrigger([builtin, codexSkill], "codex", dollar);
+    expect(visibleCommands(codexDollar, { skills: false, builtins: false }, dollar)).toEqual([codexSkill]);
+    expect(visibleCommands(commands, { skills: false, builtins: false }, { ...dollar, start: 4, end: 5 })).toEqual([prompt, project, plugin, skill]);
   });
 });
 
@@ -243,6 +281,32 @@ describe("imageMention", () => {
   });
 });
 
+describe("holdsLeadingMention", () => {
+  it("holds an upload while the whole text is a leading /command or @handle still being typed", () => {
+    for (const text of ["/", "/mo", "@", "@ex", "@explore"]) expect(holdsLeadingMention(text)).toBe(true);
+  });
+
+  it("lets it in once the handle is finished, or the text is no handle", () => {
+    for (const text of ["@explore ", "hi", "@src/x", "", "/review "]) expect(holdsLeadingMention(text)).toBe(false);
+  });
+});
+
+describe("needsAgentList", () => {
+  it("asks for a pi pane's agents once its message starts with a finished @word, when they are not known yet", () => {
+    for (const text of ["@explore prüf das", "@explore ", "@plan-b\nnotes", "@Makefile hat einen Fehler"]) {
+      expect(needsAgentList(text, "pi", false)).toBe(true);
+    }
+  });
+
+  it("does not ask when the agents are known, the agent is not pi, or the text starts with no finished @word", () => {
+    expect(needsAgentList("@explore prüf das", "pi", true)).toBe(false);
+    for (const agent of ["claude", "codex", "omp", null]) expect(needsAgentList("@explore prüf das", agent, false)).toBe(false);
+    for (const text of ["", "@", "@explore", "@explore/x prüf", "@ explore", "prüf @explore das", "/review @explore ", " @explore x"]) {
+      expect(needsAgentList(text, "pi", false)).toBe(false);
+    }
+  });
+});
+
 describe("insertLeadingMention", () => {
   const first = imageMention("/tmp/1.png");
   const second = imageMention("/tmp/2.png");
@@ -255,6 +319,21 @@ describe("insertLeadingMention", () => {
   it("keeps a leading slash command first", () => {
     expect(insertLeadingMention("/review the menu", first, [])).toEqual({ text: "/review @/tmp/1.png the menu", at: 8, length: 12 });
     expect(insertLeadingMention("/review", first, [])).toEqual({ text: "/review @/tmp/1.png ", at: 7, length: 13 });
+  });
+
+  it("keeps a leading @agent first, but only when it is a known handle", () => {
+    const upload = imageMention("/tmp/up/x.png");
+    expect(insertLeadingMention("@explore prüf das", upload, [], ["explore", "plan"]))
+      .toEqual({ text: `@explore ${upload}prüf das`, at: 9, length: upload.length });
+    expect(insertLeadingMention("@explore", upload, [], ["explore"]))
+      .toEqual({ text: `@explore ${upload}`, at: 8, length: upload.length + 1 });
+    // a leading file mention, or a handle no agent has, is not an addressee
+    expect(insertLeadingMention("@Makefile hat einen Fehler", upload, [], ["explore"]))
+      .toEqual({ text: `${upload}@Makefile hat einen Fehler`, at: 0, length: upload.length });
+    expect(insertLeadingMention("@explore prüf das", upload, []))
+      .toEqual({ text: `${upload}@explore prüf das`, at: 0, length: upload.length });
+    // only the whole first word counts: `@explore/x` is a path
+    expect(insertLeadingMention("@explore/x", upload, [], ["explore"]).at).toBe(0);
   });
 
   it("goes after the mentions of files picked before it, so a batch reads in pick order however its uploads finish", () => {

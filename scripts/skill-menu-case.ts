@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Locator, Page } from "playwright-core";
 import { paneCommands } from "../server/commands.ts";
-import type { SlashCommand } from "../shared/protocol.ts";
+import type { SlashCommand, SubagentMention } from "../shared/protocol.ts";
 
 // What one agent's case file (scripts/skill-menu-cases/<agent>.ts) exports, and the tools
 // scripts/agent-skill-menu-demo-regression.ts hands its scenarios on the page it opened.
@@ -21,6 +21,8 @@ export interface SkillMenuCase {
   agent: string;
   /** GET /api/pane/commands: the agent's own builtins and the case's skills */
   commands: SlashCommand[];
+  /** GET /api/pane/subagents: the agents a leading `@handle` addresses; unset, the demo's answer */
+  subagents?: SubagentMention[];
   /** the user turn the chat ends with */
   turnText: string;
   /** the chips that turn shows, in the forms they were written */

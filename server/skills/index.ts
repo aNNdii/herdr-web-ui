@@ -1,4 +1,4 @@
-import type { SlashCommand } from "../../shared/protocol.ts";
+import type { SlashCommand, SubagentMention } from "../../shared/protocol.ts";
 import { source as omo } from "./omo.ts";
 import { source as claude } from "./claude.ts";
 import { source as codex } from "./codex.ts";
@@ -27,5 +27,7 @@ export interface AgentCommandSource {
   readonly builtins: readonly string[];
   readonly descriptions?: Readonly<Record<string, string>>;
   readonly discover: (ctx: AgentCommandContext) => SlashCommand[];
+  /** agents a message can address with a leading `@handle`; absent: none. Never throws. */
+  readonly subagents?: (ctx: AgentCommandContext) => SubagentMention[];
 }
 export const AGENT_SOURCES: Record<string, AgentCommandSource> = { omo, claude, codex, pi, omp, gjc, opencode, devin, grok, hermes, agy };

@@ -46,6 +46,8 @@ import type {
   SetSplitRatioRequest,
   SlashCommand,
   SplitPaneDirection,
+  SubagentMention,
+  PaneSubagents,
   SplitPaneRequest,
   SwapPaneRequest,
   TabCreated,
@@ -732,6 +734,16 @@ export async function removeWorktree(request: RemoveWorktreeRequest, machineId =
 /** GET /api/pane/commands: the slash commands the pane's agent understands (built-in + custom). */
 export async function fetchPaneCommands(paneId: string, machineId = "local"): Promise<SlashCommand[]> {
   return (await getJson<{ commands: SlashCommand[] }>(machinePath(machineId, `pane/commands?pane_id=${encodeURIComponent(paneId)}`))).commands;
+}
+
+/** GET /api/pane/subagents: the agents a message to the pane can address with a leading `@handle`; none from a bridge without the route. */
+export async function fetchPaneSubagents(paneId: string, machineId = "local"): Promise<SubagentMention[]> {
+  try {
+    return (await getJson<PaneSubagents>(machinePath(machineId, `pane/subagents?pane_id=${encodeURIComponent(paneId)}`))).subagents;
+  } catch (error) {
+    if (routeMissing(error)) return [];
+    throw error;
+  }
 }
 
 /** GET /api/pane/omo-tasks: the background tasks and workflows the pane's OmO session started, and that PC's clock. */

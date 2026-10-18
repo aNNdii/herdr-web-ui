@@ -114,8 +114,27 @@ export function imageMention(path: string): string {
 }
 
 /**
+ * The whole text is a leading `/command` or `@handle` still being typed: a finished upload waits,
+ * because its mention would go in front of it (insertLeadingMention knows neither yet) and take
+ * the handle's place first.
+ */
+export function holdsLeadingMention(text: string): boolean {
+  return /^(?:\/\S*|@[\w-]*)$/u.test(text);
+}
+
+/**
+ * A finished upload in a pi pane waits for the pane's agents (fetched once) while the message
+ * starts with a whole `@word` and they are not `known`: insertLeadingMention can only keep an
+ * `@agent` first when it knows the handle, and pi-subagents routes a message only from `^@handle`.
+ * Any other text, or another agent, places the upload as it is.
+ */
+export function needsAgentList(text: string, agent: string | null, known: boolean): boolean {
+  return agent === "pi" && !known && /^@[\w-]+\s/u.test(text);
+}
+
+/**
  * Where an attached file's mention goes: at the start of the message, after a leading `/command`
- * (it must stay first to be one), and after the mentions of files picked before it in the same
+ * or a leading `@handle` of one of `agents` (each must stay first to be one), and after the mentions of files picked before it in the same
  * batch that are still there, so a batch reads in pick order however its uploads finish. An upload
  * finishes while the user may be typing, so the mention never goes where the caret is: the caller
  * shifts the caret and selection by `length` when they sit at or after `at`. The mention goes in
@@ -127,8 +146,13 @@ export function insertLeadingMention(
   text: string,
   mention: string,
   earlier: readonly string[],
+  agents: readonly string[] = [],
 ): { text: string; at: number; length: number; missing?: number } {
   let at = /^\/\S+\s*/u.exec(text)?.[0].length ?? 0;
+  // a leading `@handle` addresses an agent like a command does; any other `@word` is a file
+  const addressee = /^@([\w-]+)(?=\s|$)\s*/u.exec(text);
+  const handle = addressee?.[1]?.toLowerCase();
+  if (addressee && agents.some((agent) => agent.toLowerCase() === handle)) at = addressee[0].length;
   for (const previous of earlier) {
     const found = text.indexOf(previous);
     if (found >= 0) at = Math.max(at, found + previous.length);
@@ -297,6 +321,24 @@ export function commandsForTrigger(commands: readonly SlashCommand[], agent: str
     if (agent === "codex") return command.trigger === "$";
     if (agent === "claude") return command.trigger === undefined;
     if (agent === "omp") return command.name.startsWith("skill:");
+    return true;
+  });
+}
+
+/** Which kinds of command the `/` menu suggests (Settings → Chat → Composer). */
+export interface CommandMenuKinds {
+  skills: boolean;
+  builtins: boolean;
+}
+
+/**
+ * The commands the menu suggests: a kind turned off is left out for every agent, but stays typeable.
+ * A `$` trigger keeps its skills, since it lists nothing else.
+ */
+export function visibleCommands(commands: readonly SlashCommand[], kinds: CommandMenuKinds, trigger: ActiveTrigger): SlashCommand[] {
+  return commands.filter((command) => {
+    if (command.source === "skill") return kinds.skills || trigger.prefix === "$";
+    if (command.source === "builtin") return kinds.builtins;
     return true;
   });
 }

@@ -1,11 +1,11 @@
 /**
  * The pane routes: what the browser reads from a pane (its screen, scroll, selection, commands,
- * files and native conversation) and what it does to one (type, rename, close, split, zoom, swap,
+ * subagents, files and native conversation) and what it does to one (type, rename, close, split, zoom, swap,
  * resize, clear, focus, paste an image). Each answers from herdr alone, so none needs the
  * server's own state. The dispatcher in index.ts runs the access gate first.
  */
-import type { AgentRenameRequest, PaneDirection, PaneResized, PaneSplit, PaneSwapped, PaneZoomed, ReadFormat, ReadSource } from "../shared/protocol.ts";
-import { paneCommands } from "./commands.ts";
+import type { AgentRenameRequest, PaneDirection, PaneResized, PaneSubagents, PaneSplit, PaneSwapped, PaneZoomed, ReadFormat, ReadSource } from "../shared/protocol.ts";
+import { hasSubagents, paneCommands, paneSubagents } from "./commands.ts";
 import { paneFiles } from "./files.ts";
 import { badRequest, conflictResponse, errorResponse, isCount, isJsonObject, jsonResponse } from "./http.ts";
 import { conversationImage, ConversationUnavailable, forgetPaneTranscriptState, HistoryChanged, paneConversation, paneProcessRoots, toolOutput } from "./conversation.ts";
@@ -71,7 +71,7 @@ export async function handlePaneRequest(request: Request, url: URL, pathname: st
     }
   }
 
-  if (pathname === "/api/pane/commands" || pathname === "/api/pane/files") {
+  if (pathname === "/api/pane/commands" || pathname === "/api/pane/subagents" || pathname === "/api/pane/files") {
     if (request.method !== "GET") return badRequest("method_not_allowed", "use GET");
     const paneId = url.searchParams.get("pane_id");
     if (!paneId) return badRequest("missing_pane_id", "pane_id query parameter is required");
@@ -81,6 +81,12 @@ export async function handlePaneRequest(request: Request, url: URL, pathname: st
         const roots = await paneProcessRoots(paneId, context.agent);
         const agent = roots.omo ? "omo" : context.agent;
         return jsonResponse({ commands: paneCommands(agent, context.cwd, undefined, { ...roots.omo, environ: roots.environ }) });
+      }
+      if (pathname === "/api/pane/subagents") {
+        // no herdr process_info round trip for an agent that has no subagents to read it for
+        if (!hasSubagents(context.agent)) return jsonResponse({ subagents: [] } satisfies PaneSubagents);
+        const roots = await paneProcessRoots(paneId, context.agent);
+        return jsonResponse({ subagents: paneSubagents(context.agent, context.cwd, undefined, { environ: roots.environ }) } satisfies PaneSubagents);
       }
       const limitRaw = url.searchParams.get("limit");
       const limit = limitRaw === null ? 20 : Number(limitRaw);

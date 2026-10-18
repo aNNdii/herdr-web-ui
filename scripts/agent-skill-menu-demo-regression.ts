@@ -15,7 +15,8 @@ import { caseRun, type SkillMenuCase } from "./skill-menu-case.ts";
 // app over the demo's fixture transport, one case file per agent in scripts/skill-menu-cases/
 // (every one of them when none is named). The demo's docs pane answers Claude's command list and
 // its chat names no skill, so the page's data is patched here, in the test only: the pane's agent
-// is the case's, its command list is the case's (the agent's own builtins and a few skills), and
+// is the case's, its command list is the case's (the agent's own builtins and a few skills), so are
+// the agents a leading `@handle` addresses where the case names them, and
 // its conversation ends with the case's user turn. Every scenario runs in a 1280×800 window and on
 // a 390×844 phone; the screenshots and run.log go to agent-skill-menu/<agent>/ under
 // UI_EVIDENCE_DIR (CI's uploaded folder) or else evidence/. All files and HTTP traffic stay in
@@ -50,11 +51,13 @@ try {
     const fix = (value) => {
       if (!value || typeof value !== "object") return value;
       if (Array.isArray(value)) { value.forEach(fix); return value; }
-      const { agent, commands, turnText } = window.skillCase;
+      const { agent, commands, subagents, turnText } = window.skillCase;
       // the pane, in a snapshot's panes and agents: the case's agent
       if (value.pane_id === TARGET && "agent_status" in value && "agent" in value) value.agent = agent;
       // GET /api/pane/commands: the case's list
       if (Array.isArray(value.commands)) value.commands = commands.map((command) => ({ ...command }));
+      // GET /api/pane/subagents: the case's agents, where it names them (the demo answers by the pane's own agent)
+      if (Array.isArray(value.subagents) && subagents) value.subagents = subagents.map((subagent) => ({ ...subagent }));
       // GET /api/pane/conversation of the chat: one more user turn, half a minute after the last
       if (value.source === "hermes-transcript" && Array.isArray(value.turns) && !value.turns.some((turn) => turn.role === "user" && turn.parts.some((part) => part.kind === "text" && part.text === turnText))) {
         const last = value.turns[value.turns.length - 1];
@@ -94,7 +97,7 @@ try {
       await context.addInitScript((patched) => {
         if (localStorage.getItem("herdr-web-ui:settings") === null) localStorage.setItem("herdr-web-ui:settings", JSON.stringify({ language: "en" }));
         Object.assign(window, { skillCase: patched });
-      }, { agent: skillCase.agent, commands: skillCase.commands, turnText: skillCase.turnText });
+      }, { agent: skillCase.agent, commands: skillCase.commands, subagents: skillCase.subagents ?? null, turnText: skillCase.turnText });
       const page = await context.newPage();
       const errors: string[] = [];
       page.on("pageerror", (error) => errors.push(error.message));

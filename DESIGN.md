@@ -2044,14 +2044,16 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
 - At `480px` and below a held row is its text, `Send now` and a `--touch-target` X whose name is
   still `Discard`.
 - `/` completions come from `GET /api/pane/commands` and group built-in, user and project commands;
-  `@` completions query `GET /api/pane/files`. Arrow keys navigate, Enter/Tab accepts, Escape closes.
+  `@` completions query `GET /api/pane/files`. A leading `@` in a pi pane with pi-subagents also lists
+  the agents of `GET /api/pane/subagents` in an **Agents** group before **Files**; a bare `@` lists only
+  them. Arrow keys navigate, Enter/Tab accepts, Escape closes.
   A listing that failed is told apart from no matches: a `role="status"` row says **Couldn't load
   suggestions. Keep typing to try again.** (every change of the query asks again).
 - Paste, picker or drag/drop attaches up to 100 files per action; the message box names how many it left out.
   An image is stored as a paste, any other file under its own sanitised name. Each uploads through `POST /api/pane/image`, three at a time
   across all picks, and puts a removable editable `@path` mention at the start of the message (after
-  a leading `/command`), in the order the files were picked. A path waits while the box holds only a
-  `/command` still being typed or an IME composition, and a path that does not fit whole under the
+  a leading `/command` or a leading known `@agent`), in the order the files were picked. A path waits
+  while the box holds only a `/command` or `@agent` still being typed or an IME composition, and a path that does not fit whole under the
   length cap waits on a tile whose badge is a warning glyph in `--notice` (`No room` for assistive
   tech only), with Send off and one status line, in `--notice`, saying the limit and how many
   characters over (`20,000-character limit · 41 over`); nothing else says it. Within 200 characters
