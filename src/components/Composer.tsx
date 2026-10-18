@@ -17,7 +17,7 @@ import { ArrowUp, FileText, Folder, FolderGit2, GitBranch, LoaderCircle, Message
 
 import "./Composer.css";
 
-import type { AgentStatus, ConversationMetadata, PlanSummary, SlashCommand } from "../../shared/protocol.ts";
+import type { AgentStatus, ConversationMetadata, PlanSummary, SlashCommand, SubagentMention } from "../../shared/protocol.ts";
 import { skillSyntax } from "../../shared/skill-syntax.ts";
 import { useMachineApi, useMachineId } from "../lib/machineContext.tsx";
 import { composerDrafts } from "../lib/composerDraft.ts";
@@ -36,13 +36,16 @@ import {
   contextLeftPercent,
   type DraftRefusal,
   formatTokens,
+  holdsLeadingMention,
   imageMention,
   insertLeadingMention,
   MAX_COMPOSER_CHARS,
+  needsAgentList,
   rankSlashCommands,
   slashCommandReplacement,
   submitNote,
   terminalOnlyCommand,
+  visibleCommands,
 } from "../lib/compose.ts";
 import { compactCommandText } from "../lib/compactContext.ts";
 import { composerStrip } from "../lib/composerStrip.ts";
@@ -53,6 +56,7 @@ import { paneStatus } from "../lib/status.ts";
 import { modelLabel } from "../lib/modelName.ts";
 import { useFacesArrived } from "../lib/fontFaces.ts";
 import { activeTrigger, applyCompletion, type ActiveTrigger } from "../lib/mentions.ts";
+import { mentionChoiceId, mentionChoices, mentionText, type MentionChoice } from "../lib/mentionChoices.ts";
 import { resolveComposerMenuActiveItemId } from "../lib/composerMenuHighlight.ts";
 import { quickReplyButtons, useSettings } from "../lib/settings.ts";
 import { composerUsage, formatPercent, formatResetIn, HIGH_PERCENT, meterPercent, meterText, providerForAgent, statusWindows, usageName, useUsage, windowLabel } from "../lib/usage.ts";
@@ -128,6 +132,8 @@ const ATTACH_LIMIT = 100;
  */
 const PREVIEW_TYPES = ["image/png", "image/jpeg", "image/gif", "image/webp", "image/svg+xml"] as const;
 const SLASH_USAGE_KEY = "herdr-web-ui:slash-usage";
+/** a pane whose agents are not fetched yet: one array, so the menu's choices keep their identity across renders */
+const NO_SUBAGENTS: SubagentMention[] = [];
 /** How long a Send tapped mid-composition waits for the keyboard to commit the word (as in TerminalInput). */
 const COMMIT_WAIT_MS = 300;
 export const SOURCE_LABEL: Record<SlashCommand["source"], string> = {
@@ -257,7 +263,7 @@ export function Composer({
   const activeRef = useRef(active);
   activeRef.current = active;
   const machineId = useMachineId();
-  const { fetchPaneCommands, fetchPaneFiles } = useMachineApi();
+  const { fetchPaneCommands, fetchPaneFiles, fetchPaneSubagents } = useMachineApi();
   const { settings } = useSettings();
   const mobile = useMediaQuery("(max-width: 640px), (pointer: coarse)");
   const usageEnabled = settings.showUsage && !mobile && machineId === "local" && providerForAgent(agent) !== null;
@@ -374,6 +380,18 @@ export function Composer({
   const [files, setFiles] = useState<string[]>([]);
   /** the file list could not be read: said in the menu, never drawn as "no matches" */
   const [filesFailed, setFilesFailed] = useState(false);
+  /** the agents a leading `@handle` can address, as last fetched for the pane named beside them (null: not yet) */
+  const [subagentList, setSubagentList] = useState<{ paneId: string; agents: SubagentMention[] | null }>({ paneId, agents: null });
+  const paneAgents = subagentList.paneId === paneId ? subagentList.agents : null;
+  // Settings → Suggest agents after @ off: none are offered, and a list fetched before that is not shown
+  const subagents = settings.suggestAgents ? paneAgents ?? NO_SUBAGENTS : NO_SUBAGENTS;
+  /**
+   * the handles an upload's path goes after (insertLeadingMention), read when the upload settles; also
+   * with the setting off, so a typed `@agent` stays first. null: not fetched for this pane yet
+   */
+  const subagentsRef = useRef(paneAgents);
+  /** the pane whose agents an upload already asked for (needsAgentList): once per pane, never per keystroke */
+  const agentListAsked = useRef<string | null>(null);
   /**
    * what the last settled attachment did, for assistive tech (the tiles say it on screen); each
    * settlement gets its own id, so a repeat of the same words is a new node and is read again
@@ -396,6 +414,7 @@ export function Composer({
   const [boxWidth, setBoxWidth] = useState(0);
 
   attachmentsRef.current = attachments;
+  subagentsRef.current = paneAgents;
   textRef.current = text;
   caretRef.current = caret;
   const syntax = skillSyntax(agent);
@@ -472,9 +491,35 @@ export function Composer({
     };
   }, [paneId, agent]);
 
+  // another pane has other agents: its list starts empty, and a fetch still running for the old pane is dropped
+  useEffect(() => {
+    setSubagentList({ paneId, agents: null });
+    agentListAsked.current = null;
+  }, [paneId]);
+
+  // fetched once per opening of a leading `@` and filtered here as the handle is typed; the list
+  // stays after the menu closes, so an upload still lands after a picked `@agent`. Only pi lists
+  // subagents (the server's hasSubagents): any other pane is not asked, nor any pane with the setting off
+  const leading = trigger?.kind === "file" && trigger.leading === true && agent === "pi" && settings.suggestAgents;
+  useEffect(() => {
+    if (!leading) return;
+    let live = true;
+    void fetchPaneSubagents(paneId)
+      .then((agents) => {
+        if (live) setSubagentList({ paneId, agents });
+      })
+      .catch(() => {
+        if (live) setSubagentList({ paneId, agents: [] });
+      });
+    return () => {
+      live = false;
+    };
+  }, [paneId, leading]);
+
   useEffect(() => {
     const request = ++fileRequest.current;
-    if (trigger?.kind !== "file") {
+    // a bare leading `@` offers only agents: no path is asked for before a character is typed
+    if (trigger?.kind !== "file" || trigger.query === "") {
       setFiles([]);
       setFilesFailed(false);
       return;
@@ -626,9 +671,10 @@ export function Composer({
 
   const filteredCommands = useMemo(
     () => (trigger?.kind === "slash"
-      ? rankSlashCommands(commandsForTrigger(commands, agent, trigger), trigger.query, slashUsage, trigger.start > 0 && text[trigger.start - 1] !== "\n")
+      ? rankSlashCommands(visibleCommands(commandsForTrigger(commands, agent, trigger), { skills: settings.suggestSkills, builtins: settings.suggestBuiltins }, trigger),
+        trigger.query, slashUsage, trigger.start > 0 && text[trigger.start - 1] !== "\n")
       : []),
-    [agent, commands, slashUsage, text, trigger],
+    [agent, commands, slashUsage, text, trigger, settings.suggestSkills, settings.suggestBuiltins],
   );
   // a typed query lists the matches in rank order, whatever their source (a plugin command whose
   // word starts with it must not sit under a built-in that only has its letters scattered);
@@ -638,7 +684,10 @@ export function Composer({
     () => groupedBySource ? COMMAND_GROUPS.flatMap((group) => filteredCommands.filter((command) => commandGroup(command) === group)) : filteredCommands,
     [filteredCommands, groupedBySource],
   );
-  const choices: readonly (SlashCommand | string)[] = trigger?.kind === "slash" ? orderedCommands : files;
+  const mentions = useMemo(() => mentionChoices(subagents, files, trigger), [subagents, files, trigger]);
+  const agentRows = mentions.filter((choice): choice is SubagentMention => typeof choice !== "string");
+  const fileRows = mentions.filter((choice): choice is string => typeof choice === "string");
+  const choices: readonly (SlashCommand | MentionChoice)[] = trigger?.kind === "slash" ? orderedCommands : mentions;
   const menuOpen = !menuDismissed && trigger !== null && choices.length > 0;
   // a failed listing opens the menu on its one line, which no key picks
   const filesFailedShown = !menuDismissed && trigger?.kind === "file" && filesFailed && files.length === 0;
@@ -646,7 +695,7 @@ export function Composer({
   // effect's render found no row at the old index and did nothing
   const choiceIds = choices.map((choice) => trigger?.kind === "slash"
     ? `${(choice as SlashCommand).source}:${(choice as SlashCommand).name}`
-    : choice as string);
+    : mentionChoiceId(choice as MentionChoice));
   const activeItemId = resolveComposerMenuActiveItemId({
     items: choiceIds.map((id) => ({ id })),
     highlightedItemId: searchKey === null ? null : highlightedItemId.current,
@@ -727,7 +776,7 @@ export function Composer({
     const start = selectionIsCurrent ? (element.selectionStart ?? caretRef.current) : caretRef.current;
     const end = selectionIsCurrent ? (element.selectionEnd ?? start) : start;
     const direction = selectionIsCurrent ? (element.selectionDirection ?? undefined) : undefined;
-    const next = insertLeadingMention(currentText, mention, earlier);
+    const next = insertLeadingMention(currentText, mention, earlier, (subagentsRef.current ?? []).map((agent) => agent.handle));
     if (next.missing !== undefined) return next.missing;
     const moved = (position: number) => (position >= next.at ? position + next.length : position);
     textRef.current = next.text;
@@ -745,12 +794,27 @@ export function Composer({
   const uploadsRunning = useRef(0);
   /** paths placed so far, by attachment id: ids follow pick order */
   const placedMentions = useRef(new Map<number, string>());
-  /** finished uploads whose paths wait for a /command or an IME composition to end, or for room */
+  /**
+   * finished uploads whose paths wait for a leading /command or @handle or an IME composition to end, for
+   * the pane's agents, or for room
+   */
   const waitingMentions = useRef<{ id: number; path: string; name: string }[]>([]);
 
   const placeWaitingMentions = useCallback(() => {
+    waitingMentions.current = waitingMentions.current.filter(({ id }) => !removedAttachments.current.has(id));
     if (waitingMentions.current.length === 0) return;
-    if (composingRef.current || /^\/\S*$/u.test(textRef.current)) return;
+    if (composingRef.current || holdsLeadingMention(textRef.current)) return;
+    // a pi message that starts with `@word `: whether that is an agent decides where the path goes, so it
+    // waits for the pane's agents, asked once; a failed ask places it as for no agents. The list only
+    // places paths: with Settings → Suggest agents after @ off the menu still shows none
+    if (needsAgentList(textRef.current, agent, subagentsRef.current !== null)) {
+      if (agentListAsked.current !== paneId) {
+        agentListAsked.current = paneId;
+        const settle = (agents: SubagentMention[]) => setSubagentList((current) => (current.paneId === paneId ? { paneId, agents } : current));
+        void fetchPaneSubagents(paneId).then(settle, () => settle([]));
+      }
+      return;
+    }
     const waiting = waitingMentions.current.sort((a, b) => a.id - b.id);
     waitingMentions.current = [];
     const attached: string[] = [];
@@ -772,19 +836,20 @@ export function Composer({
       attached.push(t("{name} attached", { name }));
     }
     if (attached.length > 0) announce(attached.join(" "));
-  }, [announce, insertMentionAtStart, t]);
+  }, [agent, announce, fetchPaneSubagents, insertMentionAtStart, paneId, t]);
 
   // whatever wrote the text (typing, a completion, dictation, a cleared draft), a waiting path tries
-  // again in the next frame, after that write's own caret placement has landed
+  // again in the next frame, after that write's own caret placement has landed; so does one that
+  // waited for the pane's agents, once they arrive
   useEffect(() => {
     if (waitingMentions.current.length === 0) return;
     const frame = requestAnimationFrame(placeWaitingMentions);
     return () => cancelAnimationFrame(frame);
-  }, [placeWaitingMentions, text]);
+  }, [placeWaitingMentions, text, subagentList]);
 
   const selectCompletion = useCallback(
-    (choice: SlashCommand | string, currentTrigger: ActiveTrigger) => {
-      const replacement = currentTrigger.kind === "slash" ? slashCommandReplacement(choice as SlashCommand, agent, currentTrigger) : `@${choice as string} `;
+    (choice: SlashCommand | MentionChoice, currentTrigger: ActiveTrigger) => {
+      const replacement = currentTrigger.kind === "slash" ? slashCommandReplacement(choice as SlashCommand, agent, currentTrigger) : mentionText(choice as MentionChoice);
       const completed = applyCompletion(text, currentTrigger, replacement);
       setTextAndCaret(completed.text, completed.caret);
       setMenuDismissed(true);
@@ -1219,7 +1284,7 @@ export function Composer({
         onDrop={onDrop}
       >
         {menuOpen && trigger && (
-          <div id={menuId} className="menu composer-menu" role="listbox" aria-label={t(trigger.kind === "slash" ? "Slash commands" : "Files")}>
+          <div id={menuId} className="menu composer-menu" role="listbox" aria-label={trigger.kind === "slash" ? t("Slash commands") : [...(agentRows.length > 0 ? [t("Agents")] : []), ...(fileRows.length > 0 ? [t("Files")] : [])].join(", ")}>
             {trigger.kind === "slash" ? (
               (() => {
                 // a row says what a command does in one sentence (the full text is the row's
@@ -1280,23 +1345,53 @@ export function Composer({
                 });
               })()
             ) : (
-              <div className="composer-menu-group">
-                <div className="menu-heading">{t("Files")}</div>
-                {files.map((file, index) => (
-                  <button
-                    id={`${menuId}-${index}`}
-                    key={file}
-                    type="button"
-                    className="menu-item"
-                    role="option"
-                    aria-selected={index === selectedIndex}
-                    onMouseDown={(event) => event.preventDefault()}
-                    onClick={() => selectCompletion(file, trigger)}
-                  >
-                    <span className="menu-item-main">{file}</span>
-                  </button>
-                ))}
-              </div>
+              // one list, two groups: agents take the first indices and files follow, so the keys,
+              // the highlight and aria-activedescendant all count over both
+              <>
+                {agentRows.length > 0 && (
+                  <div className="composer-menu-group">
+                    <div className="menu-heading">{t("Agents")}</div>
+                    {agentRows.map((agentRow, index) => (
+                      <button
+                        id={`${menuId}-${index}`}
+                        key={mentionChoiceId(agentRow)}
+                        type="button"
+                        className="menu-item"
+                        role="option"
+                        aria-selected={index === selectedIndex}
+                        title={agentRow.description !== agentRow.handle ? agentRow.description : undefined}
+                        onMouseDown={(event) => event.preventDefault()}
+                        onClick={() => selectCompletion(agentRow, trigger)}
+                      >
+                        <span className="menu-item-main">@{agentRow.handle}</span>
+                        {agentRow.description !== agentRow.handle && <span className="menu-item-hint">{briefDescription(agentRow.description)}</span>}
+                      </button>
+                    ))}
+                  </div>
+                )}
+                {fileRows.length > 0 && (
+                  <div className="composer-menu-group">
+                    <div className="menu-heading">{t("Files")}</div>
+                    {fileRows.map((file, fileIndex) => {
+                      const index = agentRows.length + fileIndex;
+                      return (
+                        <button
+                          id={`${menuId}-${index}`}
+                          key={mentionChoiceId(file)}
+                          type="button"
+                          className="menu-item"
+                          role="option"
+                          aria-selected={index === selectedIndex}
+                          onMouseDown={(event) => event.preventDefault()}
+                          onClick={() => selectCompletion(file, trigger)}
+                        >
+                          <span className="menu-item-main">{file}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+              </>
             )}
           </div>
         )}

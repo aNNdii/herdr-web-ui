@@ -9,9 +9,9 @@ import { CHAT_WIDTHS, DICTATION_LANGUAGES, DIFF_STYLES, MARKDOWN_WIDTHS, VOICE_B
   QUICK_REPLIES_MAX, QUICK_REPLY_MAX_CHARS, USAGE_KEYS_MAX, TERMINAL_FONT_MIN, TERMINAL_FONT_MAX,
   TERMINAL_WHEEL_SPEED_MIN, TERMINAL_WHEEL_SPEED_MAX, CHAT_FONT_MIN, CHAT_FONT_MAX,
   type Settings as CurrentSettings, type ChatWidth, type DictationLanguage, type VoiceButton } from "./settings.ts";
-// this fork's comment settings came after the pinned version, so its tabs never stored them
+// this fork's comment and suggestion-menu settings came after the pinned version, so its tabs never stored them
 type Settings = Omit<CurrentSettings, "darkTheme" | "lightTheme" | "comments" | "commentMode" | "commentLayout" | "commentOnSelect"
-  | "codeCommentLineClick" | "mobileCommentGesture" | "mobileCommentInput">;
+  | "codeCommentLineClick" | "mobileCommentGesture" | "mobileCommentInput" | "suggestAgents" | "suggestSkills" | "suggestBuiltins">;
 type Palette = "amber" | "charcoal" | "catppuccin";
 const PALETTES: readonly Palette[] = ["amber", "charcoal", "catppuccin"];
 const STORAGE_KEY = "herdr-web-ui:settings";

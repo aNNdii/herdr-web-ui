@@ -12,7 +12,7 @@
  * one notice instead of a TUI. A message sent from a chat gets a demo answer.
  * What does not: files, images, push and remote PCs, which need a real machine.
  */
-import type { AgentIntegration, AgentStatus, ConversationTurn, IntegrationsResponse, Machine, MachineEvent, PaneDirection, PaneFindMatch, PaneFindRequest, PanePlan, PaneResized, PaneSplit, PaneSwapped, PaneZoomed, PendingMessage, PlanStep, PluginActionResult, PluginActions, PluginActionsResponse, PortalStatus, ServerMessage, SessionSnapshot, TabMoved, UsageReport, WorkspaceCreated, WorkspaceInfo, WorktreeEntry, WorktreeListing, WorktreeOpened, WorktreeRemoved } from "../../shared/protocol.ts";
+import type { AgentIntegration, AgentStatus, ConversationTurn, IntegrationsResponse, Machine, MachineEvent, PaneDirection, PaneFindMatch, PaneFindRequest, PanePlan, PaneResized, PaneSplit, PaneSubagents, PaneSwapped, PaneZoomed, PendingMessage, PlanStep, PluginActionResult, PluginActions, PluginActionsResponse, PortalStatus, ServerMessage, SessionSnapshot, TabMoved, UsageReport, WorkspaceCreated, WorkspaceInfo, WorktreeEntry, WorktreeListing, WorktreeOpened, WorktreeRemoved } from "../../shared/protocol.ts";
 import type { RepoDiffFile, RepoDiffFileList, RepoDiffFilePatch, RepoDiffRepository, RepoDiffScope, RepoDiffTree } from "../../shared/protocol.ts";
 import { VOICE_DEFAULTS, type VoiceStatus } from "../../shared/voice.ts";
 import { isAgentName } from "../../shared/agent-name.ts";
@@ -52,6 +52,13 @@ type Pane = SessionSnapshot["panes"][number];
 type SseListener = (event: MessageEvent) => void;
 
 // ---- state -----------------------------------------------------------------------------------
+
+/** what /api/pane/subagents lists for the pi pane: pi-subagents' default agents, under their handles */
+const DEMO_SUBAGENTS: PaneSubagents["subagents"] = [
+  { handle: "general-purpose", description: "General-purpose agent for researching complex questions, searching for code, and executing multi-step tasks." },
+  { handle: "explore", description: "Fast read-only search agent for locating code." },
+  { handle: "plan", description: "Software architect agent for designing implementation plans." },
+];
 
 const machines: Machine[] = structuredClone(machinesFixture.machines as Machine[]);
 const local = machines[0]!;
@@ -651,6 +658,12 @@ async function route(url: URL, method: string, init: RequestInit | undefined, in
     return json({ ok: true });
   }
   if (path === "/api/pane/commands") return json(commandsFixture);
+  if (path === "/api/pane/subagents") {
+    if (method !== "GET") return error("method_not_allowed", "use GET", 400);
+    if (!paneId) return error("missing_pane_id", "pane_id query parameter is required", 400);
+    // pi with pi-subagents' default agents; any other agent routes no leading @handle
+    return json({ subagents: agentOf(paneId) === "pi" ? DEMO_SUBAGENTS : [] } satisfies PaneSubagents);
+  }
   if (path === "/api/pane/scroll") {
     const body = method === "POST" ? await bodyOf(init, input) : {};
     const target = method === "POST" ? String(body["pane_id"] ?? "") : paneId;

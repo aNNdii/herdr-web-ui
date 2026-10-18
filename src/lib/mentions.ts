@@ -2,6 +2,8 @@ export type ActiveTrigger = {
   kind: "slash" | "file";
   /** `$`: a skill token (`$name` for Codex, `$skill:name` for omo); absent for `/` */
   prefix?: "$";
+  /** a file trigger that begins the message with a handle-shaped query (`@`, `@exp`): agents may be offered */
+  leading?: true;
   query: string;
   /** Inclusive index of the trigger character. */
   start: number;
@@ -11,6 +13,8 @@ export type ActiveTrigger = {
 
 const SLASH_QUERY = /^[\p{L}\p{N}_-]*$/u;
 const FILE_QUERY = /^\S+$/u;
+// pi-subagents' handle grammar (`[\w-]*`), so `@src/` stays a file mention
+const HANDLE_QUERY = /^[\w-]*$/u;
 
 // A skill token stops at the first character a skill name cannot hold, so `/del,` keeps its comma.
 function tokenEnd(text: string, from: number, part: RegExp = /\S/u): number {
@@ -48,6 +52,7 @@ export function activeTrigger(text: string, caret: number, options: { skills?: b
   const at = text.lastIndexOf("@", Math.max(0, caret - 1));
   if (at < lineStart) return null;
   const query = text.slice(at + 1, caret);
+  if (at === 0 && HANDLE_QUERY.test(query)) return { kind: "file", query, leading: true, start: 0, end: tokenEnd(text, caret) };
   if (query.length === 0 || !FILE_QUERY.test(query)) return null;
   return { kind: "file", query, start: at, end: tokenEnd(text, caret) };
 }

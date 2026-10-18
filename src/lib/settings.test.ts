@@ -147,6 +147,20 @@ it("keeps the suggestion chip off until this device turns it on, whatever an old
   expect(sanitizeSettings({ suggestionChip: "true" }).suggestionChip).toBe(false);
 });
 
+it("suggests agents, skills and built-in commands until turned off, on every device of the server (AC12-AC14)", () => {
+  for (const key of ["suggestAgents", "suggestSkills", "suggestBuiltins"] as const) {
+    expect(DEFAULT_SETTINGS[key]).toBe(true);
+    expect(sanitizeSettings({})[key]).toBe(true);
+    expect(sanitizeSettings({ [key]: false })[key]).toBe(false);
+    expect(sanitizeSettings({ [key]: "false" })[key]).toBe(true);
+    expect(sanitizeSettings({ [key]: 0 })[key]).toBe(true);
+    expect(SETTING_SCOPE[key]).toBe("shared");
+    expect(SHARED_SETTING_KEYS as readonly string[]).toContain(key);
+    // a menu choice is not collected: the telemetry snapshot leaves it out
+    expect(Object.keys(telemetrySettingsSnapshot(DEFAULT_SETTINGS))).not.toContain(key);
+  }
+});
+
 it("keeps sidebar rows on one line unless two lines were chosen", () => {
   expect(sanitizeSettings({}).sidebarRows).toBe("one");
   expect(sanitizeSettings({ sidebarRows: "two" }).sidebarRows).toBe("two");

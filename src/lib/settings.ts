@@ -114,6 +114,12 @@ export interface Settings {
   /** on a touch screen, a chip above the message box offers the prompt the agent suggests next.
    * Not `showSuggestionChip`: that key was on by default until 0.4.9 and is still stored on phones */
   suggestionChip: boolean;
+  /** a leading `@` in a pi pane lists the agents pi-subagents can start (GET /api/pane/subagents); off: it is never asked */
+  suggestAgents: boolean;
+  /** the `/` menu lists skills (`source: "skill"`); off: only a `$` trigger still does, which lists nothing else */
+  suggestSkills: boolean;
+  /** the `/` menu lists the agent's built-in commands (`source: "builtin"`, pi's bundled /llama and /mcp too) */
+  suggestBuiltins: boolean;
   /** show the agent's folded reasoning blocks in the chat view */
   showThinking: boolean;
   /** comment on a reply or a file by selecting text in the comment mode; off deletes every comment */
@@ -190,6 +196,8 @@ export type DiffStyle = (typeof DIFF_STYLES)[number];
 type TelemetrySourceSettings = Omit<Settings,
   "keyBarExtras" | "keyBarItems" | "shortcutOverrides" | "terminalFontFamily" | "chatFontFamily"
   | "quickReplies" | "usageOrder" | "usageHidden"
+  // not collected: the composer's suggestion menus have no field in the report's schema
+  | "suggestAgents" | "suggestSkills" | "suggestBuiltins"
   // not collected: the fork's comment settings have no field in the report's schema
   | "comments" | "commentMode" | "commentLayout" | "commentOnSelect" | "codeCommentLineClick" | "mobileCommentGesture" | "mobileCommentInput">;
 
@@ -263,6 +271,7 @@ export function telemetrySettingsSnapshot(settings: Settings): TelemetrySettings
 export const SETTING_SCOPE = {
   theme: "shared", palette: "shared", darkTheme: "shared", lightTheme: "shared", language: "shared", sidebarRows: "shared", agentOrder: "shared",
   agentMarks: "shared", autoSendQueued: "shared", showThinking: "shared", quickReplies: "shared",
+  suggestAgents: "shared", suggestSkills: "shared", suggestBuiltins: "shared",
   showQuickReplies: "shared", showUsage: "shared", usageCount: "shared",
   usageGlance: "shared", usageOrder: "shared", usageHidden: "shared", defaultView: "device", suggestionChip: "device",
   terminalInputMode: "device", keyBarExtras: "device", keyBarItems: "device", shortcutOverrides: "device", density: "device",
@@ -317,6 +326,9 @@ export const DEFAULT_SETTINGS: Settings = {
   enterSends: true,
   autoSendQueued: true,
   suggestionChip: false,
+  suggestAgents: true,
+  suggestSkills: true,
+  suggestBuiltins: true,
   showThinking: false,
   comments: true,
   keepScreenOn: false,
@@ -502,6 +514,9 @@ export function sanitizeSettings(raw: unknown): Settings {
     enterSends: typeof record["enterSends"] === "boolean" ? record["enterSends"] : DEFAULT_SETTINGS.enterSends,
     autoSendQueued: typeof record["autoSendQueued"] === "boolean" ? record["autoSendQueued"] : DEFAULT_SETTINGS.autoSendQueued,
     suggestionChip: typeof record["suggestionChip"] === "boolean" ? record["suggestionChip"] : DEFAULT_SETTINGS.suggestionChip,
+    suggestAgents: typeof record["suggestAgents"] === "boolean" ? record["suggestAgents"] : DEFAULT_SETTINGS.suggestAgents,
+    suggestSkills: typeof record["suggestSkills"] === "boolean" ? record["suggestSkills"] : DEFAULT_SETTINGS.suggestSkills,
+    suggestBuiltins: typeof record["suggestBuiltins"] === "boolean" ? record["suggestBuiltins"] : DEFAULT_SETTINGS.suggestBuiltins,
     showThinking: typeof record["showThinking"] === "boolean" ? record["showThinking"] : DEFAULT_SETTINGS.showThinking,
     comments: typeof record["comments"] === "boolean" ? record["comments"] : DEFAULT_SETTINGS.comments,
     keepScreenOn: typeof record["keepScreenOn"] === "boolean" ? record["keepScreenOn"] : DEFAULT_SETTINGS.keepScreenOn,

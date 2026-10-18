@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { paneCommands } from "../commands.ts";
@@ -38,11 +38,88 @@ function setup(): { home: string; repo: string; cwd: string; agentDir: string } 
   return { home, repo, cwd, agentDir: join(home, ".pi", "agent") };
 }
 
+const builtinNames = (home: string, cwd: string | null = null) => paneCommands("pi", cwd, home).filter((command) => command.source === "builtin").map((command) => command.name);
+
 describe("pi's builtins", () => {
-  it("keeps every 0.87.1 name except tree", () => {
-    const commands = paneCommands("pi", null, temp()).map((command) => command.name);
-    expect(commands.sort()).toEqual(["settings", "model", "thinking", "scoped-models", "login", "logout", "llama", "new", "resume", "name", "session", "fork", "clone", "compact", "import", "copy", "export", "share", "bug", "trust", "reload", "hotkeys", "changelog", "quit"].sort());
+  it("keeps every 1.3.0 name except tree, and the bundled /llama and /mcp", () => {
+    const { home } = setup();
+    const commands = builtinNames(home);
+    expect(commands.sort()).toEqual(["settings", "model", "thinking", "scoped-models", "export", "import", "share", "bug", "copy", "name", "session", "changelog", "hotkeys", "fork", "clone", "trust", "login", "logout", "new", "compact", "resume", "reload", "quit", "llama", "mcp"].sort());
     expect(commands).not.toContain("tree");
+  });
+
+  it("describes each the way pi does, an argument hint first", () => {
+    const { home } = setup();
+    const described = Object.fromEntries(paneCommands("pi", null, home).map((command) => [command.name, command.description]));
+    expect(described["model"]).toBe("<provider/model> — Select model (opens selector UI)");
+    expect(described["bug"]).toBe("<description> — Report a bug to the Pi developers");
+    expect(described["share"]).toBe("Share session via a Radius artifact or a GitHub gist");
+    expect(described["quit"]).toBe("Quit pi");
+    expect(described["llama"]).toBe("Manage llama.cpp router models");
+    expect(described["mcp"]).toBe("Manage MCP servers: sign in, reconnect, enable or disable, and change exposure");
+  });
+
+  it("drops /llama and /mcp that the user's extensions exclude with - or !", () => {
+    const { home, agentDir } = setup();
+    put(join(agentDir, "settings.json"), JSON.stringify({ extensions: ["-builtin:mcp"] }));
+    expect(builtinNames(home)).toContain("llama");
+    expect(builtinNames(home)).not.toContain("mcp");
+    put(join(agentDir, "settings.json"), JSON.stringify({ extensions: ["!builtin:llama.cpp"] }));
+    expect(builtinNames(home)).not.toContain("llama");
+    expect(builtinNames(home)).toContain("mcp");
+  });
+
+  it("lets a trusted project's + entry switch a bundled extension back on", () => {
+    const { home, repo, cwd, agentDir } = setup();
+    put(join(agentDir, "settings.json"), JSON.stringify({ extensions: ["-builtin:mcp", "-builtin:llama.cpp"] }));
+    put(join(cwd, ".pi", "settings.json"), JSON.stringify({ extensions: ["+builtin:mcp"] }));
+    expect(builtinNames(home, cwd)).not.toContain("mcp");
+    put(join(agentDir, "trust.json"), JSON.stringify({ [repo]: true }));
+    expect(builtinNames(home, cwd)).toContain("mcp");
+    expect(builtinNames(home, cwd)).not.toContain("llama");
+  });
+
+  it("lets a trusted project switch one off that the user keeps", () => {
+    const { home, repo, cwd, agentDir } = setup();
+    put(join(agentDir, "trust.json"), JSON.stringify({ [repo]: true }));
+    put(join(cwd, ".pi", "settings.json"), JSON.stringify({ extensions: ["!builtin:mcp"] }));
+    expect(builtinNames(home, cwd)).not.toContain("mcp");
+  });
+});
+
+describe("pi's skill commands switch", () => {
+  const skillRows = (home: string, cwd: string | null) => names(home, cwd).filter((name) => name.startsWith("skill:"));
+
+  it("drops every skill: row when a trusted project sets enableSkillCommands to false", () => {
+    const { home, repo, cwd, agentDir } = setup();
+    skill(join(agentDir, "skills"), "mine");
+    put(join(agentDir, "settings.json"), JSON.stringify({ enableSkillCommands: true }));
+    put(join(agentDir, "trust.json"), JSON.stringify({ [repo]: true }));
+    put(join(cwd, ".pi", "settings.json"), JSON.stringify({ enableSkillCommands: false }));
+    put(join(cwd, ".pi", "prompts", "ship.md"), "---\ndescription: Ship it\n---\n");
+    expect(names(home, cwd)).toEqual(["ship"]);
+  });
+
+  it("honours the legacy skills.enableSkillCommands only without the top-level key", () => {
+    const { home, agentDir } = setup();
+    skill(join(agentDir, "skills"), "mine");
+    put(join(agentDir, "settings.json"), JSON.stringify({ skills: { enableSkillCommands: false } }));
+    expect(skillRows(home, null)).toEqual([]);
+    put(join(agentDir, "settings.json"), JSON.stringify({ enableSkillCommands: true, skills: { enableSkillCommands: false } }));
+    expect(skillRows(home, null)).toEqual(["skill:mine"]);
+  });
+
+  it("keeps the legacy skills.customDirectories as the skills list", () => {
+    const { home, agentDir } = setup();
+    skill(join(agentDir, "extra"), "listed");
+    put(join(agentDir, "settings.json"), JSON.stringify({ skills: { customDirectories: ["extra"] } }));
+    expect(skillRows(home, null)).toEqual(["skill:listed"]);
+  });
+
+  it("still lists a skill with disable-model-invocation", () => {
+    const { home, agentDir } = setup();
+    put(join(agentDir, "skills", "manual", "SKILL.md"), "---\nname: manual\ndescription: Only by hand\ndisable-model-invocation: true\n---\nbody\n");
+    expect(skillRows(home, null)).toEqual(["skill:manual"]);
   });
 });
 
@@ -76,7 +153,7 @@ describe("pi's user skills", () => {
 });
 
 describe("pi's settings skills", () => {
-  it("adds paths from the agent dir, and honours -path, !glob and +path", () => {
+  it("adds paths from the agent dir, honours -path and !glob, and +path adds nothing pi does not find", () => {
     const { home, agentDir } = setup();
     skill(join(agentDir, "skills"), "off-by-path");
     skill(join(agentDir, "skills"), "off-by-glob");
@@ -84,15 +161,143 @@ describe("pi's settings skills", () => {
     skill(join(agentDir, "extra", "pack"), "listed");
     skill(join(agentDir, "extra", "pack"), "dropped");
     skill(join(agentDir, "forced"), "forced-in");
-    put(join(agentDir, "single.md"), "---\ndescription: One file\n---\n");
-    put(join(agentDir, "settings.json"), JSON.stringify({ skills: ["extra/pack", "single.md", "-skills/off-by-path", "!skills/off-by-glob/**", "!extra/pack/dropped/*", "+forced"] }));
-    expect(names(home, null).sort()).toEqual(["skill:forced-in", "skill:listed", "skill:single", "skill:stays"]);
+    put(join(agentDir, "solo", "single.md"), "---\ndescription: One file\n---\n");
+    put(join(agentDir, "settings.json"), JSON.stringify({ skills: ["extra/pack", "solo/single.md", "-skills/off-by-path", "!skills/off-by-glob/**", "!extra/pack/dropped/*", "+forced"] }));
+    expect(names(home, null)).toEqual(["skill:listed", "skill:solo", "skill:stays"]);
+  });
+
+  it("names a single-file skill without name: after its folder", () => {
+    const { home, agentDir } = setup();
+    put(join(agentDir, "skills", "loose.md"), "---\ndescription: A loose root file\n---\n");
+    expect(names(home, null)).toEqual(["skill:skills"]);
+  });
+
+  it("honours .gitignore, .ignore and .fdignore in a skills folder", () => {
+    const { home, agentDir } = setup();
+    skill(join(agentDir, "skills"), "kept");
+    skill(join(agentDir, "skills"), "private");
+    skill(join(agentDir, "skills", "group"), "drafted");
+    put(join(agentDir, "skills", ".gitignore"), "private/\n");
+    put(join(agentDir, "skills", "group", ".ignore"), "drafted\n");
+    expect(names(home, null)).toEqual(["skill:kept"]);
+  });
+});
+
+describe("pi's prompts settings", () => {
+  it("adds folders (recursively) and files, honours !glob and -path, and +path adds nothing", () => {
+    const { home, agentDir } = setup();
+    put(join(agentDir, "prompts", "auto.md"), "---\ndescription: Auto\n---\n");
+    put(join(agentDir, "prompts", "gone.md"), "---\ndescription: Gone\n---\n");
+    put(join(agentDir, "library", "top.md"), "---\ndescription: Top\n---\n");
+    put(join(agentDir, "library", "nested", "deep.md"), "---\ndescription: Deep\n---\n");
+    put(join(agentDir, "library", "draft.md"), "---\ndescription: Draft\n---\n");
+    put(join(agentDir, "one.md"), "---\ndescription: One\n---\n");
+    put(join(agentDir, "forced", "forced.md"), "---\ndescription: Forced\n---\n");
+    put(join(agentDir, "settings.json"), JSON.stringify({ prompts: ["library", "one.md", "!draft.md", "-prompts/gone.md", "+forced/forced.md"] }));
+    expect(extra(home, null)).toEqual([
+      { name: "auto", description: "Auto", source: "user" },
+      { name: "deep", description: "Deep", source: "user" },
+      { name: "one", description: "One", source: "user" },
+      { name: "top", description: "Top", source: "user" },
+    ]);
+  });
+
+  it("resolves a trusted project's skills and prompts against <cwd>/.pi", () => {
+    const { home, repo, cwd, agentDir } = setup();
+    skill(join(cwd, ".pi", "team"), "team-skill");
+    put(join(cwd, "docs", "prompts", "brief.md"), "---\ndescription: Brief\n---\n");
+    put(join(cwd, ".pi", "settings.json"), JSON.stringify({ skills: ["team"], prompts: ["../docs/prompts"] }));
+    expect(names(home, cwd)).toEqual([]);
+    put(join(agentDir, "trust.json"), JSON.stringify({ [repo]: true }));
+    expect(extra(home, cwd)).toEqual([
+      { name: "brief", description: "Brief", source: "project" },
+      { name: "skill:team-skill", description: "team-skill skill", source: "skill", origin: "project" },
+    ]);
+  });
+});
+
+describe("pi's link loops", () => {
+  it("walks past folder links back to an ancestor in skills and recursive prompts folders", () => {
+    const { home, agentDir } = setup();
+    skill(join(agentDir, "skills"), "steady");
+    put(join(agentDir, "skills", "x", "group", "inner", "SKILL.md"), "---\nname: inner\ndescription: Inner skill\n---\n");
+    symlinkSync(".", join(agentDir, "skills", "x", "a"));
+    symlinkSync(".", join(agentDir, "skills", "x", "b"));
+    put(join(agentDir, "prompts", "x", "deep.md"), "---\ndescription: Deep\n---\n");
+    symlinkSync(".", join(agentDir, "prompts", "x", "a"));
+    symlinkSync("..", join(agentDir, "prompts", "x", "b"));
+    put(join(agentDir, "settings.json"), JSON.stringify({ prompts: ["prompts"] }));
+    expect(extra(home, null)).toEqual([
+      { name: "deep", description: "Deep", source: "user" },
+      { name: "skill:inner", description: "Inner skill", source: "skill", origin: "user" },
+      { name: "skill:steady", description: "steady skill", source: "skill", origin: "user" },
+    ]);
+  });
+});
+
+describe("pi's precedence", () => {
+  type Place = "project settings" | "project folder" | "user settings" | "user folder";
+  const ORDER: readonly Place[] = ["project settings", "project folder", "user settings", "user folder"];
+  function plantEverywhere(places: readonly Place[]): { home: string; cwd: string } {
+    const { home, repo, cwd, agentDir } = setup();
+    put(join(agentDir, "trust.json"), JSON.stringify({ [repo]: true }));
+    const roots: Record<Place, string> = {
+      "project settings": join(cwd, ".pi", "listed"),
+      "project folder": join(cwd, ".pi", "skills"),
+      "user settings": join(agentDir, "listed"),
+      "user folder": join(agentDir, "skills"),
+    };
+    const prompts: Record<Place, string> = {
+      "project settings": join(cwd, ".pi", "listed-prompts"),
+      "project folder": join(cwd, ".pi", "prompts"),
+      "user settings": join(agentDir, "listed-prompts"),
+      "user folder": join(agentDir, "prompts"),
+    };
+    for (const place of places) {
+      skill(roots[place], "dup", place);
+      put(join(prompts[place], "dup.md"), `---\ndescription: ${place}\n---\n`);
+    }
+    put(join(agentDir, "settings.json"), JSON.stringify({ skills: ["listed"], prompts: ["listed-prompts"] }));
+    put(join(cwd, ".pi", "settings.json"), JSON.stringify({ skills: ["listed"], prompts: ["listed-prompts"] }));
+    return { home, cwd };
+  }
+
+  it("lets project settings, project folder, user settings and user folder win in that order", () => {
+    for (let index = 0; index < ORDER.length; index++) {
+      const places = ORDER.slice(index);
+      const { home, cwd } = plantEverywhere([...places].reverse());
+      const rows = extra(home, cwd);
+      expect(rows.filter((row) => row.name === "skill:dup").map((row) => row.description)).toEqual([places[0]!]);
+      expect(rows.filter((row) => row.name === "dup").map((row) => row.description)).toEqual([places[0]!]);
+    }
+  });
+
+  it("counts one file reached through two paths once, for the higher rank", () => {
+    const { home, repo, cwd, agentDir } = setup();
+    put(join(agentDir, "trust.json"), JSON.stringify({ [repo]: true }));
+    put(join(cwd, ".pi", "prompts", "ship.md"), "---\ndescription: Ship it\n---\n");
+    mkdirSync(join(agentDir, "prompts"), { recursive: true });
+    symlinkSync(join(cwd, ".pi", "prompts", "ship.md"), join(agentDir, "prompts", "release.md"));
+    expect(extra(home, cwd)).toEqual([{ name: "ship", description: "Ship it", source: "project" }]);
+  });
+
+  it("dedupes skills and prompts apart, and leaves the builtins alone", () => {
+    const { home, agentDir } = setup();
+    skill(join(agentDir, "skills"), "review");
+    put(join(agentDir, "prompts", "review.md"), "---\ndescription: Review prompt\n---\n");
+    put(join(agentDir, "prompts", "model.md"), "---\ndescription: Model prompt\n---\n");
+    const rows = paneCommands("pi", null, home).map((command) => `${command.source}:${command.name}`);
+    expect(rows).toContain("builtin:model");
+    expect(rows).toContain("user:model");
+    expect(rows).toContain("user:review");
+    expect(rows).toContain("skill:skill:review");
   });
 });
 
 describe("pi's project skills and prompts", () => {
   function plant(repo: string, cwd: string): void {
     skill(join(repo, ".pi", "skills"), "repo-skill");
+    skill(join(cwd, ".pi", "skills"), "cwd-skill");
     skill(join(repo, "packages", ".agents", "skills"), "agents-skill");
     put(join(cwd, ".pi", "prompts", "ship.md"), "---\ndescription: Ship it\n---\n");
   }
@@ -103,14 +308,17 @@ describe("pi's project skills and prompts", () => {
     expect(names(home, cwd)).toEqual([]);
   });
 
-  it("lists them, from every ancestor to the repo root, once trust.json lists the repo", () => {
+  it("lists <cwd>/.pi and every ancestor's .agents/skills to the repo root, once trust.json lists the repo", () => {
     const { home, repo, cwd, agentDir } = setup();
     plant(repo, cwd);
+    put(join(repo, ".agents", "skills", "root-loose.md"), "---\nname: root-loose\ndescription: Not a skill at an .agents root\n---\n");
+    put(join(repo, ".agents", "skills", "group", "nested-loose.md"), "---\nname: nested-loose\ndescription: A skill below an .agents root\n---\n");
     put(join(agentDir, "trust.json"), JSON.stringify({ [repo]: true }));
     expect(extra(home, cwd)).toEqual([
       { name: "ship", description: "Ship it", source: "project" },
       { name: "skill:agents-skill", description: "agents-skill skill", source: "skill", origin: "project" },
-      { name: "skill:repo-skill", description: "repo-skill skill", source: "skill", origin: "project" },
+      { name: "skill:cwd-skill", description: "cwd-skill skill", source: "skill", origin: "project" },
+      { name: "skill:nested-loose", description: "A skill below an .agents root", source: "skill", origin: "project" },
     ]);
   });
 
@@ -118,7 +326,7 @@ describe("pi's project skills and prompts", () => {
     const { home, repo, cwd, agentDir } = setup();
     plant(repo, cwd);
     put(join(agentDir, "settings.json"), JSON.stringify({ defaultProjectTrust: "always" }));
-    expect(names(home, cwd)).toEqual(["ship", "skill:agents-skill", "skill:repo-skill"]);
+    expect(names(home, cwd)).toEqual(["ship", "skill:agents-skill", "skill:cwd-skill"]);
     put(join(agentDir, "trust.json"), JSON.stringify({ [repo]: false }));
     expect(names(home, cwd)).toEqual([]);
   });

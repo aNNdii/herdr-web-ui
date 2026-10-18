@@ -1,10 +1,11 @@
 import assert from "node:assert/strict";
-import type { SlashCommand } from "../../shared/protocol.ts";
+import type { SlashCommand, SubagentMention } from "../../shared/protocol.ts";
 import { agentBuiltins, type CaseRun } from "../skill-menu-case.ts";
 
 // pi's `/` menu and its skill chips: pi's own builtins, one of the person's prompt templates and
 // three of their skills, named `skill:<name>` as pi types them, and a chat that ends with a user
-// turn invoking two of them. pi has no `$` syntax: "x $" opens nothing.
+// turn invoking two of them. pi has no `$` syntax: "x $" opens nothing. With pi-subagents, a leading
+// `@` lists its agents before the pane's files.
 export const agent = "pi";
 
 /** the person's own skills, as pi loads them from ~/.pi/agent/skills and ~/.agents/skills */
@@ -19,6 +20,12 @@ export const commands: SlashCommand[] = [
   // a prompt template from ~/.pi/agent/prompts: a command of the person's own, listed under User with no origin icon
   { name: "review", description: "Review staged git changes", source: "user" },
   ...Object.entries(SKILLS).map(([name, { description, origin }]) => ({ name: `skill:${name}`, description, source: "skill" as const, origin })),
+];
+/** pi-subagents' default agents, as the demo's pi pane lists them (site/demo/transport.ts) */
+export const subagents: SubagentMention[] = [
+  { handle: "general-purpose", description: "General-purpose agent for researching complex questions, searching for code, and executing multi-step tasks." },
+  { handle: "explore", description: "Fast read-only search agent for locating code." },
+  { handle: "plan", description: "Software architect agent for designing implementation plans." },
 ];
 export const turnText = "please run /skill:pdf-tools on the attached brief, then /skill:docs-release for the notes";
 export const chips = ["/skill:pdf-tools", "/skill:docs-release"];
@@ -77,5 +84,28 @@ export const expect = async ({ page, width, box, menu, scenario, log, clear, row
     assert.deepEqual(state.chips, chips, `a chip for each skill, in the form it was written: ${JSON.stringify(state)}`);
     assert.ok(state.inside && state.onScreen && !state.overlapping && !state.overflowing, `the chips sit whole inside the bubble and the screen, apart: ${JSON.stringify(state)}`);
     log(`  chips: ${state.chips.join(", ")}`);
+  });
+
+  await scenario(`H: a leading "@" lists pi-subagents' agents, "@ex" ranks explore first and Enter writes "@explore " (${width}px)`, `h-agents-${width}.png`, async (capture) => {
+    await clear();
+    await box.fill("@");
+    await menu.locator(".menu-item").filter({ hasText: "@explore" }).waitFor();
+    assert.equal(await box.getAttribute("aria-expanded"), "true", "a bare leading @ opens the menu");
+    assert.deepEqual(await menu.locator(".menu-heading").allTextContents(), ["Agents"], "a bare @ asks for no file: only the Agents group");
+    assert.deepEqual(await rowLabels(), subagents.map((subagent) => `@${subagent.handle}`), "every agent, in the order pi-subagents lists them");
+    await menuFits("H @");
+    await rowsBrief("H @");
+    await capture();
+    await box.fill("@ex");
+    await page.waitForFunction(() => document.querySelector(".composer-menu .menu-item-main")?.textContent === "@explore");
+    const rows = await rowLabels();
+    assert.deepEqual(rows.filter((row) => row.startsWith("@")), ["@explore"], `only the agent whose handle starts with ex: ${rows.join(" ")}`);
+    assert.equal((await menu.locator(".menu-heading").allTextContents())[0], "Agents", "the agents come before the files");
+    assert.equal((await menuGeometry()).selected, 0, "and explore is the highlighted row");
+    await menuFits("H @ex");
+    await box.press("Enter");
+    assert.equal(await box.inputValue(), "@explore ");
+    await menu.waitFor({ state: "detached" });
+    log(`  @ex rows: ${rows.join(", ")}; Enter wrote ${JSON.stringify(await box.inputValue())}`);
   });
 };

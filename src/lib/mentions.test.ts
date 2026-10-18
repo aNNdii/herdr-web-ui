@@ -27,8 +27,23 @@ describe("activeTrigger", () => {
 
   it("finds file mentions with at least one query character anywhere on a line", () => {
     expect(activeTrigger("see @src/com", 12)).toEqual({ kind: "file", query: "src/com", start: 4, end: 12 });
-    expect(activeTrigger("@", 1)).toBeNull();
+    expect(activeTrigger("see @", 5)).toBeNull();
     expect(activeTrigger("one\nopen @lib", 13)).toEqual({ kind: "file", query: "lib", start: 9, end: 13 });
+  });
+
+  it("marks an @ that begins the message as leading while its query is a handle, even empty", () => {
+    expect(activeTrigger("@", 1)).toEqual({ kind: "file", query: "", leading: true, start: 0, end: 1 });
+    expect(activeTrigger("@exp", 4)).toEqual({ kind: "file", query: "exp", leading: true, start: 0, end: 4 });
+    expect(activeTrigger("@code_review-2 look", 14)).toEqual({ kind: "file", query: "code_review-2", leading: true, start: 0, end: 14 });
+    expect(activeTrigger("@ex please", 3)).toEqual({ kind: "file", query: "ex", leading: true, start: 0, end: 3 });
+  });
+
+  it("leaves paths and later mentions as plain file triggers", () => {
+    expect(activeTrigger("@src/", 5)).toEqual({ kind: "file", query: "src/", start: 0, end: 5 });
+    expect(activeTrigger("@a.ts", 5)).toEqual({ kind: "file", query: "a.ts", start: 0, end: 5 });
+    expect(activeTrigger("look @exp", 9)).toEqual({ kind: "file", query: "exp", start: 5, end: 9 });
+    expect(activeTrigger("one\n@exp", 8)).toEqual({ kind: "file", query: "exp", start: 4, end: 8 });
+    expect(activeTrigger("one\n@", 5)).toBeNull();
   });
 
   it("uses the caret prefix as the query while replacing the complete token", () => {

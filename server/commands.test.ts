@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, symlinkSync, rmSync, writeFileSync } from "node
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { paneCommands } from "./commands.ts";
+import { hasSubagents, paneCommands } from "./commands.ts";
 
 const roots: string[] = [];
 afterEach(() => {
@@ -162,6 +162,13 @@ describe("paneCommands", () => {
   });
 });
 
+describe("hasSubagents", () => {
+  it("is true only for an agent whose source can list subagents", () => {
+    expect(hasSubagents("pi")).toBeTrue();
+    for (const agent of ["claude", "codex", "omp", "unknown", "constructor", "__proto__", null, undefined]) expect(hasSubagents(agent)).toBeFalse();
+  });
+});
+
 describe("skills and plugins", () => {
   const write = (path: string, text: string) => { mkdirSync(join(path, ".."), { recursive: true }); writeFileSync(path, text); };
 
@@ -209,8 +216,8 @@ describe("skills and plugins", () => {
     const previousPiAgentDir = process.env["PI_CODING_AGENT_DIR"];
     process.env["PI_CODING_AGENT_DIR"] = join(home, ".pi", "agent");
     try {
+      // the agent dir's and ~/.agents' links reach one SKILL.md, which pi 1.3.0 loads once
       expect(paneCommands("pi", null, home).filter((command) => command.source !== "builtin")).toEqual([
-        { name: "skill:linked", description: "Shared skill", source: "skill", origin: "user" },
         { name: "skill:linked", description: "Shared skill", source: "skill", origin: "user" },
       ]);
     } finally {

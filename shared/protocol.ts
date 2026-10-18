@@ -1041,6 +1041,16 @@ export interface SlashCommand {
   origin?: "user" | "project" | "bundled" | "plugin";
 }
 
+/** One agent a message can address with a leading `@handle` (pi with pi-subagents). */
+export interface SubagentMention {
+  /** what follows `@`: `[\w-]+`, unique in the list */
+  handle: string;
+  /** the agent's description, else its name */
+  description: string;
+}
+/** GET /api/pane/subagents?pane_id= -> PaneSubagents ([] for agents that route no `@handle`) */
+export interface PaneSubagents { subagents: SubagentMention[] }
+
 /**
  * GET /api/pane/prompt: an agent's interactive TUI menu currently on the pane's screen
  * (Claude/omp/codex question, approval or plan prompts), parsed server-side from the

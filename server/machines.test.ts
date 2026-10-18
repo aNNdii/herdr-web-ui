@@ -78,6 +78,10 @@ describe("machine boundaries", () => {
     for (const path of ["session", "agents", "integrations", "pane/files", "pane/find", "pane/image", "pane/prompt/answer", "workspace/create", "tab/create", "tab/rename", "tab/close"]) expect(MACHINE_PROXY_PATH.test(path)).toBe(true);
     for (const path of ["session", "agents", "integrations", "pane/files", "pane/find", "pane/image", "pane/prompt/answer", "pane/split", "pane/zoom", "pane/swap", "pane/resize", "pane/clear", "workspace/create", "tab/create", "tab/rename", "tab/close"]) expect(MACHINE_PROXY_PATH.test(path)).toBe(true);
   });
+  it("proxies a remote pane's subagents, and nothing below that path", () => {
+    expect(MACHINE_PROXY_PATH.test("pane/subagents")).toBe(true);
+    for (const path of ["pane/subagents/extra", "pane/subagent", "subagents"]) expect(MACHINE_PROXY_PATH.test(path)).toBe(false);
+  });
 });
 
 // A setup job placed directly in the manager: driving a whole setup needs a real SSH host, but

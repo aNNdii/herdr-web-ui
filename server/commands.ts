@@ -1,6 +1,6 @@
-import type { SlashCommand } from "../shared/protocol.ts";
+import type { SlashCommand, SubagentMention } from "../shared/protocol.ts";
 import { AGENT_SOURCES } from "./skills/index.ts";
-import type { ProcessRoots } from "./skills/index.ts";
+import type { AgentCommandContext, AgentCommandSource, ProcessRoots } from "./skills/index.ts";
 import { ancestorsToRepoRoot } from "./skills/walk.ts";
 
 const DESCRIPTIONS: Record<string, string> = {
@@ -15,13 +15,18 @@ const DESCRIPTIONS: Record<string, string> = {
   effort: "Set effort level for model usage",
 };
 
+const agentSource = (agent: string | null | undefined): AgentCommandSource | undefined => agent && Object.hasOwn(AGENT_SOURCES, agent) ? AGENT_SOURCES[agent] : undefined;
+
+function commandContext(cwd: string | null | undefined, home: string, process: ProcessRoots): AgentCommandContext {
+  const ancestors = cwd ? ancestorsToRepoRoot(cwd) : [];
+  return { home, cwd, repoRoot: ancestors.at(-1) ?? null, env: process.environ ?? null, roots: process };
+}
+
 export function paneCommands(agent: string | null | undefined, cwd: string | null | undefined, home = globalThis.process.env.HOME ?? "", process: ProcessRoots = {}): SlashCommand[] {
-  if (!agent || !Object.hasOwn(AGENT_SOURCES, agent)) return [];
-  const source = AGENT_SOURCES[agent];
+  const source = agentSource(agent);
   if (!source) return [];
   const commands: SlashCommand[] = source.builtins.map((name) => ({ name, description: source.descriptions?.[name] ?? DESCRIPTIONS[name] ?? `Run /${name}`, source: "builtin" }));
-  const ancestors = cwd ? ancestorsToRepoRoot(cwd) : [];
-  const discovered = source.discover({ home, cwd, repoRoot: ancestors.at(-1) ?? null, env: process.environ ?? null, roots: process });
+  const discovered = source.discover(commandContext(cwd, home, process));
   const names = new Set<string>();
   for (const command of discovered) {
     if (agent === "omo" && names.has(command.name)) continue;
@@ -29,4 +34,14 @@ export function paneCommands(agent: string | null | undefined, cwd: string | nul
     commands.push(command);
   }
   return commands.sort((left, right) => left.name.localeCompare(right.name) || left.source.localeCompare(right.source));
+}
+
+/** The agent's source can list subagents at all: without it paneSubagents is [] whatever the pane runs. */
+export function hasSubagents(agent: string | null | undefined): boolean {
+  return agentSource(agent)?.subagents !== undefined;
+}
+
+/** The agents a message to this pane can address with a leading `@handle`; [] for agents without. */
+export function paneSubagents(agent: string | null | undefined, cwd: string | null | undefined, home = globalThis.process.env.HOME ?? "", process: ProcessRoots = {}): SubagentMention[] {
+  return agentSource(agent)?.subagents?.(commandContext(cwd, home, process)) ?? [];
 }
