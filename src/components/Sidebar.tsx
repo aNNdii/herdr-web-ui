@@ -3,7 +3,7 @@ import { ChevronDown, ChevronRight, Ellipsis, Folder, FolderOpen, GitBranch, Lay
 
 import "./Sidebar.css";
 
-import type { AgentStatus, PaneInfo, PlanSummary, SessionSnapshot, WorkspaceInfo } from "../../shared/protocol.ts";
+import type { AgentStatus, HerdrPane, PaneInfo, PlanSummary, SessionSnapshot, WorkspaceInfo } from "../../shared/protocol.ts";
 import { paneTitle } from "../../shared/notify-policy.ts";
 import { MAX_LABEL_CHARS } from "../../shared/labels.ts";
 import { useMachineApi, useMachineId } from "../lib/machineContext.tsx";
@@ -76,7 +76,7 @@ export function RestoreErrorBadge({ reason }: { reason: string }) {
 
 /** Every breathing dot or glyph keeps the document clock's phase, so a row that starts working breathes in step with the rest. */
 function alignBreath(event: AnimationEvent<HTMLSpanElement>) {
-  if (event.animationName !== "sidebar-breathe") return;
+  if (event.animationName !== "sidebar-breathe" && event.animationName !== "breathe-bg") return;
   for (const animation of event.currentTarget.getAnimations()) animation.startTime = 0;
 }
 
@@ -88,8 +88,8 @@ export function StatusBadge({ status, compact = false }: { status?: AgentStatus;
   const description = value === "waiting" ? t("Agent waiting on background work") : t("Agent {status}", { status: label });
   // classic (the default): a compact cell draws only the states that ask for a look: a red question
   // mark while the agent waits for an answer, a green dot once it has finished and was not looked
-  // at, a working-coloured dot that breathes while it runs, a working-coloured ring held still while
-  // its turn waits on background work. Ready and unknown keep the cell, its label and its tooltip.
+  // at, a working-coloured dot that breathes while it runs, a ring in BG's colour that breathes slowly
+  // while the agent rests on background work. Ready and unknown keep the cell, its label and its tooltip.
   // Dots or Symbols: herdr's TUI glyph for every state, in herdr's color (lib/status.ts, Sidebar.css)
   const indicators = settings.statusIndicators;
   const dot = value === "working" || value === "done" || value === "waiting";
@@ -103,7 +103,7 @@ export function StatusBadge({ status, compact = false }: { status?: AgentStatus;
     >
       {compact && indicators !== "classic" && <span className="sidebar-status-glyph" aria-hidden="true" onAnimationStart={value === "working" ? alignBreath : undefined}>{indicatorGlyph(value, indicators)}</span>}
       {compact && indicators === "classic" && value === "blocked" && <span className="sidebar-status-mark" aria-hidden="true">?</span>}
-      {compact && indicators === "classic" && dot && <span className="sidebar-status-dot" aria-hidden="true" onAnimationStart={value === "working" ? alignBreath : undefined} />}
+      {compact && indicators === "classic" && dot && <span className="sidebar-status-dot" aria-hidden="true" onAnimationStart={value === "working" || value === "waiting" ? alignBreath : undefined} />}
       <span className={compact ? "visually-hidden" : undefined}>{label}</span>
     </span>
   );
@@ -628,6 +628,8 @@ export function Sidebar({ snapshot, online, selectedPaneId, actions }: SidebarPr
     // a folded group's parent stands for its worktrees too, as herdr's collapsed parent does:
     // a checkout that waits or has finished must not hide behind the fold
     const statusPanes = collapsed ? [...panes, ...children.flatMap((child) => roster.filter((candidate) => candidate.workspace_id === child.workspace_id))] : panes;
+    // the background tasks still running in the panes the row stands for, as the Agents list counts a pane's
+    const backgroundCount = online ? statusPanes.reduce((sum, candidate) => sum + ((candidate as HerdrPane).background_tasks ?? 0), 0) : 0;
     // on two lines the row says what its pane is doing, and the workspace it has named until now sits under that
     const lines = twoLine ? taskRowLines({ paneTitle: displayPaneTitle(pane), labelled: Boolean(pane.label?.trim()), folder: cwdBasename(pane.cwd), workspace: rowTitle, alias: secondaryBranch }) : null;
     // a folded group still shows the checkout that is open; the count is of the ones put away
@@ -713,6 +715,8 @@ export function Sidebar({ snapshot, online, selectedPaneId, actions }: SidebarPr
             {secondaryBranch && <span className="worktree-workspace-label">{secondaryBranch}</span>}
             {foldedCount > 0 && <span className="workspace-fold-count" aria-hidden="true">+{foldedCount}</span>}
           </span>}
+          {/* at the row's end, beside its state, as an agent row has it (AgentSidebar.tsx) */}
+          <BackgroundBadge count={backgroundCount} />
           <span className="sidebar-pane-meta">
             <span className="visually-hidden">{markName(pane)}</span>
             {online && pane.restore_error ? <RestoreErrorBadge reason={pane.restore_error} /> : <StatusBadge compact status={online ? rollupStatus(statusPanes.map((candidate) => activity.status(machineId, candidate))) : undefined} />}

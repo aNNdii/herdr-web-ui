@@ -1118,6 +1118,8 @@ export const KO: Record<string, string> = {
   "Nothing running right now": "지금 실행 중인 작업이 없습니다",
   "{done} of {total} done": "{total}개 중 {done}개 완료",
   "{n} running": "{n}개 실행 중",
+  "{n} agent finished": "에이전트 {n}개 완료",
+  "{n} agents finished": "에이전트 {n}개 완료",
   "Workflows": "워크플로",
   "waiting": "대기",
   "skipped": "건너뜀",

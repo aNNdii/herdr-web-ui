@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
-import type { OmoRun, OmoTask } from "../../shared/protocol.ts";
-import { clockOffsetMs, endedSummary, formatElapsed, runGoing, taskCallItems, taskElapsedMs, taskResultMarkdown } from "./omoTasks.ts";
+import type { OmoRun, OmoRunNode, OmoTask } from "../../shared/protocol.ts";
+import { clockOffsetMs, endedSummary, formatElapsed, runGoing, runProgress, taskCallItems, taskElapsedMs, taskResultMarkdown } from "./omoTasks.ts";
 
 const task = (over: Partial<OmoTask>): OmoTask => ({ id: "st_1", title: "t", category: null, model: null, status: "running", started_at: "2026-10-02T05:00:00Z", ended_at: null, turns: null, tool_calls: null, tokens: null, ...over });
 const at = Date.parse("2026-10-02T05:04:12Z");
@@ -24,22 +24,58 @@ test("the folded line counts what ended, and what of it went wrong", () => {
   // 4 ended tasks and 3 ended workflows; a failed and a lost task and a failed workflow went wrong
   expect(endedSummary(tasks, runs)).toEqual({ ended: 7, failed: 3 });
   expect(endedSummary([task({})], [run("running")])).toEqual({ ended: 0, failed: 0 });
+  // a Pi workflow whose pi process went away ended without finishing: it went wrong
+  expect(runGoing(run("lost"))).toBe(false);
+  expect(endedSummary([], [run("lost"), run("completed")])).toEqual({ ended: 2, failed: 1 });
+});
+
+test("an OmO workflow's progress is its waves' steps, a Pi workflow's the agents its journal counts", () => {
+  const node = (id: string, state: OmoRunNode["state"]): OmoRunNode => ({ id, label: id, state, error: null });
+  const omo: OmoRun = { id: "r1", name: "build", status: "running", started_at: null, ended_at: null, waves: [[node("a", "completed"), node("b", "running")], [node("c", "failed"), node("d", "pending")]] };
+  expect(runProgress(omo)).toEqual({ kind: "waves", done: 1, total: 4, running: 1, failed: 1 });
+  const pi: OmoRun = { id: "wf_1", name: "review", status: "running", started_at: null, ended_at: null, waves: [], agents_done: 3, agents_failed: 1 };
+  expect(runProgress(pi)).toEqual({ kind: "agents", done: 3, failed: 1 });
+  // its journal not read (gone with /tmp, or the read behind): no count, rather than a wrong 0
+  expect(runProgress({ ...pi, agents_done: undefined, agents_failed: undefined })).toEqual({ kind: "agents", done: null, failed: null });
 });
 
 test("a task call reads as the tasks it starts: OmO's one and batch, omp's batch", () => {
-  expect(taskCallItems({ description: "short", task_summary: "What it is for", subagent_type: "explore", prompt: "TASK: look" })).toEqual([
-    { title: "What it is for", agent: "explore", prompt: "TASK: look" },
+  expect(taskCallItems("task", { description: "short", task_summary: "What it is for", subagent_type: "explore", prompt: "TASK: look" })).toEqual([
+    { title: "What it is for", agent: "explore", model: null, prompt: "TASK: look" },
   ]);
   // a batch item takes the call's agent unless it names its own
-  expect(taskCallItems({ category: "quick", tasks: [{ description: "one", prompt: "a" }, { task_summary: "two", category: "deep", prompt: "b" }, "junk", {}] })).toEqual([
-    { title: "one", agent: "quick", prompt: "a" },
-    { title: "two", agent: "deep", prompt: "b" },
+  expect(taskCallItems("task", { category: "quick", tasks: [{ description: "one", prompt: "a" }, { task_summary: "two", category: "deep", prompt: "b" }, "junk", {}] })).toEqual([
+    { title: "one", agent: "quick", model: null, prompt: "a" },
+    { title: "two", agent: "deep", model: null, prompt: "b" },
   ]);
-  expect(taskCallItems({ agent: "task", tasks: [{ id: "Auth", description: "Check the login", assignment: "read auth.ts" }, { assignment: "untitled" }] })).toEqual([
-    { title: "Check the login", agent: "task", prompt: "read auth.ts" },
-    { title: "#2", agent: "task", prompt: "untitled" },
+  expect(taskCallItems("task", { agent: "task", tasks: [{ id: "Auth", description: "Check the login", assignment: "read auth.ts" }, { assignment: "untitled" }] })).toEqual([
+    { title: "Check the login", agent: "task", model: null, prompt: "read auth.ts" },
+    { title: "#2", agent: "task", model: null, prompt: "untitled" },
   ]);
-  expect(taskCallItems({ run_in_background: true })).toBeNull();
+  expect(taskCallItems("task", { run_in_background: true })).toBeNull();
+});
+
+test("an Agent call reads as the one agent it starts, with its type and model", () => {
+  expect(taskCallItems("Agent", { description: "Find callers", subagent_type: "Explore", model: "haiku", prompt: "Find every caller", run_in_background: true })).toEqual([
+    { title: "Find callers", agent: "Explore", model: "haiku", prompt: "Find every caller" },
+  ]);
+  // Claude Code's Agent call names no model
+  expect(taskCallItems("Agent", { description: "Find callers", prompt: "go" })).toEqual([{ title: "Find callers", agent: null, model: null, prompt: "go" }]);
+  expect(taskCallItems("Agent", { run_in_background: true })).toBeNull();
+});
+
+test("a SubagentWorkflow call reads as the workflow it runs: its name and its script", () => {
+  expect(taskCallItems("SubagentWorkflow", { name: "review", script: "export const meta = {}" })).toEqual([
+    { title: "review", agent: null, model: null, prompt: "export const meta = {}" },
+  ]);
+  expect(taskCallItems("SubagentWorkflow", { scriptPath: "/tmp/runs/fix-tests.js" })).toEqual([
+    { title: "fix-tests", agent: null, model: null, prompt: "/tmp/runs/fix-tests.js" },
+  ]);
+  expect(taskCallItems("SubagentWorkflow", { script: "run()" })).toEqual([{ title: "workflow", agent: null, model: null, prompt: "run()" }]);
+});
+
+test("another tool's call is no task call, whatever its input", () => {
+  expect(taskCallItems("Bash", { description: "Run tests", prompt: "x" })).toBeNull();
 });
 
 test("a task's answer framed in section tags reads as named sections, its own tags and code kept", () => {

@@ -32,6 +32,9 @@ export const SPECS: DemoSpec[] = [
   { key: "shell", label: "release", title: "Tag v1.4.0", agent: null, tabOf: "api" },
 ];
 
+/** the ids of the pi pane's subagents: the chat's calls and card, and what /api/pane/omo-tasks lists for it */
+export const DEMO_PI_AGENTS = { explore: "5f2c9a1e-0b7d-4e3a", smoke: "a83d7c40-91e2-4f6b", workflow: "wf_3e9b1d72c4a0" } as const;
+
 export const t = (min: number, sec = 0) => `2026-09-25T09:${String(min).padStart(2, "0")}:${String(sec).padStart(2, "0")}.000Z`;
 const tool = (name: string, summary: string, input: unknown, output: string): ConversationTurn["parts"][number] => ({ kind: "tool", name, summary, input: typeof input === "string" ? input : JSON.stringify(input, null, 2), output });
 
@@ -120,8 +123,22 @@ export const CHATS: Record<string, { turns: ConversationTurn[]; metadata: { mode
       { role: "user" as const, ts: t(21), parts: [{ kind: "text" as const, text: "Now expose it as `RELEASE_RETRIES`." }] },
       { role: "assistant" as const, ts: t(21, 3), end_ts: t(22, 40), parts: [
         tool("read", "src/config.ts", { path: "src/config.ts" }, "export interface PublishOptions { … }"),
+        tool("Agent", "Find the RELEASE_ variables", { subagent_type: "explore", description: "Find the RELEASE_ variables", prompt: "List every RELEASE_* environment variable the code reads, and where the README documents it.", run_in_background: true }, `Agent started in background.\nAgent ID: ${DEMO_PI_AGENTS.explore}\nType: explore\nDescription: Find the RELEASE_ variables`),
         tool("edit", "src/config.ts", { path: "src/config.ts" }, "Updated src/config.ts"),
-        { kind: "text" as const, text: "`RELEASE_RETRIES` sets the default, and `--retries` still wins over it. The README's environment table lists it." },
+        { kind: "text" as const, text: "`RELEASE_RETRIES` sets the default, and `--retries` still wins over it. An explore agent is checking which other `RELEASE_` variables the README is missing." },
+      ] },
+      // what pi-subagents reported back when the explore agent ended: one result card
+      { role: "user" as const, ts: t(23), parts: [{ kind: "task_result" as const, tasks: [{
+        id: DEMO_PI_AGENTS.explore, title: "Find the RELEASE_ variables", agent: "explore", model: "anthropic/claude-haiku-5", status: "completed",
+        duration_ms: 84_000, turns: 6, tool_calls: 9, tokens: 41_200,
+        result: "The code reads three:\n\n- `RELEASE_RETRIES` (`src/config.ts:18`), documented\n- `RELEASE_REGISTRY` (`src/config.ts:22`), documented\n- `RELEASE_DRY_RUN` (`src/publish.ts:9`), **missing** from the README's table",
+      }] }] },
+      { role: "user" as const, ts: t(24), parts: [{ kind: "text" as const, text: "Document `RELEASE_DRY_RUN` too, and run the release smoke test in the background. Use a workflow to check every command's help text." }] },
+      { role: "assistant" as const, ts: t(24, 3), end_ts: t(24, 30), parts: [
+        tool("edit", "README.md", { path: "README.md" }, "Updated README.md"),
+        tool("Agent", "Run the release smoke test", { subagent_type: "general-purpose", description: "Run the release smoke test", prompt: "Run `bun run smoke:release` against the staging registry and report every failing step with its output.", run_in_background: true }, `Agent started in background.\nAgent ID: ${DEMO_PI_AGENTS.smoke}\nType: general-purpose\nDescription: Run the release smoke test`),
+        tool("SubagentWorkflow", "help-text-review", { name: "help-text-review" }, `Workflow "help-text-review" started in the background.\nTask ID: ${DEMO_PI_AGENTS.workflow}`),
+        { kind: "text" as const, text: "The README lists `RELEASE_DRY_RUN` now. The smoke test and the help-text review run in the background; I'll report when they finish." },
       ] },
     ],
   },

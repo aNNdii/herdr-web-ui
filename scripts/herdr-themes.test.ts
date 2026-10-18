@@ -1,10 +1,11 @@
 import { describe, expect, it } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { normalizeThemeValue, parseThemeBlocks, parseThemeValue } from "../src/lib/themeCss.ts";
+import { normalizeThemeValue, parseThemeBlocks, parseThemeValue, resolveEntry } from "../src/lib/themeCss.ts";
 import { ROLES, SHADOW_GEOMETRY, siblingFor, SUPPORTED_ENTRIES } from "../src/lib/themes.ts";
 import { HERDR_SOURCE, KIND, mapTerminalAnsi, RAW, SOURCE, TOKENS } from "./herdr-themes.ts";
-import { deltaE, mapTheme, minimumContrast, proposeTheme, ROLE_DEFAULTS } from "./herdr-theme-proposal.ts";
+import { deltaE, mapTheme, minimumContrast, proposeTheme, ROLE_DEFAULTS, waitingCandidate, WAITING_CHROME_MIN_DE, WAITING_STATUS_MIN_DE } from "./herdr-theme-proposal.ts";
+import type { ThemeRoles } from "./herdr-theme-proposal.ts";
 import { OVERRIDES, provenanceFailures } from "./herdr-theme-overrides.ts";
 import type { ThemeOverride } from "./herdr-theme-overrides.ts";
 
@@ -54,7 +55,7 @@ describe("pinned herdr palettes", () => {
       expect(roles["bubble-border"]).toBe("var(--border)");
       expect(roles["danger-text"]).toBe(roles["status-blocked"]);
     }
-    expect(Object.keys(ROLE_DEFAULTS)).toHaveLength(17);
+    expect(Object.keys(ROLE_DEFAULTS)).toHaveLength(18);
     expect(mapTheme("tokyo-night")["accent-tint"]).toBe("rgba(122, 162, 247, 0.13)");
     expect(mapTheme("gruvbox-light")["status-done-tint"]).toBe("rgba(121, 116, 14, 0.12)");
   });
@@ -66,6 +67,53 @@ describe("pinned herdr palettes", () => {
     expect(after["syntax-function"]).toBe("#123456");
     expect(after["status-working-tint"]).toBe("rgba(18, 52, 86, 0.14)");
     expect(mapTheme("tokyo-night")).toEqual(before);
+  });
+
+  it("takes BG's colour from the theme's mauve, or its peach where mauve sits on the accent or a state", () => {
+    const source = Object.fromEntries((Object.keys(RAW) as (keyof typeof RAW)[]).map((id) => {
+      const roles = mapTheme(id), choice = waitingCandidate(RAW[id].mauve, RAW[id].peach, roles);
+      expect(roles["status-waiting"]).toBe(choice.value);
+      expect(roles["status-waiting"]).toBe(RAW[id][choice.source]);
+      expect(roles["status-waiting-tint"]).toMatch(KIND[id] === "dark" ? /, 0\.14\)$/ : /, 0\.12\)$/);
+      return [id, `${choice.source}${choice.free ? "" : " (fallback)"}`];
+    }));
+    expect(source).toEqual({
+      catppuccin: "peach", "catppuccin-latte": "peach", "tokyo-night": "peach (fallback)", "tokyo-night-day": "mauve",
+      dracula: "peach", nord: "peach", gruvbox: "mauve", "gruvbox-light": "mauve", "one-dark": "mauve", "one-light": "mauve",
+      solarized: "mauve", "solarized-light": "mauve", kanagawa: "peach", "kanagawa-lotus": "peach",
+      "rose-pine": "peach (fallback)", "rose-pine-dawn": "peach (fallback)", vesper: "mauve (fallback)",
+    });
+    expect(mapTheme("rose-pine")["status-waiting"]).toBe(RAW["rose-pine"].peach);
+    expect(mapTheme("one-dark")["status-waiting-tint"]).toBe("rgba(198, 120, 221, 0.14)");
+  });
+
+  it("applies the BG thresholds in order: chrome, then states and notice, then the farther fallback", () => {
+    const roles: Pick<ThemeRoles, "accent" | "primary" | "status-working" | "status-blocked" | "status-done" | "notice"> = {
+      accent: "#7aa2f7", primary: "#7aa2f7", "status-working": "#7aa2f7", "status-blocked": "#f7768e", "status-done": "#9ece6a", notice: "#e0af68",
+    };
+    expect(waitingCandidate("#a626a4", "#ff9e64", roles)).toEqual({ value: "#a626a4", source: "mauve", free: true });
+    // Mauve on the accent: peach, as long as it clears the states and notice.
+    expect(waitingCandidate("#7aa2f7", "#ff8a20", { ...roles, notice: "#ffff00" })).toEqual({ value: "#ff8a20", source: "peach", free: true });
+    expect(deltaE("#7aa2f7", roles.accent)).toBeLessThan(WAITING_CHROME_MIN_DE);
+    // Peach too close to notice and mauve on the accent: the one farther from its nearest state wins.
+    expect(deltaE("#ff9e64", roles.notice)).toBeLessThan(WAITING_STATUS_MIN_DE);
+    expect(waitingCandidate("#7aa2f7", "#ff9e64", roles)).toEqual({ value: "#ff9e64", source: "peach", free: false });
+    expect(waitingCandidate("#bb9af7", "#bb9af7", roles)).toEqual({ value: "#bb9af7", source: "mauve", free: false });
+    // A primary that differs from the accent is checked on its own.
+    expect(waitingCandidate("#a626a4", "#ff9e64", { ...roles, primary: "#a626a4" }).source).toBe("peach");
+  });
+
+  it("keeps every theme's committed BG colour AA and apart from its accent, primary and agent states", () => {
+    for (const { id, mode } of SUPPORTED_ENTRIES) {
+      const resolved = resolveEntry(css, id, mode).resolved;
+      const roles = Object.fromEntries(Object.entries(resolved).map(([name, value]) => [name.slice(2), value])) as ThemeRoles;
+      const waiting = roles["status-waiting"];
+      expect({ id, mode, contrast: minimumContrast(roles, "status-waiting", waiting, mode) >= 4.5 }).toEqual({ id, mode, contrast: true });
+      expect(roles["status-waiting-tint"]).toBe(`rgba(${[1, 3, 5].map((at) => parseInt(waiting.slice(at, at + 2), 16)).join(", ")}, ${mode === "dark" ? 0.14 : 0.12})`);
+      for (const role of ["accent", "primary", "status-working", "status-blocked", "status-done", "notice"] as const) {
+        expect({ id, mode, role, apart: deltaE(waiting, roles[role]) >= 5 }).toEqual({ id, mode, role, apart: true });
+      }
+    }
   });
 
   it("finds only the opposite side of the seven known pairs, including legacy Catppuccin", () => {
@@ -149,7 +197,7 @@ describe("offline AA repair", () => {
     for (const id of Object.keys(RAW) as (keyof typeof RAW)[]) {
       if (id === "dracula") continue; // Its bounded failure is exercised separately below.
       const mapped = mapTheme(id), proposal = proposeTheme(id);
-      for (const role of ["text", "text-dim", "status-working", "status-blocked", "status-done",
+      for (const role of ["text", "text-dim", "status-working", "status-blocked", "status-done", "status-waiting",
         "syntax-function", "syntax-keyword", "syntax-string", "syntax-number", "syntax-type", "syntax-variable", "syntax-meta"] as const) {
         const before = minimumContrast(mapped, role, mapped[role], KIND[id]);
         if (before >= 4.5) expect(proposal.roles[role]).toBe(mapped[role]);

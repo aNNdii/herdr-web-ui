@@ -1,4 +1,5 @@
-import type { OmoRun, OmoTask } from "../../shared/protocol.ts";
+import type { OmoRun, OmoRunNode, OmoTask } from "../../shared/protocol.ts";
+import { workflowTitle } from "../../shared/workflow-title.ts";
 
 /** How long something has run: until now while it runs, until it ended otherwise; null when unknown. */
 export function spanMs(startedAt: string | null, endedAt: string | null, running: boolean, now: number): number | null {
@@ -18,15 +19,30 @@ export function runGoing(run: OmoRun): boolean {
 
 /**
  * What the folded line says of everything that ended: how many, and how many of those went
- * wrong (a failed or lost task, a failed workflow), so a failure is seen without opening it.
+ * wrong (a failed or lost task, a failed or lost workflow), so a failure is seen without opening it.
  */
 export function endedSummary(tasks: OmoTask[], runs: OmoRun[]): { ended: number; failed: number } {
   const endedTasks = tasks.filter((task) => task.status !== "running");
   const endedRuns = runs.filter((run) => !runGoing(run));
   return {
     ended: endedTasks.length + endedRuns.length,
-    failed: endedTasks.filter((task) => task.status === "failed" || task.status === "lost").length + endedRuns.filter((run) => run.status === "failed").length,
+    failed: endedTasks.filter((task) => task.status === "failed" || task.status === "lost").length + endedRuns.filter((run) => run.status === "failed" || run.status === "lost").length,
   };
+}
+
+/**
+ * How far a workflow got: an OmO run by its waves' steps, a Pi one (`waves: []`) by the agents its
+ * journal counts; null when the server could not read the journal (no count rather than 0).
+ */
+export type RunProgress =
+  | { kind: "waves"; done: number; total: number; running: number; failed: number }
+  | { kind: "agents"; done: number | null; failed: number | null };
+
+export function runProgress(run: OmoRun): RunProgress {
+  if (run.waves.length === 0) return { kind: "agents", done: run.agents_done ?? null, failed: run.agents_failed ?? null };
+  const nodes = run.waves.flat();
+  const count = (state: OmoRunNode["state"]): number => nodes.filter((node) => node.state === state).length;
+  return { kind: "waves", done: count("completed"), total: nodes.length, running: count("running"), failed: count("failed") };
 }
 
 /** How far the PC's clock is ahead of this browser's, from the time it answered with; 0 when unknown. */
@@ -35,20 +51,34 @@ export function clockOffsetMs(serverTime: string | null, receivedAt: number): nu
   return Number.isFinite(server) ? server - receivedAt : 0;
 }
 
-/** One task an OmO or omp `task` call starts: what it is for, the agent it runs as, and what it was told. */
-export interface TaskCallItem { title: string; agent: string | null; prompt: string }
+/**
+ * One task a `task`, `Agent` or `SubagentWorkflow` call starts: what it is for, the agent it runs
+ * as, the model it was given, and what it was told (a workflow's inline script or script path).
+ */
+export interface TaskCallItem { title: string; agent: string | null; model: string | null; prompt: string }
 
 /**
- * The tasks one `task` call starts: OmO's single call (`task_summary`, `description`, `prompt`,
- * `subagent_type` or `category`) or batch (`tasks`, each item taking the call's agent unless it
- * names its own), and omp's batch (`agent`, items with `description` and `assignment`). Null when
- * the input is no such call.
+ * The tasks one call starts, by tool name:
+ * - `task`: OmO's single call (`task_summary`, `description`, `prompt`, `subagent_type` or
+ *   `category`) or batch (`tasks`, each item taking the call's agent unless it names its own), and
+ *   omp's batch (`agent`, items with `description` and `assignment`);
+ * - `Agent` (pi-subagents and Claude Code): `description`, `subagent_type`, `model`, `prompt`;
+ * - `SubagentWorkflow`: named by `name`, else its `scriptPath` file without `.js`, else
+ *   "workflow"; its inline `script`, else the `scriptPath`, stands as the prompt.
+ *
+ * Null for any other tool, or when the input is no such call.
  */
-export function taskCallItems(input: Record<string, unknown>): TaskCallItem[] | null {
+export function taskCallItems(name: string, input: Record<string, unknown>): TaskCallItem[] | null {
   const str = (row: Record<string, unknown>, ...keys: string[]): string | null => {
     for (const key of keys) { const value = row[key]; if (typeof value === "string" && value.trim().length > 0) return value.trim(); }
     return null;
   };
+  if (name === "SubagentWorkflow") {
+    const scriptPath = str(input, "scriptPath");
+    return [{ title: workflowTitle(str(input, "name"), scriptPath), agent: null, model: null, prompt: str(input, "script") ?? scriptPath ?? "" }];
+  }
+  if (name !== "task" && name !== "Agent") return null;
+  const modelOf = (row: Record<string, unknown>): string | null => name === "Agent" ? str(row, "model") : null;
   const agentOf = (row: Record<string, unknown>): string | null => str(row, "subagent_type", "agent", "category");
   const shared = agentOf(input);
   const rows = Array.isArray(input["tasks"]) ? input["tasks"] : [input];
@@ -58,7 +88,7 @@ export function taskCallItems(input: Record<string, unknown>): TaskCallItem[] | 
     const prompt = str(row, "prompt", "assignment") ?? "";
     const title = str(row, "task_summary", "description", "name", "id");
     if (title === null && prompt.length === 0) return [];
-    return [{ title: title ?? `#${index + 1}`, agent: agentOf(row) ?? shared, prompt }];
+    return [{ title: title ?? `#${index + 1}`, agent: agentOf(row) ?? shared, model: modelOf(row), prompt }];
   });
   return items.length > 0 ? items : null;
 }

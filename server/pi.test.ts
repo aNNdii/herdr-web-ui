@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, appendFileSync, readFileSync, realpathSync, rmS
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
-import { defaultPiSessionDir, piTranscriptInStore, piTranscriptPath, unwrittenSession } from "./pi.ts";
+import { defaultPiSessionDir, piPaneSession, piTranscriptInStore, piTranscriptPath, unwrittenSession } from "./pi.ts";
 import { transcriptPage, piTranscriptImage } from "./conversation.ts";
 import type { ConversationTurn } from "../shared/protocol.ts";
 
@@ -506,4 +506,47 @@ it("rejects Pi session-dir command-line overrides it cannot verify", async () =>
     environOf: () => [],
     home: root,
   })).toBeNull();
+});
+
+describe("piPaneSession names the transcript and the pi process behind it", () => {
+  const reported = (value: string) => ({ agent: "pi", agent_session: { agent: "pi", source: "herdr:pi", kind: "path", value } }) as never;
+
+  it("returns the npm `node …/cli.js` process with its cwd and environment", async () => {
+    const target = session("pane-session-npm");
+    const officialEntry = "/home/test/.local/lib/node_modules/@earendil-works/pi-coding-agent/dist/bundle/cli.js";
+    const environ = ["TMPDIR=/var/tmp/pane", `PI_CODING_AGENT_SESSION_DIR=${store}`];
+    expect(await piPaneSession("pane", store, {
+      agent: reported(target),
+      processes: [{ pid: 820, argv: ["/usr/bin/node", officialEntry], cwd: "/work/app" }],
+      environOf: (pid) => pid === 820 ? environ : null,
+      home: root,
+    })).toEqual({ transcript: { path: target }, process: { pid: 820, cwd: "/work/app", environ } });
+  });
+
+  it("names a process even before pi wrote the session, and none it cannot verify", async () => {
+    const fresh = join(slug, "pane-session-fresh.jsonl");
+    expect(await piPaneSession("pane", store, {
+      agent: reported(fresh), processes: [{ pid: 821, argv: ["pi"] }], environOf: () => null, home: root,
+    })).toEqual({ transcript: { unwritten: { id: "pane-session-fresh", path: join(realpathSync(slug), "pane-session-fresh.jsonl") } }, process: { pid: 821, cwd: null, environ: null } });
+    const target = session("pane-session-unverified");
+    // argv unknown: the default store still answers, but no process is vouched for
+    expect(await piPaneSession("pane", store, {
+      agent: reported(target), processes: [{ pid: 822, name: "pi" }], argvOf: () => null, environOf: () => null, home: root,
+    })).toEqual({ transcript: { path: target }, process: null });
+  });
+
+  it("vouches for no process when two pi processes share the pane", async () => {
+    const target = session("pane-session-two");
+    expect(await piPaneSession("pane", store, {
+      agent: reported(target), processes: [{ pid: 823, argv: ["pi"] }, { pid: 824, argv: ["pi"] }], environOf: () => null, home: root,
+    })).toEqual({ transcript: { path: target }, process: null });
+  });
+
+  it("is null wherever piTranscriptPath is", async () => {
+    const target = session("pane-session-rejected");
+    expect(await piPaneSession("pane", store, {
+      agent: reported(target), processes: [{ pid: 825, argv: ["/usr/bin/pi", "--session-dir", join(root, "other")] }], environOf: () => [], home: root,
+    })).toBeNull();
+    expect(await piPaneSession("pane", store, { agent: null, processes: [], home: root })).toBeNull();
+  });
 });

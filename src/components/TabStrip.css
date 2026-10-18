@@ -102,7 +102,7 @@
 .tab-strip-dot[data-status="blocked"] { background: var(--status-blocked); }
 .tab-strip-dot[data-status="done"] { background: var(--status-done); }
 /* waiting on its background work: something still runs, the agent does not */
-.tab-strip-dot[data-status="waiting"] { background: transparent; box-shadow: inset 0 0 0 1.5px var(--status-working); }
+.tab-strip-dot[data-status="waiting"] { background: transparent; box-shadow: inset 0 0 0 1.5px var(--status-waiting); }
 
 /* Settings -> Status indicators, Dots or Symbols: the sidebar's herdr glyph and color, held still
    (Sidebar.css .sidebar-status-glyph). Same specificity as the dot's rules, so order wins. */

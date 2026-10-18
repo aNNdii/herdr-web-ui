@@ -120,6 +120,11 @@ function piSessionDirForProcess(
   return { kind: "store", path: resolve(isAbsolute(expanded) ? expanded : join(cwd, expanded)) };
 }
 
+/** The pane's one verified pi process: its pid, working directory and environment (null when unreadable). */
+export interface PiPaneProcess { pid: number; cwd: string | null; environ: readonly string[] | null }
+
+type PiTranscript = { path: string } | { unwritten: { id: string; path: string } };
+
 /**
  * pi's transcript for a pane, or the session it has not written yet. The agent report names
  * the active session; Linux process metadata ties a custom store to the Pi process in this pane.
@@ -129,7 +134,20 @@ export async function piTranscriptPath(
   paneId: string,
   sessionDir = defaultPiSessionDir(),
   options: PiTranscriptOptions = {},
-): Promise<{ path: string } | { unwritten: { id: string; path: string } } | null> {
+): Promise<PiTranscript | null> {
+  return (await piPaneSession(paneId, sessionDir, options))?.transcript ?? null;
+}
+
+/**
+ * piTranscriptPath's answer plus the pi process it was verified against: `process` is set only
+ * when exactly one foreground process of the pane is pi by its argv, so its environment (the
+ * tmp root) and start time belong to this session; otherwise it is null.
+ */
+export async function piPaneSession(
+  paneId: string,
+  sessionDir = defaultPiSessionDir(),
+  options: PiTranscriptOptions = {},
+): Promise<{ transcript: PiTranscript; process: PiPaneProcess | null } | null> {
   const agent = options.agent === undefined ? await agentGet(paneId).catch(() => null) : options.agent;
   const session = agent?.agent_session;
   if (agent?.agent !== "pi" || session?.agent !== "pi" || session.source !== "herdr:pi" || session.kind !== "path" || typeof session.value !== "string") return null;
@@ -150,8 +168,11 @@ export async function piTranscriptPath(
   }
 
   const processStores = new Set<string>();
+  const environs = new Map<number, readonly string[] | null>();
   for (const process of piProcesses) {
-    const resolved = piSessionDirForProcess(process.argv ?? [], environOf(process.pid!), home, process.cwd ?? "");
+    const environ = environOf(process.pid);
+    environs.set(process.pid, environ);
+    const resolved = piSessionDirForProcess(process.argv, environ, home, process.cwd ?? "");
     if (resolved.kind === "reject") return null;
     processStores.add(resolved.kind === "store" ? resolved.path : sessionDir);
   }
@@ -172,7 +193,12 @@ export async function piTranscriptPath(
   const matches = [...canonicalStores].filter((store) => piTranscriptInStore(session.value, store) !== null || unwrittenSession(session.value, store) !== null);
   if (matches.length !== 1) return null;
   const path = piTranscriptInStore(session.value, matches[0]!);
-  if (path !== null) return { path };
-  const unwritten = unwrittenSession(session.value, matches[0]!);
-  return unwritten === null ? null : { unwritten };
+  const unwritten = path === null ? unwrittenSession(session.value, matches[0]!) : null;
+  const transcript: PiTranscript | null = path !== null ? { path } : unwritten === null ? null : { unwritten };
+  if (transcript === null) return null;
+  const only = piProcesses.length === 1 ? piProcesses[0]! : null;
+  return {
+    transcript,
+    process: only === null ? null : { pid: only.pid, cwd: only.cwd ?? null, environ: environs.get(only.pid) ?? null },
+  };
 }

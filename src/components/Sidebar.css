@@ -468,8 +468,8 @@ button.sidebar-section-label:focus-visible { outline-offset: calc(var(--ring-off
 }
 
 /* A question mark asks for an answer; a dot, as an unread mark is, has finished and was not
-   looked at; a working-coloured dot runs and a ring of it waits on background work. Every state
-   keeps the color it has on every other surface. */
+   looked at; a working-coloured dot runs; a ring in BG's colour rests on background work. Every
+   state keeps the color it has on every other surface. */
 
 /* Running breathes rather than spins: the dot holds full for most of the cycle and dims in a few
    steps, so it reads as alive at a glance without tugging at the eye, and the browser draws only
@@ -479,8 +479,10 @@ button.sidebar-section-label:focus-visible { outline-offset: calc(var(--ring-off
 }
 
 .sidebar-status[data-status="waiting"] .sidebar-status-dot {
-  border: calc(var(--hairline) * 2) solid currentColor;
   background: transparent;
+  box-shadow: inset 0 0 0 calc(var(--hairline) * 2) currentColor;
+  /* its work still runs: a slower, shallower breath than working's, on the same clock (styles.css) */
+  animation: breathe-bg var(--dur-breathe-bg) steps(8) infinite;
 }
 
 .sidebar-status-mark {
@@ -499,7 +501,8 @@ button.sidebar-section-label:focus-visible { outline-offset: calc(var(--ring-off
 /* Settings -> Status indicators, Dots or Symbols: herdr's TUI glyph for every state
    (lib/status.ts indicatorGlyph) in the color herdr gives it (the --indicator-* tokens): yellow
    runs, red asks for an answer, teal has finished, green is ready, grey is unknown. BG, which herdr
-   does not have, holds RUN's glyph still; RUN breathes as the dot does. */
+   does not have, holds RUN's glyph still (motion is all that tells them apart there); RUN
+   breathes as the dot does. */
 .sidebar-status-glyph {
   color: var(--indicator-unknown);
   font-family: var(--font-mono);
@@ -642,6 +645,11 @@ button.sidebar-section-label:focus-visible { outline-offset: calc(var(--ring-off
   .workspace,
   .workspace-header {
     transition: none;
+  }
+
+  .sidebar-status-dot,
+  .sidebar-status-glyph {
+    animation: none;
   }
 }
 

@@ -20,7 +20,7 @@ interface Pane {
   /** when the last of them ended while the pane was at rest */
   endedAt: number | null;
   waiting: boolean;
-  /** held at most WAIT_LIMIT_MS: false for an OmO pane, whose count drops what its dead host left */
+  /** held at most WAIT_LIMIT_MS: false for an OmO or Pi pane, whose count drops what its dead host left */
   capped: boolean;
 }
 
@@ -41,6 +41,11 @@ interface Pane {
  * and running tasks: OmO's records name the session, not the turn, that started a task. It is held
  * as long as one runs, with no WAIT_LIMIT_MS: a task whose host process died is not counted
  * (omo-status.ts), and OmO wakes the session when a task ends.
+ *
+ * A Pi pane whose pi loads pi-subagents is held like a Claude pane, on the agents and workflows
+ * started after its last prompt (server/pi-subagent-status.ts), and like an OmO pane with no
+ * WAIT_LIMIT_MS: what a pi that went away left running is lost, not counted, and pi-subagents
+ * wakes the session with a notification when one ends.
  */
 export class BackgroundWait {
   private readonly panes = new Map<string, Pane>();

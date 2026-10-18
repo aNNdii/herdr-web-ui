@@ -58,6 +58,8 @@
   --status-working-tint: rgba(108, 184, 214, 0.14);
   --status-blocked-tint: rgba(255, 123, 112, 0.14);
   --status-done-tint: rgba(147, 195, 107, 0.14);
+  --status-waiting: #b49aed;
+  --status-waiting-tint: rgba(180, 154, 237, 0.14);
   --danger-tint: rgba(255, 123, 112, 0.12);
   --danger-text: #ffd9d4;
   /* herdr's TUI state colors, from its default theme (Catppuccin Mocha; Latte in light) */
@@ -216,6 +218,9 @@
   --dur-spin: 1600ms;
   /* one breath of the sidebar's working dot: held full, dimmed, held, back (Sidebar.css) */
   --dur-breathe: 2000ms;
+  /* one breath of BG (an agent at rest while its background work runs): twice as slow and half as
+     deep as working's, so the two never read alike; a ring at 75% keeps its 3:1 in every theme */
+  --dur-breathe-bg: 4000ms;
   --ease-out: cubic-bezier(0.2, 0, 0, 1);
   --ease-spring: cubic-bezier(0.32, 0.72, 0, 1);
   /* the pulse jumps between its two looks: a smooth one has the browser draw a new frame at
@@ -273,6 +278,8 @@
   --status-working-tint: rgba(21, 90, 114, 0.12);
   --status-blocked-tint: rgba(168, 35, 35, 0.12);
   --status-done-tint: rgba(47, 99, 23, 0.12);
+  --status-waiting: #654793;
+  --status-waiting-tint: rgba(101, 71, 147, 0.12);
   --danger-tint: rgba(168, 35, 35, 0.1);
   --indicator-working: #df8e1d;
   --indicator-blocked: #d20f39;
@@ -392,6 +399,8 @@
   --status-working-tint: rgba(194, 162, 175, 0.14);
   --status-blocked-tint: rgba(224, 135, 127, 0.14);
   --status-done-tint: rgba(167, 183, 137, 0.14);
+  --status-waiting: #b49aed;
+  --status-waiting-tint: rgba(180, 154, 237, 0.14);
   --danger-tint: rgba(224, 135, 127, 0.12);
   --danger-text: #f2c9c4;
   --scrim: rgba(0, 0, 0, 0.6);
@@ -438,6 +447,8 @@
   --status-working-tint: rgba(8, 85, 207, 0.12);
   --status-blocked-tint: rgba(177, 36, 33, 0.12);
   --status-done-tint: rgba(0, 108, 43, 0.12);
+  --status-waiting: #654793;
+  --status-waiting-tint: rgba(101, 71, 147, 0.12);
   --danger-tint: rgba(177, 36, 33, 0.1);
   --notice: #8a5300;
   --danger-text: #b12421;
@@ -500,6 +511,8 @@
   --status-working-tint: rgba(129, 176, 250, 0.14);
   --status-blocked-tint: rgba(252, 141, 139, 0.14);
   --status-done-tint: rgba(64, 201, 119, 0.14);
+  --status-waiting: #d094ff;
+  --status-waiting-tint: rgba(208, 148, 255, 0.14);
   --danger-tint: rgba(250, 66, 62, 0.14);
   --notice: #d9b26a;
   --danger-text: #ffd0ce;
@@ -560,6 +573,8 @@
   --status-working-tint: rgba(137, 180, 250, 0.14);
   --status-blocked-tint: rgba(235, 160, 172, 0.14);
   --status-done-tint: rgba(166, 227, 161, 0.14);
+  --status-waiting: #fab387;
+  --status-waiting-tint: rgba(250, 179, 135, 0.14);
   --danger-tint: rgba(235, 160, 172, 0.12);
   --danger-text: #f2cdcd;
   --scrim: rgba(17, 17, 27, 0.6);
@@ -613,6 +628,8 @@
   --status-working-tint: rgba(23, 80, 191, 0.12);
   --status-blocked-tint: rgba(172, 12, 47, 0.12);
   --status-done-tint: rgba(40, 101, 27, 0.12);
+  --status-waiting: #96267e;
+  --status-waiting-tint: rgba(150, 38, 126, 0.12);
   --danger-tint: rgba(172, 12, 47, 0.1);
   --danger-text: #ac0c2f;
   --scrim: rgba(76, 79, 105, 0.35);
@@ -680,6 +697,8 @@
   --status-working-tint: rgba(122, 162, 247, 0.14);
   --status-blocked-tint: rgba(252, 122, 146, 0.14);
   --status-done-tint: rgba(158, 206, 106, 0.14);
+  --status-waiting: #ff9e64;
+  --status-waiting-tint: rgba(255, 158, 100, 0.14);
   --danger-tint: rgba(252, 122, 146, 0.12);
   --notice: #e0af68;
   --danger-text: #fc7a92;
@@ -727,6 +746,8 @@
   --status-working-tint: rgba(0, 64, 167, 0.12);
   --status-blocked-tint: rgba(144, 0, 27, 0.12);
   --status-done-tint: rgba(54, 80, 19, 0.12);
+  --status-waiting: #5e299f;
+  --status-waiting-tint: rgba(94, 41, 159, 0.12);
   --danger-tint: rgba(144, 0, 27, 0.1);
   --notice: #8c6c3e;
   --danger-text: #90001b;
@@ -790,6 +811,8 @@
   --status-working-tint: rgba(161, 196, 182, 0.14);
   --status-blocked-tint: rgba(255, 166, 138, 0.14);
   --status-done-tint: rgba(191, 195, 50, 0.14);
+  --status-waiting: #f5a6bb;
+  --status-waiting-tint: rgba(245, 166, 187, 0.14);
   --danger-tint: rgba(255, 166, 138, 0.12);
   --notice: #fabd2f;
   --danger-text: #ffa68a;
@@ -837,6 +860,8 @@
   --status-working-tint: rgba(0, 93, 110, 0.12);
   --status-blocked-tint: rgba(157, 0, 6, 0.12);
   --status-done-tint: rgba(93, 87, 0, 0.12);
+  --status-waiting: #87386a;
+  --status-waiting-tint: rgba(135, 56, 106, 0.12);
   --danger-tint: rgba(157, 0, 6, 0.1);
   --notice: #b57614;
   --danger-text: #9d0006;
@@ -900,6 +925,8 @@
   --status-working-tint: rgba(112, 191, 255, 0.14);
   --status-blocked-tint: rgba(255, 154, 161, 0.14);
   --status-done-tint: rgba(152, 195, 121, 0.14);
+  --status-waiting: #e999ff;
+  --status-waiting-tint: rgba(233, 153, 255, 0.14);
   --danger-tint: rgba(255, 154, 161, 0.12);
   --notice: #e5c07b;
   --danger-text: #ff9aa1;
@@ -947,6 +974,8 @@
   --status-working-tint: rgba(23, 73, 192, 0.12);
   --status-blocked-tint: rgba(165, 17, 16, 0.12);
   --status-done-tint: rgba(1, 98, 11, 0.12);
+  --status-waiting: #930692;
+  --status-waiting-tint: rgba(147, 6, 146, 0.12);
   --danger-tint: rgba(165, 17, 16, 0.1);
   --notice: #c18401;
   --danger-text: #a51110;
@@ -1010,6 +1039,8 @@
   --status-working-tint: rgba(127, 220, 255, 0.14);
   --status-blocked-tint: rgba(255, 188, 170, 0.14);
   --status-done-tint: rgba(194, 216, 93, 0.14);
+  --status-waiting: #ffb3f6;
+  --status-waiting-tint: rgba(255, 179, 246, 0.14);
   --danger-tint: rgba(255, 188, 170, 0.12);
   --notice: #b58900;
   --danger-text: #ffbcaa;
@@ -1057,6 +1088,8 @@
   --status-working-tint: rgba(0, 94, 162, 0.12);
   --status-blocked-tint: rgba(182, 0, 6, 0.12);
   --status-done-tint: rgba(83, 99, 0, 0.12);
+  --status-waiting: #af0065;
+  --status-waiting-tint: rgba(175, 0, 101, 0.12);
   --danger-tint: rgba(182, 0, 6, 0.1);
   --notice: #b58900;
   --danger-text: #b60006;
@@ -1120,6 +1153,8 @@
   --status-working-tint: rgba(155, 187, 248, 0.14);
   --status-blocked-tint: rgba(255, 160, 155, 0.14);
   --status-done-tint: rgba(163, 195, 151, 0.14);
+  --status-waiting: #ffa066;
+  --status-waiting-tint: rgba(255, 160, 102, 0.14);
   --danger-tint: rgba(255, 160, 155, 0.12);
   --notice: #c0a36e;
   --danger-text: #ffa09b;
@@ -1167,6 +1202,8 @@
   --status-working-tint: rgba(49, 75, 123, 0.12);
   --status-blocked-tint: rgba(149, 0, 43, 0.12);
   --status-done-tint: rgba(59, 82, 23, 0.12);
+  --status-waiting: #862d00;
+  --status-waiting-tint: rgba(134, 45, 0, 0.12);
   --danger-tint: rgba(149, 0, 43, 0.1);
   --notice: #77713f;
   --danger-text: #95002b;
@@ -1230,6 +1267,8 @@
   --status-working-tint: rgba(103, 169, 198, 0.14);
   --status-blocked-tint: rgba(245, 119, 154, 0.14);
   --status-done-tint: rgba(103, 169, 198, 0.14);
+  --status-waiting: #ea9a97;
+  --status-waiting-tint: rgba(234, 154, 151, 0.14);
   --danger-tint: rgba(245, 119, 154, 0.12);
   --notice: #f6c177;
   --danger-text: #f5779a;
@@ -1277,6 +1316,8 @@
   --status-working-tint: rgba(22, 90, 116, 0.12);
   --status-blocked-tint: rgba(135, 58, 82, 0.12);
   --status-done-tint: rgba(22, 90, 116, 0.12);
+  --status-waiting: #872d83;
+  --status-waiting-tint: rgba(135, 45, 131, 0.12);
   --danger-tint: rgba(135, 58, 82, 0.1);
   --notice: #ea9d34;
   --danger-text: #873a52;
@@ -1340,6 +1381,8 @@
   --status-working-tint: rgba(139, 233, 253, 0.14);
   --status-blocked-tint: rgba(255, 200, 200, 0.14);
   --status-done-tint: rgba(80, 250, 123, 0.14);
+  --status-waiting: #ffcd80;
+  --status-waiting-tint: rgba(255, 205, 128, 0.14);
   --danger-tint: rgba(255, 200, 200, 0.12);
   --notice: #f1fa8c;
   --danger-text: #ffc8c8;
@@ -1387,6 +1430,8 @@
   --status-working-tint: rgba(191, 225, 255, 0.14);
   --status-blocked-tint: rgba(255, 208, 215, 0.14);
   --status-done-tint: rgba(200, 229, 177, 0.14);
+  --status-waiting: #e8d5ff;
+  --status-waiting-tint: rgba(232, 213, 255, 0.14);
   --danger-tint: rgba(255, 208, 215, 0.12);
   --notice: #ebcb8b;
   --danger-text: #ffd0d7;
@@ -1434,6 +1479,8 @@
   --status-working-tint: rgba(176, 176, 176, 0.14);
   --status-blocked-tint: rgba(255, 128, 128, 0.14);
   --status-done-tint: rgba(153, 255, 228, 0.14);
+  --status-waiting: #b288f6;
+  --status-waiting-tint: rgba(178, 136, 246, 0.14);
   --danger-tint: rgba(255, 128, 128, 0.12);
   --notice: #ffc799;
   --danger-text: #ff8080;
@@ -2328,7 +2375,7 @@ button {
   background: var(--status-working-tint);
 }
 
-/* RUN is the one state that moves: a dot breathes before the word, the word holds still */
+/* RUN moves: a dot breathes before the word, the word holds still. BG's ring breathes slowly */
 .badge-working::before {
   content: "";
   width: 5px;
@@ -2348,10 +2395,29 @@ button {
   background: var(--status-done-tint);
 }
 
-/* BG: the turn ended on work still running in the background. The working colours, holding still */
+/* BG: the agent rests while its background work still runs. Its own colours; a ring before the
+   word breathes slowly, as the sidebar's does (Sidebar.css) */
 .badge-waiting {
-  color: var(--status-working);
-  background: var(--status-working-tint);
+  color: var(--status-waiting);
+  background: var(--status-waiting-tint);
+}
+
+.badge-waiting::before {
+  content: "";
+  width: 5px;
+  height: 5px;
+  border-radius: var(--radius-pill);
+  box-shadow: inset 0 0 0 1.5px currentColor;
+  animation: breathe-bg var(--dur-breathe-bg) steps(8) infinite;
+}
+
+/* held full, dimmed only to 0.75, held, back: alive at a glance, never mistaken for working */
+@keyframes breathe-bg {
+  0%,
+  30% { opacity: 1; }
+  50%,
+  80% { opacity: 0.75; }
+  100% { opacity: 1; }
 }
 
 /* unknown keeps the dim text color (contrast) and is told apart by the dashed edge */
@@ -2926,6 +2992,7 @@ button {
   }
 
   .badge-working::before,
+  .badge-waiting::before,
   .conn-reconnecting .conn-dot {
     animation: none;
   }

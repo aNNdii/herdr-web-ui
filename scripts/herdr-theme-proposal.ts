@@ -73,11 +73,43 @@ export const ROLE_DEFAULTS = {
   "status-working-tint": (r: ThemeRoles, mode: Mode) => rgba(r["status-working"], statusAlpha(mode)),
   "status-blocked-tint": (r: ThemeRoles, mode: Mode) => rgba(r["status-blocked"], statusAlpha(mode)),
   "status-done-tint": (r: ThemeRoles, mode: Mode) => rgba(r["status-done"], statusAlpha(mode)),
+  "status-waiting-tint": (r: ThemeRoles, mode: Mode) => rgba(r["status-waiting"], statusAlpha(mode)),
   "danger-tint": (r: ThemeRoles, mode: Mode) => rgba(r["status-blocked"], mode === "dark" ? 0.12 : 0.1),
   "shadow-drawer": (r: ThemeRoles, mode: Mode) => `${SHADOW_GEOMETRY[mode]["shadow-drawer"][0]} ${rgba(mode === "dark" ? "#000000" : r.text, mode === "dark" ? 0.6 : 0.22)}`,
   "shadow-pop": (r: ThemeRoles, mode: Mode) => `${SHADOW_GEOMETRY[mode]["shadow-pop"][0]} ${rgba(mode === "dark" ? "#000000" : r.text, mode === "dark" ? 0.55 : 0.16)}, ${SHADOW_GEOMETRY[mode]["shadow-pop"][1]} var(--border)`,
   "shadow-card": (r: ThemeRoles, mode: Mode) => `${SHADOW_GEOMETRY[mode]["shadow-card"][0]} ${rgba(mode === "dark" ? "#000000" : r.text, mode === "dark" ? 0.35 : 0.07)}`,
 } satisfies Partial<Record<Role, (roles: ThemeRoles, mode: Mode) => string>>;
+
+/** Minimum dE_OK between --status-waiting and the theme's chrome colours (accent, primary). */
+export const WAITING_CHROME_MIN_DE = 15;
+/** Minimum dE_OK between --status-waiting and the other agent states and --notice. */
+export const WAITING_STATUS_MIN_DE = 8;
+
+type WaitingContext = Pick<ThemeRoles, "accent" | "primary" | "status-working" | "status-blocked" | "status-done" | "notice">;
+
+/**
+ * BG (`waiting`) takes the theme's own violet (herdr mauve) unless it collides, then its orange
+ * (peach). A candidate is free when it is at least WAITING_CHROME_MIN_DE from accent and primary
+ * (Rose Pine and Dracula have violet chrome, as legacy Catppuccin's CSS does) and at least
+ * WAITING_STATUS_MIN_DE from working, blocked, done and notice. The first free candidate wins.
+ * When neither is free, the one farther from its nearest agent-state colour (accent, primary,
+ * working, blocked, done; notice is a banner colour, not a state) wins, mauve on a tie. Distances
+ * are taken on the mapped values, before any AA repair. A theme whose committed (AA-repaired)
+ * colour still lands within dE 5 of its accent, primary, an agent state or notice carries a
+ * reviewed hand-pick in herdr-theme-overrides.ts instead (Nord, Rose Pine Dawn, Vesper);
+ * herdr-themes.test.ts checks that bound on every theme.
+ */
+export function waitingCandidate(mauve: string, peach: string, roles: WaitingContext): { value: string; source: "mauve" | "peach"; free: boolean } {
+  const chrome = [roles.accent, roles.primary];
+  const states = [roles["status-working"], roles["status-blocked"], roles["status-done"]];
+  const nearest = (value: string, others: readonly string[]): number => Math.min(...others.map((other) => deltaE(value, other)));
+  const free = (value: string): boolean => nearest(value, chrome) >= WAITING_CHROME_MIN_DE
+    && nearest(value, [...states, roles.notice]) >= WAITING_STATUS_MIN_DE;
+  if (free(mauve)) return { value: mauve, source: "mauve", free: true };
+  if (free(peach)) return { value: peach, source: "peach", free: true };
+  const peachWins = nearest(peach, [...chrome, ...states]) > nearest(mauve, [...chrome, ...states]);
+  return peachWins ? { value: peach, source: "peach", free: false } : { value: mauve, source: "mauve", free: false };
+}
 
 /** Pure boundary mapping. No repair here: every later repair is an explicit CSS override. */
 export function mapTheme(id: HerdrThemeId, raw: RawPalette = RAW[id]): ThemeRoles {
@@ -87,16 +119,17 @@ export function mapTheme(id: HerdrThemeId, raw: RawPalette = RAW[id]): ThemeRole
     border: raw.surface0, "border-strong": raw.surface1, text: raw.text, "text-dim": raw.subtext0,
     accent: raw.accent, primary: raw.accent,
     "status-working": raw.blue, "status-blocked": raw.red, "status-done": raw.green,
-    "status-idle": raw.overlay1, notice: raw.yellow,
+    "status-idle": raw.overlay1, notice: raw.yellow, "status-waiting": "",
     "term-bg": bg, "term-fg": raw.text, "term-selection": raw.selection_bg, "term-cursor": raw.text,
     "syntax-keyword": raw.mauve, "syntax-string": raw.green, "syntax-number": raw.peach,
     "syntax-type": raw.yellow, "syntax-variable": raw.text, "syntax-meta": raw.teal, "syntax-function": raw.blue,
     // Filled by ROLE_DEFAULTS below, kept explicit so the role contract is type-checked.
     "bg-input": "", "text-strong": "", "primary-hover": "", "primary-text": "", "danger-text": "",
     scrim: "", "line-number": "", "bubble-border": "", "accent-tint": "", "primary-tint": "",
-    "status-working-tint": "", "status-blocked-tint": "", "status-done-tint": "", "danger-tint": "",
-    "shadow-drawer": "", "shadow-pop": "", "shadow-card": "",
+    "status-working-tint": "", "status-blocked-tint": "", "status-done-tint": "", "status-waiting-tint": "",
+    "danger-tint": "", "shadow-drawer": "", "shadow-pop": "", "shadow-card": "",
   };
+  roles["status-waiting"] = waitingCandidate(raw.mauve, raw.peach, roles).value;
   for (const [role, derive] of Object.entries(ROLE_DEFAULTS)) roles[role as keyof typeof ROLE_DEFAULTS] = derive(roles, KIND[id]);
   return roles;
 }
@@ -118,13 +151,13 @@ export function minimumContrast(roles: ThemeRoles, role: Role, value = roles[rol
   const surfaces = role.startsWith("syntax-") ? ["bg-panel", "bg-elevated"] as const : ["bg", "bg-panel", "bg-elevated", "bg-hover"] as const;
   return Math.min(...surfaces.map((surface) => {
     const ground = rgb(roles[surface]);
-    const background = /^status-(working|blocked|done)$/.test(role) ? over(rgb(value), ground, statusAlpha(mode)) : ground;
+    const background = /^status-(working|blocked|done|waiting)$/.test(role) ? over(rgb(value), ground, statusAlpha(mode)) : ground;
     const a = luminance(rgb(value)), b = luminance(background);
     return (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05);
   }));
 }
 
-const AA_ROLES: readonly Role[] = ["text", "text-dim", "status-working", "status-blocked", "status-done",
+const AA_ROLES: readonly Role[] = ["text", "text-dim", "status-working", "status-blocked", "status-done", "status-waiting",
   "syntax-function", "syntax-keyword", "syntax-string", "syntax-number", "syntax-type", "syntax-variable", "syntax-meta"];
 
 /**

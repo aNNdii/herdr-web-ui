@@ -190,6 +190,11 @@ function customAgents(config: PiConfig, gate: PackageGate | undefined): Map<stri
   return agents;
 }
 
+/** pi loads the pi-subagents extension, so its `Agent` and `SubagentWorkflow` tools exist (agentMentions plays no part). */
+export function piRunsSubagents(config: PiConfig): boolean {
+  return piLoadsExtension(config, SUBAGENTS_IDENTITY, SUBAGENTS_ENTRY);
+}
+
 /** `src/mention.ts` handleBase: the agent type's slug in the `[\w-]` the mention grammar allows. */
 function handleBase(type: string): string {
   const slug = type.toLowerCase().replace(/[^a-z0-9_-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 64).replace(/-+$/, "");
@@ -204,7 +209,7 @@ const RESERVED_HANDLE = "main";
  * each resolves under: resolveHandleToType takes the first type with that handle.
  */
 export function subagentMentions(config: PiConfig): SubagentMention[] {
-  if (!piLoadsExtension(config, SUBAGENTS_IDENTITY, SUBAGENTS_ENTRY)) return [];
+  if (!piRunsSubagents(config)) return [];
   const settings = subagentSettings(config);
   if (settings.agentMentions === "off") return [];
   const registry = new Map<string, AgentDefinition>(settings.disableDefaultAgents ? [] : DEFAULT_AGENTS.map(([name, description]) => [name, { description, enabled: true }]));

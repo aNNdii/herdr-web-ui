@@ -1181,7 +1181,7 @@ export function Composer({
   const compactText = compactCommandText(commands);
   const compactNow = compactText !== null && connected && !sending && !isWorking && agentStatus !== "blocked" ? () => sendQuick(compactText) : undefined;
   // what the status line says; what may be sent, queued or stopped goes by the agent's own status
-  const shownStatus = paneStatus({ agent_status: agentStatus, ...(backgroundWait ? { background_wait: true as const } : {}) });
+  const shownStatus = paneStatus({ agent_status: agentStatus, agent, background_tasks: backgroundTasks, ...(backgroundWait ? { background_wait: true as const } : {}) });
   const statusCompact = composerStatusCompact(cardWidth);
   // comments alone are a message too: Send takes them for the agent's next turn while it works
   const sendShown = sending || composerSendShown({ working: isWorking, text }) || (isWorking && goingComments > 0);
@@ -1534,7 +1534,7 @@ export function Composer({
             <Plus aria-hidden="true" />
           </button>
           {dictation.shown && <MicButton dictation={dictation} />}
-          <BackgroundTasks paneId={paneId} count={backgroundTasks} omo={agent === "omo"} claude={agent === "claude"} plan={plan} />
+          {strip === null && <BackgroundTasks paneId={paneId} count={backgroundTasks} agent={agent} plan={plan} card={surfaceRef} />}
         </div>
         {/* between the two control groups of the card's last row. The agent's name, its separator and the
             state word are read, not drawn: the mark and the header name the agent, and Stop, the live row and
@@ -1615,7 +1615,8 @@ export function Composer({
         </div>
       </div>
       {/* the strip tucked under the card (t3code's composer context strip): the pane's working folder and its
-          branch, each drawn only when the caller passes it. It only names them; nothing in it is pressed */}
+          branch, each drawn only when the caller passes it, and the background tasks and plan control, which
+          sits in the card's last row where there is no strip (a phone) */}
       {strip !== null && (
         <div className="composer-strip">
           {strip.folder !== null && <span className="composer-strip-item composer-strip-folder" title={strip.path ?? undefined}>
@@ -1624,6 +1625,7 @@ export function Composer({
             <span className="composer-strip-text">{strip.folder}</span>
             {worktree && <span className="composer-strip-kind">{t("Worktree")}</span>}
           </span>}
+          <BackgroundTasks paneId={paneId} count={backgroundTasks} agent={agent} plan={plan} placement="strip" card={surfaceRef} />
           {strip.branch !== null && <span className="composer-strip-item composer-strip-branch" title={strip.branch}>
             <GitBranch aria-hidden="true" />
             <span className="visually-hidden">{t("Branch")}: </span>

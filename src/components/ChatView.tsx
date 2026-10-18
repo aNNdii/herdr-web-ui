@@ -319,10 +319,10 @@ function ToolInputView({ part }: { part: ToolPartType }) {
       {option.preview !== null && <pre className="chat-ask-preview">{option.preview}</pre>}
     </li>)}</ol>}
   </li>)}</ol>;
-  // an OmO or omp `task` call: the tasks it starts, not its JSON or a checklist nobody ticks
-  const spawned = part.name === "task" ? taskCallItems(parsed) : null;
+  // an OmO or omp `task`, an `Agent` or a `SubagentWorkflow` call: what it starts, not its JSON or a checklist nobody ticks
+  const spawned = taskCallItems(part.name, parsed);
   if (spawned !== null) return <ol className="chat-task-calls">{spawned.map((item, index) => <li key={index} className="chat-task-call">
-    <p className="chat-task-call-head"><span className="chat-task-call-title">{item.title}</span>{item.agent !== null && <span className="chat-task-call-agent">{item.agent}</span>}</p>
+    <p className="chat-task-call-head"><span className="chat-task-call-title">{item.title}</span>{item.agent !== null && <span className="chat-task-call-agent">{item.agent}</span>}{item.model !== null && <span className="chat-task-call-agent">{item.model}</span>}</p>
     {item.prompt.length > 0 && <pre className="chat-tool-io chat-task-call-prompt">{item.prompt}</pre>}
   </li>)}</ol>;
   const str = (key: string): string | undefined => typeof parsed[key] === "string" ? parsed[key] : undefined;

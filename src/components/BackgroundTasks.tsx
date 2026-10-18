@@ -1,10 +1,10 @@
-import { useEffect, useId, useLayoutEffect, useRef, useState, type ComponentType } from "react";
+import { useEffect, useId, useLayoutEffect, useRef, useState, type ComponentType, type RefObject } from "react";
 import { ChevronDown, ChevronRight, Circle, CircleAlert, CircleCheck, CircleDot, CircleSlash, CircleX, Layers, ListChecks, Workflow, type LucideProps } from "lucide-react";
 
 import "./BackgroundTasks.css";
 
 import { useMachineApi } from "../lib/machineContext.tsx";
-import { clockOffsetMs, endedSummary, formatElapsed, runGoing, spanMs, taskElapsedMs } from "../lib/omoTasks.ts";
+import { clockOffsetMs, endedSummary, formatElapsed, runGoing, runProgress, spanMs, taskElapsedMs } from "../lib/omoTasks.ts";
 import { formatTokens } from "../lib/compose.ts";
 import { planWaves } from "../lib/plan.ts";
 import { useT } from "../lib/i18n.ts";
@@ -32,11 +32,18 @@ const NODE_ICONS: Record<OmoRunNode["state"], ComponentType<LucideProps>> = {
  * ended is one line that says how many ended and how many went wrong, and opens on request.
  * The server keeps the newest ten ended tasks and five ended workflows of the last day, so the
  * line counts those, and says "recently", not "in the last day".
- * A Claude pane's tasks are its subagents. Most Claude panes have none, so it asks when
- * the pane is shown (and when its count changes), and appears only when there are or were some.
+ * A Claude or Pi pane's tasks are its subagents (a Pi pane's workflows too). Most such panes have
+ * none, so it asks when the pane is shown (and when its count changes), and appears only when
+ * there are or were some.
+ * `agent`: the pane's agent (`pane.agent`), which says where its tasks come from.
+ * `placement`: "row" sits in the input card's last row as an icon and a number; "strip" is drawn in
+ * the strip under the card (a wide screen) with its words. Either way the list opens above `card`,
+ * the input card, over its width.
  */
-export function BackgroundTasks({ paneId, count, omo, claude = false, plan = null }: { paneId: string; count: number; omo: boolean; claude?: boolean; plan?: PlanSummary | null }) {
+export function BackgroundTasks({ paneId, count, agent, plan = null, placement = "row", card }: { paneId: string; count: number; agent: string | null | undefined; plan?: PlanSummary | null; placement?: "row" | "strip"; card: RefObject<HTMLElement | null> }) {
   const t = useT();
+  const omo = agent === "omo";
+  const subagents = agent === "claude" || agent === "pi";
   const { fetchPaneOmoActivity, fetchPanePlan } = useMachineApi();
   const [open, setOpen] = useState(false);
   // a phone's Back closes the list, as it closes the other dialogs there (the plan used to be a sheet)
@@ -44,7 +51,7 @@ export function BackgroundTasks({ paneId, count, omo, claude = false, plan = nul
   const [seen, setSeen] = useState(count > 0);
   useEffect(() => { if (count > 0) setSeen(true); }, [count]);
   useEffect(() => {
-    if (!claude || count > 0) return;
+    if (!subagents || count > 0) return;
     let alive = true;
     let timer: ReturnType<typeof setTimeout> | undefined;
     // The server answers within a second with what it knows, so a pane whose session it is still
@@ -52,12 +59,12 @@ export function BackgroundTasks({ paneId, count, omo, claude = false, plan = nul
     // ended before that are told by nothing else, as the count changes only for running ones.
     const ask = (left: number): void => {
       const again = (): void => { if (alive && left > 0) timer = setTimeout(() => ask(left - 1), POLL_MS); };
-      fetchPaneOmoActivity(paneId).then((found) => { if (!alive) return; if (found.tasks.length > 0) setSeen(true); else again(); }, again);
+      fetchPaneOmoActivity(paneId).then((found) => { if (!alive) return; if (found.tasks.length > 0 || found.runs.length > 0) setSeen(true); else again(); }, again);
     };
     ask(3);
     return () => { alive = false; clearTimeout(timer); };
     // asked when the pane is shown and again when its count changes
-  }, [claude, paneId, count]);
+  }, [subagents, paneId, count]);
   const [tasks, setTasks] = useState<OmoTask[] | null>(null);
   const [runs, setRuns] = useState<OmoRun[]>([]);
   const [failed, setFailed] = useState(false);
@@ -146,12 +153,22 @@ export function BackgroundTasks({ paneId, count, omo, claude = false, plan = nul
   // so on a short screen the list scrolls inside that room and never runs under the app header.
   useLayoutEffect(() => {
     const list = menu.current;
-    const anchor = list?.offsetParent;
-    // the list is anchored to the input card, inside the composer: the room is the pane's, above the card
+    // the list is positioned in its offset parent (the card in the row, the strip under it) and
+    // placed over the card: the room is the pane's, above the card, inside the composer
+    const parent = list?.offsetParent;
+    const anchor = card.current;
     const composer = anchor?.closest(".composer") ?? null;
     const frame = (composer ?? anchor)?.parentElement;
-    if (!open || !list || !anchor || !frame) return;
-    const measure = (): void => list.style.setProperty("--bg-tasks-room", `${anchor.getBoundingClientRect().top - frame.getBoundingClientRect().top}px`);
+    if (!open || !list || !parent || !anchor || !frame) return;
+    const measure = (): void => {
+      const box = anchor.getBoundingClientRect();
+      list.style.setProperty("--bg-tasks-room", `${box.top - frame.getBoundingClientRect().top}px`);
+      if (anchor === parent) return;
+      const own = parent.getBoundingClientRect();
+      list.style.setProperty("--bg-tasks-bottom", `${own.bottom - box.top}px`);
+      list.style.setProperty("--bg-tasks-left", `${box.left - own.left}px`);
+      list.style.setProperty("--bg-tasks-right", `${own.right - box.right}px`);
+    };
     measure();
     const observer = new ResizeObserver(measure);
     observer.observe(anchor);
@@ -160,7 +177,7 @@ export function BackgroundTasks({ paneId, count, omo, claude = false, plan = nul
     // nor the pane changes size, the composer does
     if (composer) observer.observe(composer);
     return () => observer.disconnect();
-  }, [open]);
+  }, [open, card]);
 
   const running = tasks?.filter((task) => task.status === "running") ?? [];
   const ended = tasks?.filter((task) => task.status !== "running") ?? [];
@@ -191,26 +208,25 @@ export function BackgroundTasks({ paneId, count, omo, claude = false, plan = nul
   };
 
   const runView = (run: OmoRun) => {
-    const nodes = run.waves.flat();
-    const done = nodes.filter((node) => node.state === "completed").length;
-    const runningNow = nodes.filter((node) => node.state === "running").length;
-    const failedNodes = nodes.filter((node) => node.state === "failed");
+    const progress = runProgress(run);
+    const failedNodes = run.waves.flat().filter((node) => node.state === "failed");
     const elapsed = spanMs(run.started_at, run.ended_at, runGoing(run), now + offset);
+    // a Pi workflow's steps are kept only in pi's memory: its journal tells how many agents finished
     const meta = [
-      t("{done} of {total} done", { done, total: nodes.length }),
-      runningNow > 0 ? t("{n} running", { n: runningNow }) : null,
-      failedNodes.length > 0 ? t("{n} failed", { n: failedNodes.length }) : null,
-      run.status === "cancelled" ? t("cancelled") : run.status === "paused" ? t("paused") : run.status === "pending" ? t("waiting") : null,
+      progress.kind === "waves" ? t("{done} of {total} done", { done: progress.done, total: progress.total }) : progress.done === null ? null : t(progress.done === 1 ? "{n} agent finished" : "{n} agents finished", { n: progress.done }),
+      progress.kind === "waves" && progress.running > 0 ? t("{n} running", { n: progress.running }) : null,
+      progress.failed !== null && progress.failed > 0 ? t("{n} failed", { n: progress.failed }) : null,
+      run.status === "cancelled" ? t("cancelled") : run.status === "lost" ? t("lost") : run.status === "paused" ? t("paused") : run.status === "pending" ? t("waiting") : null,
       elapsed === null ? null : formatElapsed(elapsed),
     ].filter((item) => item !== null).join(" · ");
     return <li key={run.id} className={`bg-run is-${run.status}`}>
       <div className="bg-run-head"><Workflow className="bg-task-icon" aria-hidden="true" /><span className="bg-task-main"><span className="bg-task-title">{run.name}</span><span className="bg-task-meta">{meta}</span></span></div>
-      <ol className="bg-run-waves">{run.waves.map((wave, index) => <li key={index} className="bg-run-wave">
+      {run.waves.length > 0 && <ol className="bg-run-waves">{run.waves.map((wave, index) => <li key={index} className="bg-run-wave">
         {wave.map((node) => {
           const Icon = NODE_ICONS[node.state];
           return <span key={node.id} className={`bg-node is-${node.state}`} title={node.error ?? undefined}><Icon aria-hidden="true" />{node.label}<span className="sr-only"> ({nodeWords[node.state]})</span></span>;
         })}
-      </li>)}</ol>
+      </li>)}</ol>}
       {failedNodes.filter((node) => node.error !== null).map((node) => <p key={node.id} className="bg-run-error">{node.label}: {node.error}</p>)}
     </li>;
   };
@@ -226,7 +242,6 @@ export function BackgroundTasks({ paneId, count, omo, claude = false, plan = nul
   const planLabel = plan ? t("Plan: {done} of {total} done", { done: plan.done, total: plan.total }) : null;
   const label = [planLabel, tasksShown ? tasksLabel : null].filter((part) => part !== null).join(" · ");
   const title = plan?.current ? `${label} · ${plan.current}` : label;
-  const busy = count > 0 || (plan !== null && plan.done < plan.total);
   const stepWords: Record<PlanStep["status"], string> = { pending: t("waiting"), in_progress: t("running"), completed: t("done") };
   const stepRow = (step: PlanStep) => {
     const Icon = STEP_ICONS[step.status];
@@ -241,12 +256,12 @@ export function BackgroundTasks({ paneId, count, omo, claude = false, plan = nul
       </span>
     </li>;
   };
-  // a phone's status line has one row: there the words give way to the icons and the numbers
-  return <span className="bg-tasks" ref={root}>
-    <button type="button" ref={toggle} className={`bg-tasks-toggle${busy ? "" : " is-idle"}`} aria-label={label} title={title} aria-expanded={open} aria-controls={id} onClick={() => setOpen(!open)}>
+  // in the card's row the toggle draws icons and numbers only (its words are its name and title); in the strip its words too
+  return <span className={`bg-tasks${placement === "strip" ? " is-strip" : ""}`} ref={root}>
+    <button type="button" ref={toggle} className={`bg-tasks-toggle${count > 0 ? " is-running" : ""}`} aria-label={label} title={title} aria-expanded={open} aria-controls={id} onClick={() => setOpen(!open)}>
       {plan && <><ListChecks aria-hidden="true" /><span className="bg-tasks-label">{t("Plan")}</span><span className="bg-tasks-plan" aria-hidden="true">{plan.done}/{plan.total}</span></>}
       {plan && tasksShown && count > 0 && <span className="bg-tasks-sep" aria-hidden="true" />}
-      {(!plan || count > 0) && tasksShown && <><Layers aria-hidden="true" /><span className={`bg-tasks-label${plan ? " is-secondary" : ""}`}>{tasksLabel}</span>{count > 0 && <span className="bg-tasks-count" aria-hidden="true">{count}</span>}</>}
+      {(!plan || count > 0) && tasksShown && <><Layers aria-hidden="true" /><span className="bg-tasks-label">{tasksLabel}</span>{count > 0 && <span className="bg-tasks-count" aria-hidden="true">{count}</span>}</>}
     </button>
     {open && <div id={id} ref={menu} className="menu bg-tasks-menu" role="dialog" aria-live="off" aria-label={planShown && tasksShown ? t("Plan and background tasks") : planShown ? t("Plan") : t("Background tasks")}>
       {planShown && <>

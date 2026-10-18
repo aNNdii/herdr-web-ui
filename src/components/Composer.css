@@ -678,7 +678,8 @@
    stays under the card's straight bottom edge; its top --space-4 under the card, where the card's
    hairline and shadow part the two (the seam), and only its bottom corners rounded. It names the
    pane's working folder (the whole path in its title) at its start and the branch at its end,
-   each a glyph and a name in --text-dim at --fs-xs, and nothing in it is pressed. Composer.tsx
+   each a glyph and a name in --text-dim at --fs-xs, which are not pressed; the background tasks and
+   plan control before the branch is (BackgroundTasks.css). Composer.tsx
    draws it only with a folder or a branch to name; a name that does not fit is cut short */
 .composer-strip {
   --composer-strip-inset: max(var(--radius-2xl), var(--space-5));

@@ -65,9 +65,9 @@ export function liveSeqs(snapshot: Pick<SessionSnapshot, "agents" | "panes"> | n
   return seqs;
 }
 
-/** The status to draw: herdr's own, or BG while the pane holds its turn for background work. */
-export function shownStatus(pane: Pick<HerdrPane, "agent_status" | "background_wait">): AgentStatus | undefined {
-  return pane.background_wait ? paneStatus(pane) : pane.agent_status;
+/** The status to draw: herdr's own, or BG while the pane waits on background work (lib/status.ts paneStatus). */
+export function shownStatus(pane: Pick<HerdrPane, "agent_status" | "background_wait" | "background_tasks" | "agent">): AgentStatus | undefined {
+  return paneStatus(pane) === "waiting" ? "waiting" : pane.agent_status;
 }
 
 /**
