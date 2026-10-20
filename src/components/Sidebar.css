@@ -651,7 +651,15 @@ button.sidebar-section-label:focus-visible { outline-offset: calc(var(--ring-off
   padding: 0;
 }
 
-.sidebar-footer-settings svg { margin-inline: auto; }
+/* Install app's ×: a square the gear's size after it, Install app taking the rest of the row */
+.sidebar-footer-row > .sidebar-footer-dismiss {
+  flex: 0 0 auto;
+  width: var(--side-box);
+  padding: 0;
+}
+
+.sidebar-footer-settings svg,
+.sidebar-footer-dismiss svg { margin-inline: auto; }
 
 .sidebar-install-help {
   margin: 0;

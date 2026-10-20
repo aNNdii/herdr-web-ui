@@ -963,6 +963,10 @@ function DevicesPage({ auth, onSignOut }: { auth: HealthAuth | null; onSignOut: 
         <SettingsRow label={t("Install")} description={installPrompt.installed ? t("Installed") : installPrompt.canInstall ? undefined : installPrompt.help}>
           {!installPrompt.installed && installPrompt.canInstall && <button type="button" className="btn btn-primary" onClick={() => void installPrompt.install()}>{t("Install app")}</button>}
         </SettingsRow>
+        {/* the sidebar's own Install app, which its × also turns off; an installed app's window never shows it */}
+        <SettingsRow label={t("Install app in the sidebar")} description={t("Shown while the app runs in a browser tab.")}>
+          <Toggle label={t("Install app in the sidebar")} checked={settings.showInstallApp} onChange={(showInstallApp) => update({ showInstallApp })} />
+        </SettingsRow>
       </SettingsGroup>
 
       <PortalPanel readOnly={auth?.role === "watch"} />

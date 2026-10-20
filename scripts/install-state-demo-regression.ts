@@ -111,6 +111,24 @@ try {
       assert.equal(await tab.evaluate(() => (window as unknown as { __prompts?: number }).__prompts), undefined, "no prompt was attempted");
       console.log("PASS (a1) without a prompt, Install app shows the help text");
 
+      // (a3) its × hides Install app and its help in this browser; Settings → Phone turns it back on
+      await tab.getByRole("button", { name: "Hide Install app", exact: true }).click();
+      await installButton(tab).waitFor({ state: "detached" });
+      assert.equal(await tab.locator(".sidebar-install-help").count(), 0, "the help goes with it");
+      await tab.reload();
+      await ready(tab);
+      assert.equal(await installButton(tab).count(), 0, "hidden after a reload too");
+      await tab.keyboard.press("ControlOrMeta+Shift+Comma");
+      await openSettingsPage(tab, "Phone & devices");
+      const sidebarSwitch = tab.locator(".settings-dialog").getByRole("switch", { name: "Install app in the sidebar", exact: true });
+      assert.equal(await sidebarSwitch.getAttribute("aria-checked"), "false");
+      await sidebarSwitch.click();
+      assert.equal(await sidebarSwitch.getAttribute("aria-checked"), "true");
+      await tab.keyboard.press("Escape");
+      await tab.locator(".settings-dialog").waitFor({ state: "detached" });
+      await installButton(tab).waitFor();
+      console.log("PASS (a3) the × hides Install app across a reload, and Settings > Phone shows it again");
+
       // (a2) a prompt: the click shows it, once, and no help
       const prompted = watch(await context.newPage());
       await prompted.goto(manifestId);
