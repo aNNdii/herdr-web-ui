@@ -21,7 +21,7 @@ import { pendingMessages } from "../lib/pendingMessages.ts";
 import { heldCountShown, heldOpenAtFold, heldOpenOnFocus, heldRefocusDue, heldRowError, heldRowsFold, heldRowsHidden, heldToggleShown, SHORT_PHONE_QUERY } from "../lib/heldRows.ts";
 import { arrangeNotices, dismissNotice, NO_DISMISSALS, settleDismissed, type DismissedNotices } from "../lib/composerNotices.ts";
 import { hermesCtrlCTooSoon, stopKey } from "../lib/hermesStop.ts";
-import { type DraftRefusal, MAX_COMPOSER_CHARS, QUEUE_READY_STATUS, agentDisplayLabel, composerDelivery, composerMessage, composerPayload, submitNote, submitNotTyped, submitRefusal } from "../lib/compose.ts";
+import { type DraftRefusal, MAX_COMPOSER_CHARS, QUEUE_READY_STATUS, agentDisplayLabel, composerDelivery, composerMessage, composerPayload, pendingActionUncertain, submitNote, submitNotTyped, submitRefusal } from "../lib/compose.ts";
 import { afterRead, afterSend, afterSettled, composerLift, greetingMemory, rememberGreeting, greetingFits, greetingFolder, roomOverComposer, showsGreeting, type ChatRead } from "../lib/greeting.ts";
 import { DETACHED, usePaneBranch } from "../lib/paneBranch.ts";
 import { answerFromText, answerHint, answerRefusal, needsConfirmation, type TypedAnswer } from "../lib/promptAnswer.ts";
@@ -54,8 +54,10 @@ import { isAppShortcut } from "../lib/shortcuts.ts";
 import { plainPageDirection } from "../lib/pageScroll.ts";
 import { keyboardHoldsGrid, keyboardUp } from "../lib/keyboard.ts";
 import { OpenFileContext } from "../lib/filePaths.ts";
+import { WebPanelContext } from "../lib/webPanel.ts";
 import { fileUriPath, hyperlinkFilter, isWebLink, openWebLink, terminalFileLinkProvider } from "../lib/terminalFileLinks.ts";
 import { adjustTerminalGlyphs } from "../lib/terminalGlyphs.ts";
+import { keepDeleteRepeatText, keyboardNeedsText, restoreDeleteRepeatCaret } from "../lib/deleteRepeat.ts";
 import { terminalLabel } from "../lib/terminalLabel.ts";
 import { useMediaQuery } from "../lib/useMediaQuery.ts";
 import { useAnnouncedText } from "../lib/useAnnouncedText.ts";
@@ -89,6 +91,10 @@ const plainError = (cause: unknown): string => {
 };
 
 export interface PaneTerminalProps {
+  /** App's content lifetime, including the current finish identity. */
+  presentationKey?: string;
+  finishEpoch?: string;
+  finishId?: number;
   /** The pane this terminal attaches to; null renders the placeholder. */
   paneId: string | null;
   /** A restored pane keeps its ID but gets a new terminal after herdr restarts. */
@@ -155,6 +161,9 @@ export interface PaneTerminalProps {
 const heldRowNotes = new Map<string, { owner: string; id: string; text: string }>();
 
 export function PaneTerminal({
+  presentationKey,
+  finishEpoch,
+  finishId,
   paneId,
   terminalId = null,
   mirrored = false,
@@ -191,7 +200,10 @@ export function PaneTerminal({
   const openFile = useContext(OpenFileContext);
   const openFileRef = useRef(openFile);
   openFileRef.current = openFile;
+  const openWebPage = useContext(WebPanelContext);
   const machineId = useMachineId();
+  const openWebRef = useRef((uri: string, shiftKey: boolean) => openWebPage?.(uri, shiftKey, machineId) ?? false);
+  openWebRef.current = (uri, shiftKey) => openWebPage?.(uri, shiftKey, machineId) ?? false;
   const branchWord = usePaneBranch(machineId, workspaceId);
   const machineSessions = useMachineSessions();
   const sessionRef = useRef<MachineSession | null>(null);
@@ -262,6 +274,9 @@ export function PaneTerminal({
   /** The PC session's epoch: a receipt belongs to the connection on which its request left. */
   const pendingEpochRef = useRef(0);
   const [outputReady, setOutputReady] = useState(false);
+  const outputTarget = JSON.stringify([paneId, terminalId]);
+  const outputTargetRef = useRef(outputTarget); outputTargetRef.current = outputTarget;
+  const [parsedTarget, setParsedTarget] = useState<string>();
   const [ended, setEnded] = useState(false);
   const [inputError, setInputError] = useState<string | null>(null);
   const [inputReady, setInputReady] = useState(false);
@@ -582,7 +597,7 @@ export function PaneTerminal({
           if (!linkPressed(event)) return;
           const path = fileUriPath(uri);
           if (path !== null) openFileRef.current?.(path);
-          else if (isWebLink(uri)) openWebLink(uri);
+          else if (isWebLink(uri) && !openWebRef.current(uri, event.shiftKey)) openWebLink(uri);
         },
         allowNonHttpProtocols: true,
       },
@@ -610,7 +625,7 @@ export function PaneTerminal({
     term.loadAddon(fit);
     matchHerdrWidths(term);
     // the same policy as the linkHandler above: an http(s) address or nothing (S10)
-    term.loadAddon(new WebLinksAddon((_event, uri) => { if (isWebLink(uri)) openWebLink(uri); }));
+    term.loadAddon(new WebLinksAddon((event, uri) => { if (isWebLink(uri) && !openWebRef.current(uri, event.shiftKey)) openWebLink(uri); }));
     term.registerLinkProvider(terminalFileLinkProvider(() => term.buffer.active, (path, event) => { if (linkPressed(event)) openFileRef.current?.(path); }));
     term.open(host);
     let compositionEndTimer: number | null = null;
@@ -634,6 +649,19 @@ export function PaneTerminal({
     };
     host.addEventListener("compositionstart", compositionStart);
     host.addEventListener("compositionend", compositionEnd);
+    // iOS repeats a held ⌫ only while the field has text and wraps (#862). These run after
+    // xterm's own capturing listeners on its textarea, so they refill it once xterm emptied it.
+    const textarea = term.textarea;
+    const keepText = (event: Event): void => {
+      if (!textarea || composingRef.current) return;
+      if ((event instanceof KeyboardEvent || event instanceof InputEvent) && event.isComposing) return;
+      if (event.type === "focus" || event.type === "keydown") restoreDeleteRepeatCaret(textarea);
+      if (event instanceof KeyboardEvent && event.keyCode === 229) return;
+      keepDeleteRepeatText(textarea);
+    };
+    const keepTextOn = textarea && keyboardNeedsText(navigator) ? ["focus", "keydown", "input"] : [];
+    for (const type of keepTextOn) textarea?.addEventListener(type, keepText, true);
+    if (textarea && keepTextOn.length) textarea.style.whiteSpace = "pre-wrap";
     const stopGlyphs = adjustTerminalGlyphs(term);
     // Let the browser emit a paste event, which xterm already handles (including
     // bracketed paste). Otherwise Ctrl+V becomes 0x16, triggering the agent's
@@ -1086,6 +1114,10 @@ export function PaneTerminal({
     // a socket this page was connected to before this mount (a switch back to the PC): a wait is a reconnect
     setConnectedBefore(connectedSockets.has(socket));
     let outputGeneration = 0;
+    // Bumped by readiness receipts: revokes only the proof that queued output is current, never
+    // the parse itself (a masked prompt must still keep typing out of every draft).
+    let outputLifetime = 0;
+    let outputRecovering = false;
     let deferredAttach = false;
     const off = session.on((message, sent) => {
       onServerMessageRef.current?.(message);
@@ -1116,6 +1148,19 @@ export function PaneTerminal({
         setChatInvalidation((current) => current + 1);
       }
       if (paneRef.current) setInputReady(socket.canInput(paneRef.current));
+      if (message.type === "input-ready") {
+        if (message.ready === false) {
+          outputRecovering = true;
+          outputLifetime++;
+          setOutputReady(false);
+          setParsedTarget(undefined);
+        } else if (outputRecovering) {
+          // Recovery revokes parses queued before this receipt too. The new stream, not
+          // input permission (which observers never have), proves the screen is current.
+          outputRecovering = false;
+          outputLifetime++;
+        }
+      }
       if (message.type === "pty-data") {
         if (message.pane_id !== paneRef.current || releasedRef.current) return;
         // A chat showing herdr's scrollback has no native file to watch: output invalidates it.
@@ -1124,6 +1169,8 @@ export function PaneTerminal({
         const acknowledge = socket.outputAcknowledgement(message);
         const owner = message.pane_id;
         const generation = outputGeneration;
+        const lifetime = outputLifetime;
+        const target = outputTargetRef.current;
         term.write(message.data, () => {
           acknowledge?.();
           if (disposed) return;
@@ -1134,7 +1181,10 @@ export function PaneTerminal({
             modifyOtherKeysRef.current = 0;
             return;
           }
-          setOutputReady(true);
+          if (lifetime === outputLifetime && !outputRecovering) {
+            setOutputReady(true);
+            setParsedTarget(target);
+          }
           followCursor();
           const lines: string[] = [];
           const buffer = term.buffer.active;
@@ -1224,6 +1274,7 @@ export function PaneTerminal({
           if (message.pane_id !== undefined && message.pane_id !== paneRef.current) return;
           // not an end: the server attaches as soon as the other bridge lets go
           setHeld(true);
+          setOutputReady(false);
           term.options.disableStdin = true;
           setConnected(socket.connected);
           return;
@@ -1269,6 +1320,7 @@ export function PaneTerminal({
       pendingScopeRef.current = session.scope;
       pendingEpochRef.current = session.epoch;
       outputGeneration++;
+      outputRecovering = false;
       setOutputReady(false);
       setInputReady(false);
       setConnected(false);
@@ -1826,6 +1878,9 @@ export function PaneTerminal({
       setHeld(false);
       // the pane's screen starts again from the new attach, as on a pane switch
       const generation = ++outputGeneration;
+      // A new attach owns a new output lifetime. The server's readiness receipt precedes
+      // replay, so a recovering attach will revoke this again before any retained bytes.
+      outputRecovering = false;
       // Reset in stream order: synchronous reset would let old queued writes draw afterward.
       if (!cachedReleaseRef.current) {
         term.write("\x1bc", () => {
@@ -1981,6 +2036,7 @@ export function PaneTerminal({
       document.removeEventListener("visibilitychange", onVisibility);
       onModifiedEnter.dispose();
       onCommandBackspace.dispose();
+      for (const type of keepTextOn) textarea?.removeEventListener(type, keepText, true);
       host.removeEventListener("keydown", onCommandArrow);
       onData.dispose();
       host.removeEventListener("paste", onPaste, true);
@@ -2595,6 +2651,7 @@ export function PaneTerminal({
           () => { setPromptRefresh((key) => key + 1); return true; },
           (cause: unknown) => {
             setPromptRefresh((key) => key + 1);
+            if (cause instanceof ApiError && cause.code === "reply_unconfirmed") return t("OpenCode did not confirm the answer. Check the question before sending again.");
             return cause instanceof ApiError && cause.status === 409 ? t("The question on screen changed; check it and answer again.") : plainError(cause);
           },
         );
@@ -2638,14 +2695,15 @@ export function PaneTerminal({
       try {
         if (message.serverOwned) {
           const result = socket?.pendingAction(pane, id, action, message.resendGeneration ?? 0);
+          // offline: no frame left (the row shows submitNote's wording, not this message)
           if (!result) {
-            pendingMessages.fail(owner, id, { code: "disconnected", message: t("Not confirmed. Check the terminal before sending again.") }, true);
+            pendingMessages.fail(owner, id, { code: "not_transmitted", message: "the connection dropped before this message was sent" }, pendingActionUncertain("not_transmitted", message.state));
             return;
           }
           // as a composer send: the pane keeps its connection and lease until the receipt settles
           const releaseSubmit = submitRetention?.retain(pane);
           const answer = await result.finally(() => releaseSubmit?.());
-          if (!answer.ok) pendingMessages.fail(owner, id, { code: answer.code, message: answer.message }, answer.code === "pending_not_found" || !submitNotTyped(answer),
+          if (!answer.ok) pendingMessages.fail(owner, id, { code: answer.code, message: answer.message }, pendingActionUncertain(answer, message.state),
             action === "steer" ? message.resendGeneration ?? 0 : undefined);
           // Only the matching server removal receipt removes an authoritative item.
         } else if (action === "discard") {
@@ -2657,7 +2715,7 @@ export function PaneTerminal({
           // a copy kept only the text: one that quotes (comments) still goes to an agent only
           const result = submitComposerMessage(message.text, { agentOnly: hasQuotedLine(message.text), resendId: id, generation: message.resendGeneration ?? 0 });
           if (!result) {
-            pendingMessages.fail(owner, id, { code: "disconnected", message: t("Not sent. Reconnect and try again.") }, false);
+            pendingMessages.fail(owner, id, { code: "not_transmitted", message: "the connection dropped before this message was sent" }, false);
             return;
           }
           const answer = await result;
@@ -2760,7 +2818,8 @@ export function PaneTerminal({
 
   return (
     // data-direct-typing: xterm's own field raises the soft keyboard here (lib/viewport.ts)
-    <div ref={stackRef} className={`terminal-stack${chatView ? " is-chat" : ""}${greeted ? " is-greeted" : ""}`} data-pane-owner={paneId === null ? undefined : paneStorageId(machineId, paneId)} data-direct-typing={coarse && directTyping && !chatView ? "" : undefined}>
+    <div ref={stackRef} className={`terminal-stack${chatView ? " is-chat" : ""}${greeted ? " is-greeted" : ""}`} data-pane-owner={paneId === null ? undefined : paneStorageId(machineId, paneId)} data-direct-typing={coarse && directTyping && !chatView ? "" : undefined}
+      data-pane-content={!chatView && paneId !== null && active && presented && shown && connected && outputReady && parsedTarget === outputTarget && !held && !ended && !released && !unsupported && !outputError ? presentationKey : undefined}>
       {paneId === null && restoreError !== null && (
         <div className="terminal-placeholder is-restore-error" role="status">
           <div className="terminal-placeholder-inner">
@@ -2895,6 +2954,9 @@ export function PaneTerminal({
               The session herdr reports is left out of the key: it can change while the
               conversation stays (a shared Codex daemon), and the chat follows history_id itself */}
           <ChatView
+            presentationKey={presentationKey}
+            finishEpoch={finishEpoch}
+            finishId={finishId}
             key={paneId}
             paneId={paneId}
             active={active}

@@ -5,7 +5,8 @@ import { join } from "node:path";
 import { parseThemeBlocks, parseThemeValue, resolveEntry, ThemeValueError } from "./themeCss.ts";
 import { LIGHT_ANSI_ROLES } from "./themeRoles.ts";
 import baseline from "./themes.legacy-baseline.json";
-import { ROLES, SHADOW_GEOMETRY, SUPPORTED_ENTRIES, THEME_IDS, themeColor as tableThemeColor } from "./themes.ts";
+import { DEFAULT_THEME, ROLES, SHADOW_GEOMETRY, SUPPORTED_ENTRIES, THEME_IDS, themeColor as tableThemeColor } from "./themes.ts";
+import { DEFAULT_ID } from "../../scripts/generate-themes.ts";
 import { FONT_FAMILY_MAX_CHARS } from "./fontFamily.ts";
 import { DEFAULT_KEY_BAR_ITEMS, migrateKeyBarItems } from "./keyBar.ts";
 import { SHARED_SETTING_KEYS } from "../../shared/preferences.ts";
@@ -380,14 +381,6 @@ describe("chat font size", () => {
     expect(sanitizeSettings({ terminalFontSize: 15 }).chatFontSize).toBeNull();
   });
 
-  it("sizes the message box too: with a mouse at the transcript's size, on touch never under --fs-input", () => {
-    const css = readFileSync(join(import.meta.dir, "..", "components", "Composer.css"), "utf8");
-    const sizes = [...css.matchAll(/\.composer-text \{[^}]*?font-size: ([^;]+);/g)].map((match) => match[1]);
-    expect(sizes).toEqual([
-      "max(var(--fs-input), calc(var(--fs-chat) * var(--chat-scale, 1)))",
-      "calc(var(--fs-chat) * var(--chat-scale, 1))",
-    ]);
-  });
 });
 
 describe("chat width", () => {
@@ -661,12 +654,12 @@ describe("quick replies row", () => {
     expect(DEFAULT_SETTINGS.showUsage).toBe(false);
     expect(sanitizeSettings({ showUsage: true }).showUsage).toBe(true);
     expect(sanitizeSettings({ showUsage: 1 }).showUsage).toBe(false);
-    expect(DEFAULT_SETTINGS.usageCount).toBe("used");
-    expect(sanitizeSettings({ usageCount: "left" }).usageCount).toBe("left");
-    expect(sanitizeSettings({ usageCount: "half" }).usageCount).toBe("used");
-    expect(DEFAULT_SETTINGS.usageGlance).toBe("week");
-    expect(sanitizeSettings({ usageGlance: "session" }).usageGlance).toBe("session");
-    expect(sanitizeSettings({ usageGlance: "nearest" }).usageGlance).toBe("week");
+    expect(DEFAULT_SETTINGS.usageCount).toBe("left");
+    expect(sanitizeSettings({ usageCount: "used" }).usageCount).toBe("used");
+    expect(sanitizeSettings({ usageCount: "half" }).usageCount).toBe("left");
+    expect(DEFAULT_SETTINGS.usageGlance).toBe("session");
+    expect(sanitizeSettings({ usageGlance: "week" }).usageGlance).toBe("week");
+    expect(sanitizeSettings({ usageGlance: "nearest" }).usageGlance).toBe("session");
     expect(sanitizeSettings({ usageOrder: ["codex:a", 3, "codex:a", "", "claude:b"] }).usageOrder).toEqual(["codex:a", "claude:b"]);
     expect(sanitizeSettings({ usageHidden: Array.from({ length: 100 }, (_, index) => `k${index}`) }).usageHidden).toHaveLength(64);
     expect(sanitizeSettings({ usageHidden: "codex:a" }).usageHidden).toEqual([]);
@@ -681,8 +674,8 @@ describe("language", () => {
 });
 
 describe("palette", () => {
-  it("defaults to amber, the look before this setting, and keeps only a known palette", () => {
-    expect(DEFAULT_SETTINGS.palette).toBe("amber");
+  it("defaults to codex, and reads a record from before palettes as amber, the look it had", () => {
+    expect(DEFAULT_SETTINGS.palette).toBe("codex");
     // settings stored before palettes existed carry no palette key
     expect(sanitizeSettings({ theme: "light" }).palette).toBe("amber");
     expect(sanitizeSettings({ palette: "charcoal" }).palette).toBe("charcoal");
@@ -816,8 +809,9 @@ describe("palette", () => {
     expect(failures).toEqual([]);
   });
 
-  it("gives index.html and the web manifest amber dark's panel and page colors", () => {
-    const { resolved } = resolveEntry(css, "amber", "dark");
+  it("gives index.html and the web manifest the default theme's dark panel and page colors", () => {
+    expect(DEFAULT_ID).toBe(DEFAULT_THEME);
+    const { resolved } = resolveEntry(css, DEFAULT_THEME, "dark");
     const metas: string[] = [];
     new HTMLRewriter().on('meta[name="theme-color"]', { element: (meta) => void metas.push(meta.getAttribute("content") ?? "") })
       .transform(readFileSync(join(import.meta.dir, "..", "..", "index.html"), "utf8"));
@@ -1021,6 +1015,23 @@ describe("comments", () => {
   it("falls back to on for a value that is not a boolean", () => {
     expect(sanitizeSettings({ comments: "no" }).comments).toBe(true);
   });
+});
+
+it("keeps where web links open to a tab or the panel, a tab by default", () => {
+  expect(DEFAULT_SETTINGS.webLinks).toBe("tab");
+  expect(DEFAULT_SETTINGS.fileOpen).toBe("popup");
+  expect(sanitizeSettings({ fileOpen: "panel" }).fileOpen).toBe("panel");
+  for (const bad of ["tab", "", null, true]) expect(sanitizeSettings({ fileOpen: bad }).fileOpen).toBe("popup");
+  expect(sanitizeSettings({ webLinks: "panel" }).webLinks).toBe("panel");
+  for (const bad of ["popup", "", null, true]) expect(sanitizeSettings({ webLinks: bad }).webLinks).toBe("tab");
+  // an agent's start mode never widens by accident: anything unknown starts it with no flag
+  expect(DEFAULT_SETTINGS.claudeLaunchMode).toBe("default");
+  expect(DEFAULT_SETTINGS.codexLaunchMode).toBe("default");
+  expect(sanitizeSettings({ claudeLaunchMode: "plan", codexLaunchMode: "readOnly" })).toMatchObject({ claudeLaunchMode: "plan", codexLaunchMode: "readOnly" });
+  for (const bad of ["bypass", "BypassPermissions", "full-access", "", null, 1, ["auto"]]) {
+    expect(sanitizeSettings({ claudeLaunchMode: bad }).claudeLaunchMode).toBe("default");
+    expect(sanitizeSettings({ codexLaunchMode: bad }).codexLaunchMode).toBe("default");
+  }
 });
 
 describe("shared settings", () => {

@@ -46,7 +46,9 @@ const UNTYPED_REFUSAL_CODES: readonly string[] = Object.freeze(["agent_blocked",
   "invalid_submit_id", "pending_limit", "pending_not_found", "pending_busy", "invalid_pending_action", "pending_target_changed", "pending_lease_lost", "not_attached",
   "input_not_ready", "attach_held", "pane_not_found", "retired_submit_id", "input_draft",
   // refused by this view while the terminal holds input (PaneTerminal), before anything was sent
-  "held_input"]);
+  "held_input",
+  // the connection dropped before the request's frame left the browser (HerdrSocket)
+  "not_transmitted"]);
 
 /**
  * Nothing of a refused message reached the pane: the result says so (`typed: false`), or, from a
@@ -56,6 +58,17 @@ const UNTYPED_REFUSAL_CODES: readonly string[] = Object.freeze(["agent_blocked",
 export function submitNotTyped(result: string | { code: string; typed?: false }): boolean {
   if (typeof result === "string") return UNTYPED_REFUSAL_CODES.includes(result);
   return result.typed === false || UNTYPED_REFUSAL_CODES.includes(result.code);
+}
+
+/**
+ * Whether a failed Send now or Discard of a bridge-owned row leaves it not confirmed. An action whose
+ * frame never left (`not_transmitted`) proves only that a held row was not sent: a queued row may still
+ * be typed by its turn's end, since the bridge keeps its lease until it notices the connection is gone.
+ */
+export function pendingActionUncertain(result: string | { code: string; typed?: false }, state: string): boolean {
+  const code = typeof result === "string" ? result : result.code;
+  if (code === "not_transmitted") return state !== "held";
+  return code === "pending_not_found" || !submitNotTyped(result);
 }
 
 /**
@@ -101,6 +114,7 @@ export function submitNote(code: string, message: string, agent?: string | null,
   if (code === "input_draft") return t("Not sent: Claude Code's input box in the terminal is not empty. Send or clear it there, then send this message.");
   if (code === "pending_input_unsupported") return t("Update this PC to send messages in the next turn. Your draft stayed here.");
   if (code === "submit_timeout") return t("Not sent: it waited too long behind an earlier message, and nothing was typed. Send it again.");
+  if (code === "not_transmitted") return t("Not sent: the connection dropped before this message left. Send it again.");
   if (code === "disconnected" || code === "timeout") return t("Not confirmed: the pane did not confirm this message. Check the terminal before sending it again.");
   return t("Not sent: {message}", { message });
 }

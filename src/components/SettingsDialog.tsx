@@ -9,9 +9,13 @@ import type { AppActions } from "../lib/actions.ts";
 import { blockComments } from "../lib/blockComments.ts";
 import { hasChangedComment, hasCommentDialog } from "../lib/commentDom.ts";
 import { useInstallPrompt } from "../lib/install.ts";
+import { changePc, inNativeApp } from "../lib/nativeApp.ts";
 import { SHORTCUTS, bindingDisplayKeys, formatKeys, isMacPlatform, setShortcutRecording, shortcutDisplayKeys, shortcutKeys, shortcutConflict, type ShortcutId } from "../lib/shortcuts.ts";
 import { MENU_SHORTCUT_KEYS, recordShortcut, shortcutMatchesQuery } from "../lib/shortcutRecorder.ts";
 import { exactChordRisk, isReservedShortcutKey, parseExactChord } from "../lib/shortcutBindings.ts";
+import { WEB_LINK_TARGETS } from "../lib/webPanel.ts";
+import { FILE_OPEN_TARGETS } from "../lib/filePresentation.ts";
+import { CLAUDE_LAUNCH_MODES, CODEX_LAUNCH_MODES, type ClaudeLaunchMode, type CodexLaunchMode } from "../lib/agentLaunchMode.ts";
 import { CHAT_FONT_MAX, CHAT_FONT_MIN, CHAT_WIDTHS, chatFontSize, DEFAULT_SETTINGS, DIFF_STYLES, MARKDOWN_WIDTHS, QUICK_REPLIES_MAX, QUICK_REPLY_MAX_CHARS, TERMINAL_FONT_MAX, TERMINAL_FONT_MIN, TERMINAL_WHEEL_SPEED_MAX, TERMINAL_WHEEL_SPEED_MIN, DICTATION_LANGUAGES, VOICE_BUTTONS, useSettings, forgetPaneViews, uiFontSize, type DictationLanguage, type VoiceButton } from "../lib/settings.ts";
 import { pickTheme, rowFor, THEME_IDS, type Mode, type ThemeId } from "../lib/themes.ts";
 import { LANGUAGE_NAMES, LANGUAGE_SETTINGS, useLocale, useT } from "../lib/i18n.ts";
@@ -23,6 +27,7 @@ import { FONT_FAMILY_MAX_CHARS, sanitizeFontFamily } from "../lib/fontFamily.ts"
 import { UI_FONT_MAX, UI_FONT_MIN } from "../lib/typography.ts";
 import { canListInstalledFonts, filterFamilies, isMonospaceFamily, queryInstalledFonts } from "../lib/installedFonts.ts";
 import type { UpdatesModel } from "../lib/updates.ts";
+import type { UserError } from "../lib/userError.ts";
 import type { MachineSettings } from "../../shared/machines.ts";
 import { fetchRemoteAccess, fetchVoiceStatus, machineRequest, saveVoiceConfig } from "../lib/api.ts";
 import { isLoopbackHost, phonePlan } from "../lib/phone.ts";
@@ -67,6 +72,8 @@ export interface SettingsDialogProps {
   /** the herdr this app's server talks to, from the last health check */
   herdrVersion: string | null;
   onEnableNotifications: () => Promise<boolean>;
+  /** the last change the server refused to save (lib/preferencesSync.ts); null once a save lands */
+  saveError: UserError | null;
   /** a file preview is open beneath: the dialog is drawn above it (`.settings-raised`) */
   overPreview?: boolean;
 }
@@ -459,6 +466,12 @@ function CommentsPage() {
         <SettingsRow label={t("Comments")} description={t("Comment on an agent's reply and on files by selecting text in comment mode. Turning this off deletes every comment on this device.")}>
           <Toggle label={t("Comments")} checked={settings.comments} onChange={setComments} buttonRef={commentsToggle} />
         </SettingsRow>
+        <SettingsRow label={t("Open files")} description={t("On a wide window, text and code can open beside the pane. Media, PDFs and folders always open in a popup, and the viewer's header button moves the file open now.")}>
+          <Segmented label={t("Open files")} value={settings.fileOpen} onChange={(fileOpen) => update({ fileOpen })} options={FILE_OPEN_TARGETS.map((fileOpen) => ({ value: fileOpen, label: fileOpen === "panel" ? t("Beside the pane") : t("In a popup") }))} />
+        </SettingsRow>
+        <SettingsRow label={t("Web links")} description={t("Only a page this PC serves, such as a dev server on localhost, opens beside the pane. Shift-click opens it the other way.")}>
+          <Segmented label={t("Web links")} value={settings.webLinks} onChange={(webLinks) => update({ webLinks })} options={WEB_LINK_TARGETS.map((webLinks) => ({ value: webLinks, label: webLinks === "panel" ? t("Beside the pane") : t("In a new tab") }))} />
+        </SettingsRow>
       </SettingsGroup>
 
       <SettingsGroup title={t("Selected text")} note={t("In the Markdown preview and the chat")} section="selected-text">
@@ -696,6 +709,43 @@ function VoicePage() {
  * hooks or settings, which this app leaves to the user, so a row shows the command to run instead.
  */
 function IntegrationsPage() {
+  return (
+    <>
+      <LaunchModesGroup />
+      <IntegrationsList />
+    </>
+  );
+}
+
+function claudeModeName(mode: ClaudeLaunchMode, t: ReturnType<typeof useT>): string {
+  return mode === "acceptEdits" ? t("Accept edits") : mode === "auto" ? t("Auto") : mode === "plan" ? t("Plan")
+    : mode === "dontAsk" ? t("Don't ask") : mode === "bypassPermissions" ? t("Bypass permissions") : t("Agent default");
+}
+function codexModeName(mode: CodexLaunchMode, t: ReturnType<typeof useT>): string {
+  return mode === "readOnly" ? t("Read only") : mode === "auto" ? t("Auto") : mode === "fullAccess" ? t("Full access") : t("Agent default");
+}
+
+/** The mode the new workspace, tab and worktree dialogs start Claude Code and Codex in (lib/agentLaunchMode.ts). */
+function LaunchModesGroup() {
+  const { settings, update } = useSettings();
+  const t = useT();
+  return (
+    <SettingsGroup title={t("New agents")} section="launch-modes" note={t("Applies to agents started from New workspace, New tab and New worktree. Agent default adds no flag, so the agent's own configuration decides.")}>
+      <SettingsRow label="Claude Code" description={t("Permission mode")} htmlFor="settings-claude-launch-mode">
+        <select id="settings-claude-launch-mode" className="select settings-select" value={settings.claudeLaunchMode} onChange={(event) => update({ claudeLaunchMode: event.target.value as ClaudeLaunchMode })}>
+          {CLAUDE_LAUNCH_MODES.map((mode) => <option key={mode} value={mode}>{claudeModeName(mode, t)}</option>)}
+        </select>
+      </SettingsRow>
+      <SettingsRow label="Codex" description={t("Sandbox and approvals")} htmlFor="settings-codex-launch-mode">
+        <select id="settings-codex-launch-mode" className="select settings-select" value={settings.codexLaunchMode} onChange={(event) => update({ codexLaunchMode: event.target.value as CodexLaunchMode })}>
+          {CODEX_LAUNCH_MODES.map((mode) => <option key={mode} value={mode}>{codexModeName(mode, t)}</option>)}
+        </select>
+      </SettingsRow>
+    </SettingsGroup>
+  );
+}
+
+function IntegrationsList() {
   const t = useT();
   const api = useMachineApi();
   const machineId = useMachineId();
@@ -883,6 +933,8 @@ function DevicesPage({ auth, onSignOut }: { auth: HealthAuth | null; onSignOut: 
   const { settings, update } = useSettings();
   const t = useT();
   const installPrompt = useInstallPrompt();
+  // the iOS app (app/) holds this page: its way back to the app's list of PCs
+  const nativeApp = inNativeApp();
   // the server says what Tailscale on its PC already serves
   const [access, setAccess] = useState<RemoteAccess | null | undefined>(undefined);
   const loadAccess = useCallback(() => {
@@ -899,6 +951,11 @@ function DevicesPage({ auth, onSignOut }: { auth: HealthAuth | null; onSignOut: 
   return (
     <>
       <SettingsGroup title={t("Phone")} section="phone">
+        {nativeApp && (
+          <SettingsRow label={t("Change PC")} description={window.location.protocol === "capacitor:" ? t("This is the demo. Go back to the app's list of PCs to open yours.") : t("This app shows {address}. Go back to its list of PCs to open another.", { address: window.location.host })}>
+            <button type="button" className="btn" onClick={() => void changePc()}>{t("Change PC")}</button>
+          </SettingsRow>
+        )}
         <div className="settings-item"><PhonePanel plan={plan} loading={access === undefined} onRefresh={loadAccess} /></div>
         <SettingsRow label={t("Keep screen on")} description={<>{t("While a terminal or chat pane is open.")}{wakeLockProblem !== null && <span className="settings-condition">{wakeLockProblem}</span>}</>}>
           <Toggle label={t("Keep screen on")} checked={settings.keepScreenOn} onChange={(keepScreenOn) => update({ keepScreenOn })} />
@@ -1030,7 +1087,22 @@ function SettingsCrash({ onClose, overPreview }: { onClose: () => void; overPrev
   );
 }
 
-function OpenSettingsDialog({ section = null, linkPage = null, linkSection = null, onPage, onClose, onUsageLogin, actions, updates, auth, herdrVersion, onEnableNotifications, overPreview = false }: SettingsDialogProps) {
+/**
+ * A change the server refused to save, on whichever page is open: the plain sentence (lib/userError.ts),
+ * the server's own words behind Details. It stays until a save lands; the change is sent again
+ * every few seconds meanwhile (lib/preferencesSync.ts).
+ */
+function SaveFailure({ error }: { error: UserError }) {
+  const t = useT();
+  return <div className="settings-save-error" role="alert">
+    {error.detail === null ? <p>{error.message}</p> : <details className="settings-details">
+      <summary>{error.message}<span className="settings-details-toggle">{t("Details")}</span></summary>
+      <code>{error.detail}</code>
+    </details>}
+  </div>;
+}
+
+function OpenSettingsDialog({ section = null, linkPage = null, linkSection = null, onPage, onClose, onUsageLogin, actions, updates, auth, herdrVersion, onEnableNotifications, saveError, overPreview = false }: SettingsDialogProps) {
   const t = useT();
   const narrow = useNarrow();
   // opened by Forward, the dialog shows what that entry of the history showed
@@ -1179,7 +1251,7 @@ function OpenSettingsDialog({ section = null, linkPage = null, linkSection = nul
             </div>
           </nav>
         )}
-        {page !== null && <div key={page} ref={settingsBodyRef} id="settings-panel" className="modal-body settings-body" role="tabpanel" aria-label={label(page)} hidden={keyBarOpen}>{body()}</div>}
+        {page !== null && <div key={page} ref={settingsBodyRef} id="settings-panel" className="modal-body settings-body" role="tabpanel" aria-label={label(page)} hidden={keyBarOpen}>{saveError !== null && <SaveFailure error={saveError} />}{body()}</div>}
         {keyBarOpen && <div className="modal-body settings-key-bar-body"><KeyBarSettings /></div>}
       </section>
     </div>

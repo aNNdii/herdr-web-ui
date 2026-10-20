@@ -8,6 +8,7 @@ import { alertPaneTitle, displayPaneTitle } from "./components/Sidebar.tsx";
 import { PaneCanvas } from "./components/PaneCanvas.tsx";
 import { MachineSessionsProvider } from "./lib/machineSessionContext.tsx";
 import { PaneTerminal } from "./components/PaneTerminal.tsx";
+import { paneCovered, paneContentKey, paneContentPresented } from "./lib/panePresentation.ts";
 import { PANE_TABPANEL_ID, paneTabPanelLabel } from "./lib/paneRegion.ts";
 import { worktreeRepoName } from "./lib/composerStrip.ts";
 import { AccessGate } from "./components/AccessGate.tsx";
@@ -29,14 +30,15 @@ import { SidebarResizer } from "./components/SidebarResizer.tsx";
 import { storedSidebarWidth } from "./lib/sidebarWidth.ts";
 import { FilePanelResizer } from "./components/FilePanelResizer.tsx";
 import { FILE_PANEL_DOCK_QUERY, storedFilePanelWidth } from "./lib/filePanelWidth.ts";
-import { filePresentation, type FilePresentation } from "./lib/filePresentation.ts";
+import { openPresentation, type FilePresentation } from "./lib/filePresentation.ts";
 import { MachineDialog } from "./components/MachineDialog.tsx";
 import { RowMenu, type RowMenuItem } from "./components/RowMenu.tsx";
 import { focusWorkspaceListToggle } from "./lib/focus.ts";
 import { headerCrumb, showsChat } from "./lib/headerCrumb.ts";
-import { paneStorageId, type Machine, type MachineEvent } from "../shared/machines.ts";
+import { LOCAL_MACHINE, paneStorageId, type Machine, type MachineEvent } from "../shared/machines.ts";
 import { takeAuthTokenFromUrl } from "./lib/authLink.ts";
 import { applyPaneStatus } from "./lib/snapshot.ts";
+import { setAgentRowTokens } from "./lib/agentRowTokens.ts";
 import { rosterPanes } from "./lib/dagPane.ts";
 import { SnapshotRequests } from "./lib/snapshotRequests.ts";
 import { alertPrefs, useSettings } from "./lib/settings.ts";
@@ -65,6 +67,8 @@ import { TelemetryNotice } from "./components/TelemetryControls.tsx";
 import { FilesDialog } from "./components/FilesDialog.tsx";
 import { folderQueryFor } from "./lib/paletteFolders.ts";
 import { FileViewer } from "./components/FileViewer.tsx";
+import { WebPanel } from "./components/WebPanel.tsx";
+import { panelUrl, WebPanelContext, wantsPanel } from "./lib/webPanel.ts";
 import { RepoDiffViewer } from "./components/RepoDiffViewer.tsx";
 import { OpenFileContext } from "./lib/filePaths.ts";
 import { FileCommentNavContext } from "./lib/fileCommentNav.ts";
@@ -439,11 +443,24 @@ export function App() {
   const { viewing, openFile, closeFile, setPresentation, releaseFile } = useFileViewer();
   // a repository diff from the Files dialog's Changes tab, an entry of its own like a file
   const { viewing: diffViewing, openDiff, closeDiff, releaseDiff } = useRepoDiffViewer();
-  const presentation = viewing?.presentation ?? filePresentation(viewing?.path ?? "");
+  const presentation = viewing?.presentation ?? openPresentation(viewing?.path ?? "", settings.fileOpen);
   const fileDocked = filePanelAvailable && presentation === "panel";
   useEffect(() => {
     if (viewing !== null && fileDocked) setFilesOpen(false);
   }, [viewing, fileDocked]);
+  // a page this PC serves, beside the pane in the file panel's place: a file docked there replaces it
+  const [webPage, setWebPage] = useState<string | null>(null);
+  useEffect(() => {
+    if (viewing !== null && fileDocked) setWebPage(null);
+  }, [viewing, fileDocked]);
+  const openWebPage = useCallback((uri: string, shiftKey: boolean, machineId: string) => {
+    if (machineId !== LOCAL_MACHINE || !wantsPanel(settings.webLinks, shiftKey)) return false;
+    const url = panelUrl(uri, window.location);
+    if (url === null) return false;
+    if (viewing !== null && fileDocked) closeFile();
+    setWebPage(url);
+    return true;
+  }, [settings.webLinks, viewing, fileDocked, closeFile]);
   // the panel is no dialog, so no trap gives the focus back when it closes: what opened the file
   // (a link in the chat, a row of Files) gets it, as it does from the popup
   useFocusReturn(viewing !== null && fileDocked);
@@ -467,9 +484,11 @@ export function App() {
       window.history.go(-2);
     } else setPresentation(next);
   }, [filePanelAvailable, diffViewing, viewing, releaseDiff, openFile, setPresentation]);
-  const reportFileKind = useCallback((presentation: FilePresentation) => {
-    if (viewing !== null && viewing.presentation === undefined && presentation !== filePresentation(viewing.path)) presentFile(presentation);
-  }, [viewing, presentFile]);
+  // the kind corrects a guess from the extension; with files set to open in the popup there is no guess to correct
+  const reportFileKind = useCallback((kind: FilePresentation) => {
+    const wanted = settings.fileOpen === "panel" ? kind : "popup";
+    if (viewing !== null && viewing.presentation === undefined && wanted !== openPresentation(viewing.path, settings.fileOpen)) presentFile(wanted);
+  }, [viewing, presentFile, settings.fileOpen]);
   const toggleFilePresentation = filePanelAvailable && viewing !== null
     ? () => presentFile(fileDocked ? "popup" : "panel")
     : undefined;
@@ -522,7 +541,7 @@ export function App() {
   const pushOnRef = useRef(pushOn);
   pushOnRef.current = pushOn;
   // the shared settings and pins, the same in every browser of this server, once the app is in
-  const receivePreferences = usePreferencesSync(locked === false);
+  const { receive: receivePreferences, saveError: settingsSaveError } = usePreferencesSync(locked === false);
   const receivePreferencesRef = useRef(receivePreferences); receivePreferencesRef.current = receivePreferences;
   const lockedRef = useRef(locked);
   lockedRef.current = locked;
@@ -663,6 +682,7 @@ export function App() {
       let payload: MachineEvent;
       try { payload = JSON.parse(event.data); } catch { return; }
       if (payload.type === "preferences") { receivePreferencesRef.current(payload.preferences); return; }
+      if (payload.type === "herdr-sidebar") { setAgentRowTokens(payload.agents); return; }
       // A poll started before this event can carry an older roster or pane status.
       snapshotRequests.current.invalidate();
       if (payload.type === "machines") {
@@ -693,7 +713,7 @@ export function App() {
           let changed = false;
           const next = list.map((m) => {
             if (m.id !== machine.id || !m.snapshot) return m;
-            const snapshot = applyPaneStatus(m.snapshot, message.pane_id, message.agent_status, message.background_tasks, message.background_wait === true, message.plan);
+            const snapshot = applyPaneStatus(m.snapshot, message.pane_id, message.agent_status, message.background_tasks, message.background_wait === true, message.plan, message.finish_id, message.finish_epoch);
             if (snapshot === m.snapshot) return m;
             changed = true;
             return { ...m, snapshot };
@@ -945,6 +965,13 @@ export function App() {
     ? (snapshot?.workspaces.find((workspace) => workspace.workspace_id === selectedPane.workspace_id) ?? null)
     : null;
   const selectedLayout = snapshot?.layouts.find((layout) => layout.tab_id === selectedPane?.tab_id);
+  // Selection can precede rendering: in a zoomed tab the layout effect below redirects it,
+  // but the sidebar's passive effect can still see that first selection. Only the selected
+  // pane the canvas actually draws counts; paneInFront checks coverage at acknowledgement time.
+  const presentedPaneId = !drawerOpen && selectedPane && !selectedPane.restore_error
+    && (!selectedLayout?.panes.length || selectedLayout.panes.some((pane) => pane.pane_id === selectedPane.pane_id))
+    && (!selectedLayout?.zoomed || selectedLayout.focused_pane_id === selectedPane.pane_id)
+    ? selectedPane.pane_id : null;
   useLayoutEffect(() => {
     if (selectedLayout?.zoomed && selectedLayout.focused_pane_id !== selectedPaneId
       && snapshot?.panes.some((pane) => pane.pane_id === selectedLayout.focused_pane_id)) {
@@ -979,6 +1006,28 @@ export function App() {
   // its lens picked by hand) the pane is back on the lens it had. A shell has no conversation to
   // show (storedView), so its alert opens its own lens; until the snapshot says, it counts as an agent
   if (notificationView !== null && !(notificationView === "chat" && selectedPane !== null && selectedAgent === null)) view = notificationView;
+
+  const contentKey = paneContentKey(selectedMachine, selectedPane, view);
+  // App-owned coverage, plus dialogs/menus mounted by descendants (rename, worktree, lightbox,
+  // confirmations). A desktop popup counts as covered too; docked file/web panels do not.
+  const [dialogCover, setDialogCover] = useState(false);
+  const [contentReady, setContentReady] = useState(false);
+  useEffect(() => {
+    const update = () => {
+      setDialogCover(paneCovered());
+      setContentReady(paneContentPresented(contentKey));
+    };
+    const observer = new MutationObserver(update);
+    observer.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ["open", "role", "aria-modal", "data-pane-content", "hidden", "inert", "aria-hidden", "class"] });
+    update();
+    return () => observer.disconnect();
+  }, [contentKey]);
+  const paneInFront = useCallback(() => locked === false && linkLanded && pendingFile.current === null && pendingCreate.current === null
+    && !drawerOpen && !settingsOpen && !newSessionOpen
+    && !filesOpen && !machineDialog && !paletteOpen && !diffViewing && !(viewing && !fileDocked)
+    && !dialogCover && !paneCovered()
+    && contentReady && paneContentPresented(contentKey),
+  [locked, linkLanded, drawerOpen, settingsOpen, newSessionOpen, filesOpen, machineDialog, paletteOpen, diffViewing, viewing, fileDocked, dialogCover, contentReady, contentKey]);
 
   const pickView = useCallback((machineId: string, paneId: string, next: PaneView) => {
     const key = paneStorageId(machineId, paneId);
@@ -1593,7 +1642,8 @@ export function App() {
             word={connWord}
             title={[connected ? null : connWord, targetHerdr ? t("herdr {version} · protocol {protocol}", { version: targetHerdr.version, protocol: targetHerdr.protocol }) : null].filter((part) => part !== null).join(" · ") || undefined}
           />
-          {!targetHerdr && <span className="pill pill-offline">{t("herdr offline")}</span>}
+          {/* the Host's herdr is away: the step to take is on that PC (the sidebar's state line says the same) */}
+          {!targetHerdr && <span className="pill pill-offline" title={selectedMachineId === "local" ? t("Start herdr on this PC, or check HERDR_SOCKET.") : undefined}>{t("herdr offline")}</span>}
           <span className="header-more">
             <button
               type="button"
@@ -1634,7 +1684,7 @@ export function App() {
           {/* a sidebar that cannot be drawn leaves the panes working */}
           <RenderBoundary resetKey={null} fallback={(retry) => <RegionCrash message={t("The sidebar can't be shown.")} retry={retry} />}>
             <CrashProbe region="sidebar" />
-            <MachineSidebar machines={machines} selectedMachineId={selectedMachineId} selectedPaneId={selectedPaneId} actions={actions} onSelect={selectTarget} onSetup={(machine, update = false) => { setUpdateRemote(update); setMachineDialog(machine); }} onNew={(id) => { setNewSessionMachineId(id); setNewTab(null); setNewSessionOpen(true); setDrawerOpen(false); }} />
+            <MachineSidebar machines={machines} selectedMachineId={selectedMachineId} selectedPaneId={selectedPaneId} presentedPaneId={presentedPaneId} paneInFront={paneInFront} actions={actions} onSelect={selectTarget} onSetup={(machine, update = false) => { setUpdateRemote(update); setMachineDialog(machine); }} onNew={(id) => { setNewSessionMachineId(id); setNewTab(null); setNewSessionOpen(true); setDrawerOpen(false); }} />
           </RenderBoundary>
           <SidebarResizer width={sidebarWidth} onResize={setSidebarWidth} />
         </aside>
@@ -1645,6 +1695,7 @@ export function App() {
         {/* a file path in the chat opens in the viewer, relative to the selected pane's folder */}
         <OpenFileContext.Provider value={selectedPane !== null ? (path) => reviewFile(path, { paneId: selectedPane.pane_id, directory: selectedPane.foreground_cwd ?? selectedPane.cwd ?? null, machineId: selectedMachineId }) : null}>
         <FileCommentNavContext.Provider value={viewFileComment}>
+        <WebPanelContext.Provider value={filePanelAvailable ? openWebPage : null}>
         <div className={`pane-column${chatShown ? " is-chat" : ""}`}>
         {/* over the pane only: a bar across the window would cut the sidebar off from its top row in the header */}
         <UpdateNotice updates={updates} onOpen={() => { setSettingsSection("updates"); setSettingsOpen(true); }} />
@@ -1737,6 +1788,9 @@ export function App() {
                     onOpenInHalf={wideScreen ? (id, side) => dockSide({ machineId, paneId: id }, side) : undefined}
                     renderPane={(item, itemActive, herdrSplit) => <OpenFileContext.Provider value={item ? (path) => reviewFile(path, { paneId: item.pane_id, directory: item.foreground_cwd ?? item.cwd ?? null, machineId }) : null}>
                       <PaneTerminal
+                        presentationKey={paneContentKey(machine, item, item ? lensOf(item) : slotView)}
+                        finishEpoch={machine?.snapshot?.finish_epoch}
+                        finishId={item?.finish_id}
                         title={item ? displayPaneTitle(item) : active ? selectedTitle : null}
                         // Wait for the roster before attaching: the loading placeholder is replaced
                         // by the keyed tile, and must never claim the pane on a throwaway connection.
@@ -1781,6 +1835,7 @@ export function App() {
           <SplitDropPreview visible={splitDragOn && (paneDragging || tabDrag !== null)} side={dropAt} />
         </div>
         </div>
+        </WebPanelContext.Provider>
         </FileCommentNavContext.Provider>
         </OpenFileContext.Provider>
         {/* last in the row: the file beside the pane (from 980px), the pane column shrinks and its terminal refits */}
@@ -1789,6 +1844,8 @@ export function App() {
         {viewing !== null && fileDocked && commentsPanelState === null && <MachineContext.Provider value={viewing.machineId}>
           <FileViewer key={viewing.path} docked panelStart={<FilePanelResizer width={filePanelWidth} onResize={setFilePanelWidth} />} {...fileViewerProps!} />
         </MachineContext.Provider>}
+        {webPage !== null && filePanelAvailable && !(viewing !== null && fileDocked) &&
+          <WebPanel key={webPage} url={webPage} onClose={() => setWebPage(null)} panelStart={<FilePanelResizer width={filePanelWidth} onResize={setFilePanelWidth} />} />}
       </div>
 
       <MachineContext.Provider value={newSessionMachineId}><NewSessionDialog
@@ -1816,7 +1873,7 @@ export function App() {
         setFilesOpen(false);
         selectTargetRef.current(machineId, paneId);
       }} />
-      <SettingsDialog auth={auth} herdrVersion={health?.herdr?.version ?? null} open={settingsOpen} section={settingsSection} linkPage={settingsLinkPage} linkSection={settingsLinkSection} onPage={onSettingsPage} onClose={closeSettings} onUsageLogin={(paneId) => { closeSettings(); selectTarget("local", paneId, "terminal"); void load(); }} actions={actions} updates={updates} onEnableNotifications={enableNotifications} overPreview={(viewing !== null && !fileDocked) || diffViewing !== null} />
+      <SettingsDialog auth={auth} herdrVersion={health?.herdr?.version ?? null} open={settingsOpen} section={settingsSection} linkPage={settingsLinkPage} linkSection={settingsLinkSection} onPage={onSettingsPage} onClose={closeSettings} onUsageLogin={(paneId) => { closeSettings(); selectTarget("local", paneId, "terminal"); void load(); }} actions={actions} updates={updates} onEnableNotifications={enableNotifications} saveError={settingsSaveError} overPreview={(viewing !== null && !fileDocked) || diffViewing !== null} />
       {filesOpen && selectedPane && (
         <FilesDialog start={selectedPane.foreground_cwd ?? selectedPane.cwd ?? ""} paneId={selectedPane.pane_id} viewing={(viewing !== null && !fileDocked) || diffViewing !== null || review !== null} onOpenFile={(path) => reviewFile(path, { paneId: selectedPane.pane_id, directory: selectedPane.foreground_cwd ?? selectedPane.cwd ?? null, machineId: selectedMachineId })}
           onOpenDiff={(comparison, file) => openDiff({ machineId: selectedMachineId, paneId: selectedPane.pane_id, directory: selectedPane.foreground_cwd ?? selectedPane.cwd ?? null, ...comparison, path: file.path, oldPath: file.old_path })}

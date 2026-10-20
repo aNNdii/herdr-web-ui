@@ -59,6 +59,7 @@ run_script scripts/sticky-modifiers-regression.ts
 run_script scripts/terminal-arrows-clicks-regression.ts
 run_script scripts/terminal-viewport-regression.ts
 run_script scripts/omo-question-wheel-regression.ts
+run_script scripts/terminal-cjk-punctuation-regression.ts
 run_script scripts/application-paging-regression.ts
 run_script scripts/pane-paging-demo-regression.ts
 run_script scripts/key-bar-customization-demo-regression.ts
@@ -99,9 +100,14 @@ run_script scripts/held-rows-demo-regression.ts
 run_script scripts/block-comments-regression.ts
 run_script scripts/sidebar-activity-demo-regression.ts
 run_script scripts/sidebar-spacing-demo-regression.ts
+run_script scripts/sidebar-machine-layout-demo-regression.ts
+run_script scripts/sidebar-machine-removal-demo-regression.ts
 run_script scripts/sidebar-branch-line-demo-regression.ts
+run_script scripts/sidebar-tokens-demo-regression.ts
 run_script scripts/workspace-touch-reorder-demo-regression.ts
 run_script scripts/prompt-dock-demo-regression.ts
+run_script scripts/opencode-prompt-regression.ts
+run_script scripts/files-prompt-regression.ts
 run_script scripts/plugin-actions-demo-regression.ts
 run_script scripts/palette-machines-demo-regression.ts
 run_script scripts/narrow-pane-demo-regression.ts

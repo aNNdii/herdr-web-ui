@@ -272,6 +272,7 @@ export function Composer({
   const usageWindows = usage === undefined ? [] : statusWindows(usage);
   const usageLimit = usageWindows[0];
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const measurementRef = useRef<HTMLTextAreaElement | null>(null);
   const surfaceRef = useRef<HTMLDivElement | null>(null);
   const statusRef = useRef<HTMLDivElement | null>(null);
   const hintRef = useRef<HTMLSpanElement | null>(null);
@@ -557,13 +558,13 @@ export function Composer({
 
   const sizeTextarea = useCallback(() => {
     const element = textareaRef.current;
-    if (!element) return;
-    element.style.height = "auto";
-    element.style.height = `${element.scrollHeight}px`;
+    const measurement = measurementRef.current;
+    if (!element || !measurement) return;
+    // Measuring the live field at auto height enlarges the transcript and clamps its scroll.
+    element.style.height = `${measurement.scrollHeight}px`;
   }, []);
 
   // A suggestion or prompt hint changes only the placeholder of a populated draft.
-  // Collapsing it to measure unused placeholder text can scroll iOS's focused caret.
   useLayoutEffect(sizeTextarea, [sizeTextarea, text, text.length === 0 ? placeholder : null, boxWidth, facesLoaded, hasCommentBar]);
 
   // SettingsProvider writes --chat-scale in a passive effect. Measure on the next frame,
@@ -1212,6 +1213,15 @@ export function Composer({
     contextShown, mobile, usageCaption, usage?.problem, hintText, dictation.shown, backgroundTasks,
     plan?.done, plan?.total, statusCompact, compactNow !== undefined, facesLoaded, t]);
   const menuId = `composer-menu-${paneId}`;
+  // the suggestions' own close, for a pointer or a phone, which has no Escape: it does what Escape does, and the
+  // text and the focus stay in the box (a press never takes the focus; a key on it hands it back)
+  const menuClose = (
+    <button type="button" className="composer-menu-close" aria-label={t("Close suggestions")} title={t("Close suggestions")}
+      onMouseDown={(event) => event.preventDefault()}
+      onClick={(event) => { setMenuDismissed(true); if (event.detail === 0) textareaRef.current?.focus({ preventScroll: true }); }}>
+      <X aria-hidden="true" />
+    </button>
+  );
   // the arrow keys move the selection, not the focus (it stays in the box), so the browser does not scroll to it
   useEffect(() => {
     if (menuOpen) document.getElementById(`${menuId}-${selectedIndex}`)?.scrollIntoView({ block: "nearest" });
@@ -1284,7 +1294,9 @@ export function Composer({
         onDrop={onDrop}
       >
         {menuOpen && trigger && (
-          <div id={menuId} className="menu composer-menu" role="listbox" aria-label={trigger.kind === "slash" ? t("Slash commands") : [...(agentRows.length > 0 ? [t("Agents")] : []), ...(fileRows.length > 0 ? [t("Files")] : [])].join(", ")}>
+          <div className="menu composer-menu">
+            {menuClose}
+            <div id={menuId} className="composer-menu-list" role="listbox" aria-label={trigger.kind === "slash" ? t("Slash commands") : [...(agentRows.length > 0 ? [t("Agents")] : []), ...(fileRows.length > 0 ? [t("Files")] : [])].join(", ")}>
             {trigger.kind === "slash" ? (
               (() => {
                 // a row says what a command does in one sentence (the full text is the row's
@@ -1393,11 +1405,13 @@ export function Composer({
                 )}
               </>
             )}
+            </div>
           </div>
         )}
 
         {filesFailedShown && (
           <div className="menu composer-menu">
+            {menuClose}
             <div className="composer-menu-group">
               <div className="menu-heading">{t("Files")}</div>
               <p className="chat-inline-state chat-inline-error">{t("Couldn't load suggestions. Keep typing to try again.")}</p>
@@ -1509,6 +1523,16 @@ export function Composer({
             setMenuDismissed(false);
             setNote((current) => typeof current === "object" && current !== null && "failure" in current ? current : pasteCutNote.current);
           }}
+        />
+        <textarea
+          ref={measurementRef}
+          className="composer-measure"
+          rows={1}
+          value={text}
+          placeholder={placeholder}
+          readOnly
+          tabIndex={-1}
+          aria-hidden="true"
         />
 
         <div className="composer-controls composer-controls-left">

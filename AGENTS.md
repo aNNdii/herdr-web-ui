@@ -42,6 +42,12 @@ to change. Also read [server/AGENTS.md](server/AGENTS.md) and [src/AGENTS.md](sr
   then hand over `http://<that address>:<port>`. A Tailscale-only bind stays inside the tailnet
   (`lanExposed` in `server/access.ts`); never bind `0.0.0.0` for it. Tests keep `port: 0` on
   loopback.
+- Mac and iOS Simulator checks run on the maintainer's test MacBook Air, `ssh eamac`, which stays
+  awake for it. Never drive the MacBook Pro (`ssh macbook`, `ssh mymac`): it is the maintainer's
+  working machine, and automation there takes over their keyboard and focus. Native Windows
+  checks run on the maintainer's Windows 11 PC, `ssh home-window`, which never sleeps on AC. On
+  either box, run a PR's checks in a fresh `git clone` in a temporary directory (`/tmp` on eamac,
+  `%TEMP%` on Windows) and delete it afterwards. Leave their own checkouts alone.
 
 ## Maintainer workflow
 - A session that changes code, in any harness, stops at an open PR: only the maintainer's merge
@@ -64,14 +70,20 @@ to change. Also read [server/AGENTS.md](server/AGENTS.md) and [src/AGENTS.md](sr
 - Everything written to git and GitHub (commits, branches, PRs, reviews, issues, changelog
   fragments) is in English.
 - Never push a `v*` tag by hand: installed updaters act on tags alone.
+- The merge pass cuts releases ([steps](docs/development.md#releasing)); any other session may
+  prepare the release PR but stops at it. When that PR raises `REMOTE_BUNDLE_VERSION`, the merge
+  pass merges nothing touching `server/`, `shared/`, `bun.lock` or `patches/` from its merge until
+  the Release run is done.
 - Required checks: Fast checks, Integration and browser, Native Windows install. Resolve review
   threads before merging (branch protection does not enforce it).
 - CodeRabbit's reviews are rationed per PR author, and agents open their PRs as one account:
   opening a PR, a push and each `@coderabbitai review` spend one, and past about 80 in a week
-  one comes back per hour. Open unfinished work as a draft, push once when it is ready, do not
-  open a stack of PRs at once, and ask for another review only after a commit that changes
-  behaviour in `server/`, `src/` or `shared/`, an HTTP/WS contract or a workflow. A rebase,
-  changelog fragment, docs, comment or test-only commit gets none.
+  one comes back per hour. Open verified work ready for review, not as a draft: the merge pass
+  reviews every PR itself and stops at a draft. A draft is only for work still unfinished; push
+  it once when it is ready. Do not open a stack of PRs at once, and ask for another review
+  only after a commit that changes behaviour in `server/`, `src/` or `shared/`, an HTTP/WS
+  contract or a workflow. A rebase, changelog fragment, docs, comment or test-only commit gets
+  none.
 - A rate-limited review still shows a passing CodeRabbit check; its "Review limit reached"
   comment means no review ran. A PR touching `--takeover`, observe permissions, queued input,
   authentication, an HTTP/WS contract or a workflow waits for a real review. Any other PR says

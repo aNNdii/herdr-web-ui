@@ -208,6 +208,40 @@ to the newly selected pane. This pane-change case has not been repeated with the
 and iPadOS Safari has not been tested. The older remote shell/Codex/omp matrix from #432 was
 not rerun, so this evidence is limited to the local owned raw-mode PTY path.
 
+#### Safari 27.0.1: input-source switching and Backspace (#432)
+
+Updated: 2026-10-19
+
+On a MacBook Air with macOS 27.0.1 and Safari 27.0.1, `scripts/terminal-ime-diagnostic.ts` traced
+an owned raw-mode PTY while macOS keyboard events went through the Korean 2-set input method
+(posted at the HID event tap, the terminal focused through Accessibility). This Safari used the
+replacement path above (`insertText` then `insertReplacementText`, keydown 229 after each edit, no
+composition events), not the composition events Safari 27.2 used. Switching from ABC with
+Control+Space or the input menu, the PTY received `abc한글 `, `abc 안녕하세요\r`, `한글abc `,
+`갑사 `, `한\r` and, with one Backspace inside the syllable, `한 `; `onData`, outgoing WS text and
+the PTY bytes agreed. Caps Lock was not tested: a synthesized Caps Lock does not trigger the
+"switch to and from ABC" toggle, which only a physical key does. Selecting the source with
+`TISSelectInputSource` from an SSH process sometimes left the next keys in ABC in a plain textarea
+too, so it is not a reliable harness.
+
+Backspace lost a press. Once 한 was down to ㅎ, the third Backspace made Safari send an unchanged
+`insertReplacementText("ㅎ")` (the input method committing the jamo) and then a keydown with
+`keyCode` 8, whose default deletes it. The patch read the unchanged replacement as an edit Safari
+had already applied for that key and cancelled the keydown, so 한 and four Backspaces sent
+nothing to the pane where a plain textarea deleted one more character. An unchanged replacement
+no longer counts as an applied edit: the same keys now send one DEL (`한` + four Backspaces +
+Space delivered `\x7f\x20`, before the change `\x20`; `한글` + four delivered `한\x7f\x20`). The
+Safari replay covers it with the recorded order.
+
+When blur or paste commits an active replacement before its keydown arrives, that commit also
+clears the pending-edit key marker, so the next real Backspace/Delete is not swallowed. This
+does not clear the marker when deletion already emptied the preedit: its following keydown
+must still be cancelled. Normal Safari ordering is unchanged: each edit's keydown consumes the
+marker before the next key's beforeinput.
+
+The remote-PC relay (`server/machine-relay.ts`) forwards a browser's input frames unchanged, so
+these local results apply to a remote pane's client side; the remote path itself was not rerun.
+
 #### Before/after PTY screenshots
 
 Updated: 2026-10-07
@@ -288,6 +322,40 @@ inside Tailscale, passed Unicode text entry, draft reload, direct/line mode swit
 batched composition regression (`["니", "다", "."]`). The Safari WebDriver session used an
 owned test workspace and was deleted afterward. These checks use WebDriver text entry and
 synthetic composition events; they do not certify a physical Korean IME or an iOS keyboard.
+
+### Native iOS keyboard check: a held ⌫ (#862)
+
+Updated: 2026-10-18
+
+In the iOS 27.0 simulator (iPhone 18 Pro, Safari, the on-screen keyboard driven by AXe touch
+down/up), holding ⌫ for 3 s in direct typing sent one DEL to an owned raw-mode PTY and stopped.
+A plain page with textareas showed why: the keyboard repeats ⌫ (keydown `repeat:true` about every
+0.1 s) only while the focused field has text, cancelled keydowns included, and not at all in a
+field with `white-space: nowrap`, which xterm's stylesheet gives its helper textarea. Opacity,
+size, z-index and an opaque element over the field made no difference. On iPhone and iPad the
+terminal therefore keeps one space in an otherwise empty helper textarea and sets it to
+`pre-wrap`; xterm still sends each ⌫ as DEL and cancels its edit, so the space never reaches
+the pane. After the change the same 3 s hold sent 24 DELs, on the English and the Korean
+keyboard, and typed text, Space and Enter reached the PTY unchanged. The input line is a plain
+field and already repeated. `scripts/key-bar-hold-repeat-regression.ts` checks the field's state
+under an iPhone user agent; Chromium cannot repeat an iOS key, so the repeat itself was only
+measured in the simulator.
+
+### Native iOS keyboard check: iPhone Hangul
+
+Updated: 2026-10-18
+
+In the iOS 27.0 simulator (iPhone 18 Pro, Safari, on-screen Korean 2-set keyboard driven by AXe
+taps, owned raw-mode PTY), direct typing sent 한글 as `ㅎㅏㄴㄱㅡㄹ`, also after English
+(`abcㅎㅏㄴㄱㅡㄹ`). A plain textarea composed it: the iPhone keyboard sends each jamo as a keydown
+with `keyCode` 0 and its jamo as `key`, then edits the field with deleteContentBackward and
+insertText and no composition events, the sequence the iPad hardware keyboard sends (#938). The
+xterm patch's replacement path was limited to Mac and iPad platforms; it now includes the iPhone.
+Afterwards the same taps delivered `한글 `, `abc한글 `, `하 ` (Backspace inside the syllable),
+`갑사 ` (a final consonant moving on), `한\r`, and a fourth Backspace past an emptied syllable as
+one DEL. The iPad simulator's on-screen keyboard already composed.
+`scripts/terminal-ipad-ime-regression.ts` replays the trace under an iPhone user agent and
+platform with `keyCode` 0.
 
 ### Native Android/Gboard check
 

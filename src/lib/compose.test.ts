@@ -1,7 +1,7 @@
 import { describe, expect, it } from "bun:test";
 
 import { skillSyntax } from "../../shared/skill-syntax.ts";
-import { agentDisplayLabel, composerDelivery, composerMessage, terminalOnlyCommand, composerSendShown, composerPayload, composerModelDraw, composerStatusCompact, composerStatusHint, composerStatusWord, COMPOSER_STATUS_COMPACT_BELOW, contextLeftPercent, formatTokens, holdsLeadingMention, imageMention, insertLeadingMention, MAX_COMPOSER_CHARS, needsAgentList, QUEUE_READY_STATUS, rankSlashCommands, submitNote, submitNotTyped, submitRefusal, sameMessage } from "./compose.ts";
+import { agentDisplayLabel, composerDelivery, composerMessage, terminalOnlyCommand, composerSendShown, composerPayload, composerModelDraw, composerStatusCompact, composerStatusHint, composerStatusWord, COMPOSER_STATUS_COMPACT_BELOW, contextLeftPercent, formatTokens, holdsLeadingMention, imageMention, insertLeadingMention, MAX_COMPOSER_CHARS, needsAgentList, QUEUE_READY_STATUS, rankSlashCommands, submitNote, submitNotTyped, submitRefusal, sameMessage, pendingActionUncertain } from "./compose.ts";
 import { briefDescription, commandGroup, commandsForTrigger, slashCommandReplacement, visibleCommands } from "./compose.ts";
 import { activeTrigger, applyCompletion, type ActiveTrigger } from "./mentions.ts";
 
@@ -202,6 +202,18 @@ describe("composerMessage and submitNote", () => {
     expect(submitNotTyped("input_draft")).toBe(true);
     // refused by the view while the terminal holds input, before anything reached the socket
     expect(legacy("held_input")).toBe(true);
+    // regression #541: a send dropped before its frame left the browser typed nothing
+    expect(submitNotTyped("not_transmitted")).toBe(true);
+    expect(submitNote("not_transmitted", "the connection dropped before this message was sent")).toBe("Not sent: the connection dropped before this message left. Send it again.");
+    // a Send now that never left proves a held row unsent, not a queued one its turn's end may still type
+    expect(pendingActionUncertain("not_transmitted", "held")).toBe(false);
+    expect(pendingActionUncertain("not_transmitted", "queued")).toBe(true);
+    expect(pendingActionUncertain("pending_not_found", "held")).toBe(true);
+    expect(pendingActionUncertain("agent_blocked", "queued")).toBe(false);
+    expect(pendingActionUncertain("disconnected", "held")).toBe(true);
+    // the bridge's typed:false settles it, except a queued row whose frame never left
+    expect(pendingActionUncertain({ code: "some_new_refusal", typed: false }, "queued")).toBe(false);
+    expect(pendingActionUncertain({ code: "not_transmitted", typed: false }, "queued")).toBe(true);
     expect(submitNote("held_input", "x")).toBe("Not sent: send or discard the held input first.");
     expect(submitNote("pending_input_unsupported", "x")).toBe("Update this PC to send messages in the next turn. Your draft stayed here.");
     expect(legacy("submit_changed")).toBe(false);
