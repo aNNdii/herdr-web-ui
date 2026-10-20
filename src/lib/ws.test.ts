@@ -1,6 +1,6 @@
-import { afterAll, beforeAll, expect, it, jest } from "bun:test";
+import { afterAll, afterEach, beforeAll, expect, it, jest } from "bun:test";
 import { HerdrSocket } from "./ws.ts";
-import type { PendingMessage } from "../../shared/protocol.ts";
+import type { ClientConnectionTrace, PendingMessage } from "../../shared/protocol.ts";
 import { OUTPUT_STALLED_CLOSE_CODE } from "../../shared/terminal-flow.ts";
 
 /** A WebSocket the test drives: it opens, receives and records what the client sends. */
@@ -343,6 +343,21 @@ it("refuses unsupported pending actions and never replays an action after discon
   client.close();
 });
 
+it("settles a pending action whose connection dropped before it was sent as not transmitted (regression #541)", async () => {
+  const client = new HerdrSocket("ws://test/ws");
+  client.connect();
+  const socket = FakeSocket.last;
+  socket.open();
+  // waiting for the snapshot that says the bridge takes pending actions
+  const result = client.pendingAction("w1:p1", "pending-1", "steer");
+  const submit = client.submit("w1:p1", "held copy", "held copy", { resendId: "pending-2", generation: 0 });
+  socket.disconnect();
+  expect(await result).toMatchObject({ ok: false, code: "not_transmitted" });
+  expect(await submit).toMatchObject({ ok: false, code: "not_transmitted" });
+  expect(socket.sent.filter((frame) => ["pending-action", "submit"].includes(frame.type))).toEqual([]);
+  client.close();
+});
+
 it("types the terminal's input line as a typed submit, and keeps the older bridge's input fallback compatible", async () => {
   for (const features of [[], ["submit"], ["submit", "pending-input"]]) {
     const client = new HerdrSocket("ws://test/ws");
@@ -372,7 +387,8 @@ it("never replays a queued submit after disconnecting, including before its capa
     const result = client.submit("w1:p1", "do not replay", "do not replay", { delivery: "queue" });
     for (let turn = 0; turn < 10 && known && submissions(socket).length === 0; turn++) await Promise.resolve();
     socket.disconnect();
-    expect(await result).toMatchObject({ ok: false, code: "disconnected" });
+    // regression #541: before its snapshot no frame left, so it is not sent rather than not confirmed
+    expect(await result).toMatchObject({ ok: false, code: known ? "disconnected" : "not_transmitted" });
     expect(client.canQueueMessages()).toBe(false);
     expect(client.submit("w1:p1", "offline", "offline", { delivery: "queue" })).toBeNull();
     client.connect();
@@ -1336,7 +1352,7 @@ it("holds a submit, a pending action and a secret until the probe's pong, then s
   }
 });
 
-it("settles a submit that waited on a probe as disconnected when the socket is dropped, having sent nothing", async () => {
+it("settles a submit that waited on a probe as not transmitted when the socket is dropped, having sent nothing", async () => {
   jest.useFakeTimers();
   const { client, socket } = liveClient(["submit", "secret-input", "ping"]);
   try {
@@ -1347,7 +1363,7 @@ it("settles a submit that waited on a probe as disconnected when the socket is d
     await settle();
     jest.advanceTimersByTime(6_000);
     expect(FakeSocket.last).not.toBe(socket);
-    expect(await submit).toMatchObject({ ok: false, code: "disconnected" });
+    expect(await submit).toMatchObject({ ok: false, code: "not_transmitted" });
     expect(await secret).toMatchObject({ ok: false, code: "disconnected" });
     expect(socket.sent.filter((frame) => ["submit", "secret"].includes(frame.type))).toEqual([]);
   } finally {
@@ -1666,7 +1682,7 @@ it("settles a submit waiting on a probe when a CLOSING socket is replaced, and t
     const fresh = FakeSocket.last;
     expect(fresh).not.toBe(socket);
     await settle();
-    expect(outcome).toMatchObject({ ok: false, code: "disconnected" });
+    expect(outcome).toMatchObject({ ok: false, code: "not_transmitted" });
     expect(disconnects).toBe(1);
     fresh.open();
     fresh.receive(snapshot(["input-ready", "submit", "ping"]));
@@ -1872,4 +1888,107 @@ it("ends the connection when the page is left, and connects again only when it i
     client.close();
     jest.useRealTimers();
   }
+});
+
+/** Capture metadata only, retaining the actual socket/lifecycle code and its context callback. */
+const traceGlobals = globalThis as unknown as { document?: unknown; fetch?: unknown };
+const traceBefore = { document: traceGlobals.document, fetch: traceGlobals.fetch };
+afterEach(() => { traceGlobals.document = traceBefore.document; traceGlobals.fetch = traceBefore.fetch; });
+
+function tracedClient(features: string[]) {
+  const reports: ClientConnectionTrace[] = [];
+  // The public browser transport: a document makes the trace POST through window.fetch (here the global).
+  traceGlobals.document = { createElement() {}, visibilityState: "visible", addEventListener() {}, removeEventListener() {} };
+  traceGlobals.fetch = async (_url: string, init: RequestInit) => { reports.push(JSON.parse(init.body as string)); return new Response(null, { status: 204 }); };
+  const client = new HerdrSocket("ws://test/ws?machine_id=local");
+  client.connect();
+  const socket = FakeSocket.last;
+  socket.open(); socket.receive(snapshot(features));
+  return { client, socket, reports };
+}
+
+it("records the missed-heartbeat path and distinguishes a late old-socket close, without replaying input", async () => {
+  jest.useFakeTimers();
+  const { client, socket, reports } = tracedClient(["ping", "submit"]);
+  try {
+    client.wake();
+    jest.advanceTimersByTime(3000);
+    expect(reports[0]!.events.map((event) => event.kind)).toContain("probe_retry");
+    await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
+    jest.advanceTimersByTime(3000);
+    const fresh = FakeSocket.last;
+    expect(fresh).not.toBe(socket);
+    fresh.open(); fresh.receive(snapshot(["ping", "submit"]));
+    jest.advanceTimersByTime(10_000);
+    socket.closeEvent(1005);
+    expect(reports.at(-1)!.events.at(-1)).toMatchObject({ kind: "close", connection: 1, socket_state: 3, code: 1005 });
+    expect(reports.at(-1)!.events.map((event) => event.kind)).toContain("probe_drop");
+    expect(submissions(fresh)).toEqual([]);
+  } finally { client.close(); jest.useRealTimers(); }
+});
+
+it("records pagehide versus a send receipt interruption without retaining the message or resending it", async () => {
+  jest.useFakeTimers();
+  const { client, socket, reports } = tracedClient(["submit"]);
+  try {
+    const frame = socket.nextSubmission();
+    const pending = client.submit("private-pane", "private-message", "private-payload")!;
+    await frame;
+    (client as unknown as { onLeave(): void }).onLeave();
+    expect(await pending).toMatchObject({ ok: false, code: "disconnected" });
+    expect(reports[0]!.events.at(-1)).toMatchObject({ kind: "pagehide", pending: 1 });
+    expect(reports[0]!.events.map((event) => event.kind)).toContain("submit_sent");
+    expect(JSON.stringify(reports)).not.toContain("private-");
+    (client as unknown as { onWake(event: Event): void }).onWake(new Event("pageshow"));
+    const fresh = FakeSocket.last; fresh.open(); fresh.receive(snapshot(["submit"]));
+    expect(submissions(fresh)).toEqual([]);
+  } finally { client.close(); jest.useRealTimers(); }
+});
+
+it("records a socket stuck closing without forcing a new connection or bypassing authority", () => {
+  jest.useFakeTimers();
+  const { client, socket, reports } = tracedClient(["ping"]);
+  try {
+    socket.closing();
+    jest.advanceTimersByTime(5000);
+    expect(reports[0]!.events.at(-1)).toMatchObject({ kind: "closing_wait", socket_state: 2 });
+    expect(FakeSocket.last).toBe(socket);
+    expect(client.sendInput("w1:p1", "private-draft")).toBe(false);
+  } finally { client.close(); jest.useRealTimers(); }
+});
+
+it("records an unanswered submit deadline without its input or an automatic retry", async () => {
+  jest.useFakeTimers();
+  const { client, socket, reports } = tracedClient(["submit"]);
+  try {
+    const frame = socket.nextSubmission();
+    const result = client.submit("private-pane", "private-message", "private-payload")!;
+    const sent = await frame;
+    jest.advanceTimersByTime(90_000);
+    expect(await result).toMatchObject({ ok: false, code: "timeout" });
+    expect(reports[0]!.events.at(-1)).toMatchObject({ kind: "submit_timeout", request_id: sent.id });
+    expect(JSON.stringify(reports)).not.toContain("private-");
+    expect(submissions(socket)).toHaveLength(1);
+  } finally { client.close(); jest.useRealTimers(); }
+});
+
+it("records actual probe-blocked input once, not readiness polling or the text/chord", () => {
+  jest.useFakeTimers();
+  const { client, socket, reports } = tracedClient(["ping", "input-ready"]);
+  try {
+    client.attach("w1:p1", 80, 24);
+    socket.receive({ type: "input-ready", pane_id: "w1:p1", ready: true });
+    expect(client.canInput("w1:p1")).toBe(true);
+    client.wake();
+    for (let i = 0; i < 100; i++) expect(client.canInput("w1:p1")).toBe(false);
+    expect(reports).toHaveLength(0);
+    expect(client.sendInput("w1:p1", "private-typed-text")).toBe(false);
+    expect(client.sendKeys("w1:p1", ["private-chord"])).toBe(false);
+    expect(reports).toHaveLength(1);
+    expect(reports[0]!.events.at(-1)).toMatchObject({ kind: "probe_input_blocked", socket_state: 1 });
+    expect(JSON.stringify(reports)).not.toContain("private-");
+    expect(submissions(socket)).toEqual([]);
+    socket.receive({ type: "pong", id: pings(socket).at(-1)!.id });
+    expect(client.canInput("w1:p1")).toBe(true);
+  } finally { client.close(); jest.useRealTimers(); }
 });

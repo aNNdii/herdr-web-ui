@@ -1014,7 +1014,8 @@ ol.markdown-list {
   }
 }
 
-.chat-activity {
+/* a native turn thinking under its open work block: one quiet line, not a second head */
+.chat-activity-line {
   display: flex;
   align-items: center;
   gap: var(--space-2);
@@ -1023,7 +1024,14 @@ ol.markdown-list {
   font-size: var(--fs-sm);
 }
 
-.chat-activity svg { width: 1em; height: 1em; flex: none; }
+.chat-activity-line svg { width: 1em; height: 1em; flex: none; }
+
+/* a pending block's head opens nothing until its rows are drawn */
+.work-block.is-pending .work-block-head,
+.work-block.is-pending .work-block-head:hover {
+  background: transparent;
+  cursor: default;
+}
 
 .chat-endcap {
   width: 100%;

@@ -1,8 +1,10 @@
-import { afterAll, describe, expect, it } from "bun:test";
+/// <reference lib="es2024.sharedmemory" />
+import { afterAll, describe, expect, it, jest } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  GjcSdkLookupError,
   gjcSdkTranscriptWithRunner as sdkTranscriptWithRunner,
   type GjcSdkCommandOptions,
   type GjcSdkCommandRunner,
@@ -24,8 +26,9 @@ function gjcSdkTranscriptWithRunner(
   directory: string,
   runner: GjcSdkCommandRunner,
   rootResolver: GjcSdkWorktreeRootResolver = testWorktreeRootResolver,
+  purpose: "chat" | "status" = "chat",
 ) {
-  return sdkTranscriptWithRunner(pids, workingDirectory, directory, runner, rootResolver);
+  return sdkTranscriptWithRunner(pids, workingDirectory, directory, runner, rootResolver, purpose);
 }
 
 function session(overrides: Record<string, unknown> = {}): Record<string, unknown> {
@@ -81,6 +84,33 @@ function fakeRunner(
   return { calls, runner };
 }
 
+/** Bun freezes timer APIs under fake time; a native wait gives event waits a real deadline. */
+async function bounded<T>(promise: Promise<T>): Promise<T> {
+  const state = new Int32Array(new SharedArrayBuffer(4));
+  const deadline = Atomics.waitAsync(state, 0, 0, 1000);
+  if (!deadline.async) throw new Error("SDK test deadline could not start");
+  try {
+    return await Promise.race([
+      promise,
+      deadline.value.then(() => { throw new Error("SDK test event did not arrive"); }),
+    ]);
+  } finally {
+    Atomics.notify(state, 0);
+  }
+}
+
+function timedStep<T>(value: T, duration: number) {
+  const started = Promise.withResolvers<void>();
+  return {
+    started: started.promise,
+    run: () => new Promise<T>((resolve) => {
+      // fixed wait: simulated command duration is the deadline behaviour under test.
+      setTimeout(() => resolve(value), duration);
+      started.resolve();
+    }),
+  };
+}
+
 const commandArgs = [
   "sdk", "session", "raw", "global",
   "--op", "session.list",
@@ -116,7 +146,7 @@ describe("GJC SDK transcript identity binding", () => {
   it("uses a null SDK worktree anchor for a directory outside Git", async () => {
     const row = session({ locator: { ...locator(), worktreeRoot: null } });
     const { calls, runner } = fakeRunner([page([row]), saved(row)]);
-    await expect(gjcSdkTranscriptWithRunner([321], cwd, agentDir, runner, async () => null))
+    await expect(sdkTranscriptWithRunner([321], cwd, agentDir, runner))
       .resolves.toMatchObject({ sessionId: "session-1" });
     expect(calls[0]!.args).toEqual([...commandArgs, "--json-input", JSON.stringify({ scope: scope(cwd, null) })]);
   });
@@ -130,6 +160,7 @@ describe("GJC SDK transcript identity binding", () => {
       path: savedPath,
       hostIncarnation: "linux:12345",
       endpointGeneration: 4,
+      guardSessionIds: ["session-1"],
     });
     expect(calls.map(({ command, args }) => [command, args])).toEqual([
       ["gjc", [...commandArgs, "--json-input", JSON.stringify({ scope: scope(cwd) })]],
@@ -154,6 +185,37 @@ describe("GJC SDK transcript identity binding", () => {
     ]);
     await expect(gjcSdkTranscriptWithRunner([321], cwd, agentDir, conflicting.runner)).resolves.toBeNull();
     expect(conflicting.calls).toHaveLength(2);
+  });
+
+  it("guards stale and direct-fence same-pid sessions across pages without unrelated pids", async () => {
+    mkdirSync(agentDir, { recursive: true });
+    const stale = session({ sessionId: "stale-same-pid", live: false });
+    const fence = session({
+      sessionId: "direct-fence",
+      endpointGeneration: 0,
+      processIncarnation: "linux:12345",
+      locator: { ...locator(), stateRoot: agentDir },
+    });
+    const unrelated = session({ sessionId: "unrelated-pid", pid: 999 });
+    const exactStale = session({ sessionId: "exact-stale-same-pid", deleted: true });
+    const exactUnrelated = session({ sessionId: "exact-unrelated-pid", pid: 999 });
+    const { runner } = fakeRunner([
+      page([stale, unrelated], { continuationCursor: "next-page" }),
+      page([fence, session()]),
+      page([stale, fence, session(), exactStale, exactUnrelated], {
+        savedSession: { id: "session-1", path: savedPath },
+      }),
+    ]);
+
+    const binding = await gjcSdkTranscriptWithRunner([321], cwd, agentDir, runner);
+    expect(binding?.guardSessionIds).toEqual([
+      "stale-same-pid",
+      "direct-fence",
+      "session-1",
+      "exact-stale-same-pid",
+    ]);
+    expect(binding?.guardSessionIds).not.toContain("unrelated-pid");
+    expect(binding?.guardSessionIds).not.toContain("exact-unrelated-pid");
   });
 
   it("does not choose by cwd alone when multiple pane GJC processes match", async () => {
@@ -241,7 +303,7 @@ describe("GJC SDK transcript identity binding", () => {
     await expect(gjcSdkTranscriptWithRunner([321], nestedCwd, agentDir, runner, rootResolver)).resolves.toMatchObject({ sessionId: "session-1" });
     expect(receivedCwd).toBe(nestedCwd);
     expect(receivedTimeout).toBeGreaterThan(0);
-    expect(receivedTimeout).toBeLessThanOrEqual(2_000);
+    expect(receivedTimeout).toBeLessThanOrEqual(5_000);
     expect(calls[0]!.args).toEqual([
       ...commandArgs,
       "--json-input",
@@ -249,7 +311,7 @@ describe("GJC SDK transcript identity binding", () => {
     ]);
   });
 
-  it("fails closed when git cannot resolve a worktree root", async () => {
+  it("falls back when git cannot resolve a worktree root, a failure retrying would not clear", async () => {
     let rootLookups = 0;
     const rootResolver: GjcSdkWorktreeRootResolver = async () => {
       rootLookups += 1;
@@ -307,6 +369,7 @@ describe("GJC SDK transcript identity binding", () => {
       path: join(cwd, "session-2.jsonl"),
       hostIncarnation: "linux:12345",
       endpointGeneration: 4,
+      guardSessionIds: ["session-2"],
     });
     expect(calls).toHaveLength(4);
   });
@@ -372,14 +435,158 @@ describe("GJC SDK transcript identity binding", () => {
     await expect(gjcSdkTranscriptWithRunner([321], cwd, agentDir, runner)).resolves.toBeNull();
   });
 
+  it("resolves a cold two-call lookup past eight seconds within the ten-second total", async () => {
+    jest.useFakeTimers();
+    try {
+      const steps = [timedStep(page([session()]), 4_600), timedStep(saved(), 4_600)];
+      const { calls, runner } = fakeRunner((_args, call) => steps[call]!.run());
+      const lookup = gjcSdkTranscriptWithRunner([321], cwd, agentDir, runner, async () => {
+        // Additional asynchronous resolution must not require changing a microtask count.
+        for (let index = 0; index < 25; index++) await Promise.resolve();
+        return cwd;
+      }).catch((error: unknown) => error);
+      for (const step of steps) {
+        await bounded(step.started);
+        jest.advanceTimersByTime(4_600);
+      }
+      expect(await bounded(lookup)).toMatchObject({ sessionId: "session-1" });
+      expect(calls).toHaveLength(2);
+    } finally {
+      jest.clearAllTimers();
+      jest.useRealTimers();
+    }
+  });
+
+  it("exhausts the ten-second total across the worktree probe and SDK calls", async () => {
+    jest.useFakeTimers();
+    try {
+      const probe = timedStep(cwd, 4_000);
+      const steps = [timedStep(page([session()]), 4_000), timedStep(saved(), 4_000)];
+      const { calls, runner } = fakeRunner((_args, call) => steps[call]!.run());
+      const lookup = gjcSdkTranscriptWithRunner([321], cwd, agentDir, runner, probe.run).catch((error: unknown) => error);
+      await bounded(probe.started);
+      jest.advanceTimersByTime(4_000);
+      await bounded(steps[0]!.started);
+      jest.advanceTimersByTime(4_000);
+      await bounded(steps[1]!.started);
+      expect(calls[1]!.options.timeout).toBe(2_000);
+      jest.advanceTimersByTime(2_000);
+      expect(await bounded(lookup)).toEqual(new GjcSdkLookupError("timeout"));
+    } finally {
+      jest.clearAllTimers();
+      jest.useRealTimers();
+    }
+  });
+
+  it("keeps status discovery on the old two-second command budget", async () => {
+    jest.useFakeTimers();
+    try {
+      const step = timedStep(page([session()]), 2_300);
+      const { calls, runner } = fakeRunner(step.run);
+      const lookup = gjcSdkTranscriptWithRunner([321], cwd, agentDir, runner, testWorktreeRootResolver, "status")
+        .catch((error: unknown) => error);
+      await bounded(step.started);
+      expect(calls[0]!.options.timeout).toBe(2_000);
+      jest.advanceTimersByTime(2_000);
+      expect(await bounded(lookup)).toEqual(new GjcSdkLookupError("timeout"));
+    } finally { jest.clearAllTimers(); jest.useRealTimers(); }
+  });
+
+  it("caps status discovery at eight seconds including the worktree probe", async () => {
+    jest.useFakeTimers();
+    try {
+      const probe = timedStep(cwd, 1_800);
+      const steps = [
+        timedStep(page([], { continuationCursor: "a" }), 1_800),
+        timedStep(page([], { continuationCursor: "b" }), 1_800),
+        timedStep(page([session()]), 1_800),
+        timedStep(saved(), 1_800),
+      ];
+      const { calls, runner } = fakeRunner((_args, call) => steps[call]!.run());
+      const lookup = gjcSdkTranscriptWithRunner([321], cwd, agentDir, runner, probe.run, "status")
+        .catch((error: unknown) => error);
+      await bounded(probe.started);
+      jest.advanceTimersByTime(1_800);
+      for (const step of steps.slice(0, 3)) {
+        await bounded(step.started);
+        jest.advanceTimersByTime(1_800);
+      }
+      await bounded(steps[3]!.started);
+      expect(calls[3]!.options.timeout).toBe(800);
+      jest.advanceTimersByTime(800);
+      expect(await bounded(lookup)).toEqual(new GjcSdkLookupError("timeout"));
+    } finally { jest.clearAllTimers(); jest.useRealTimers(); }
+  });
+
   it("ends a hung SDK lookup at its deadline", async () => {
-    let calls = 0;
-    const runner: GjcSdkCommandRunner = () => {
-      calls += 1;
-      return new Promise(() => {});
-    };
+    jest.useFakeTimers();
+    try {
+      const entered = Promise.withResolvers<void>();
+      const { calls, runner } = fakeRunner(() => {
+        entered.resolve();
+        return new Promise(() => {});
+      });
+      const lookup = gjcSdkTranscriptWithRunner([321], cwd, agentDir, runner).catch((error: unknown) => error);
+      await bounded(entered.promise);
+      jest.advanceTimersByTime(5_000);
+      expect(await bounded(lookup)).toEqual(new GjcSdkLookupError("timeout"));
+      expect(calls).toHaveLength(1);
+    } finally {
+      jest.clearAllTimers();
+      jest.useRealTimers();
+    }
+  });
+
+  it.each([
+    { killed: true },
+    { signal: "SIGKILL" },
+    { code: "ETIMEDOUT" },
+    { code: "ERR_CHILD_PROCESS_TIMEOUT" },
+  ])("classifies subprocess timeout metadata %j without exposing process details", async (metadata) => {
+    const { runner } = fakeRunner(() => {
+      throw Object.assign(new Error("/private/path secret-token"), metadata, { stderr: "secret-token" });
+    });
+    const error = await gjcSdkTranscriptWithRunner([321], cwd, agentDir, runner).catch((error: unknown) => error);
+    expect(error).toBeInstanceOf(GjcSdkLookupError);
+    expect(error).toMatchObject({ reason: "timeout", message: "GJC SDK lookup failed" });
+    expect(error).not.toHaveProperty("cause");
+    expect(error).not.toHaveProperty("stderr");
+  });
+
+  it("falls back on an execution failure during exact session resolution, as only a timeout is retried", async () => {
+    const { calls, runner } = fakeRunner((_args, call) => {
+      if (call === 0) return page([session()]);
+      throw Object.assign(new Error("SDK executable unavailable"), { code: "ENOENT" });
+    });
     await expect(gjcSdkTranscriptWithRunner([321], cwd, agentDir, runner)).resolves.toBeNull();
-    expect(calls).toBe(1);
+    expect(calls).toHaveLength(2);
+  });
+
+  it("ends a hung worktree probe with a typed timeout before SDK lookup", async () => {
+    jest.useFakeTimers();
+    try {
+      const entered = Promise.withResolvers<void>();
+      const { calls, runner } = fakeRunner([page([session()]), saved()]);
+      const lookup = gjcSdkTranscriptWithRunner([321], cwd, agentDir, runner, () => {
+        entered.resolve();
+        return new Promise(() => {});
+      }).catch((error: unknown) => error);
+      await bounded(entered.promise);
+      jest.advanceTimersByTime(5_000);
+      expect(await bounded(lookup)).toEqual(new GjcSdkLookupError("timeout"));
+      expect(calls).toHaveLength(0);
+    } finally {
+      jest.clearAllTimers();
+      jest.useRealTimers();
+    }
+  });
+
+  it("propagates subprocess timeouts from the worktree probe", async () => {
+    const { calls, runner } = fakeRunner([page([session()]), saved()]);
+    await expect(gjcSdkTranscriptWithRunner([321], cwd, agentDir, runner, async () => {
+      throw Object.assign(new Error("Git timeout"), { killed: true, signal: "SIGKILL" });
+    })).rejects.toEqual(new GjcSdkLookupError("timeout"));
+    expect(calls).toHaveLength(0);
   });
 
   it("rejects malformed broker output and repeated or over-budget pagination", async () => {
@@ -410,6 +617,7 @@ describe("GJC SDK transcript identity binding", () => {
       throw new Error("broker credentials and local paths must not escape");
     };
 
+    // a transport failure stays quiet: no error, and nothing of its message, leaves the lookup
     await expect(gjcSdkTranscriptWithRunner([321], cwd, agentDir, runner)).resolves.toBeNull();
     expect(captured?.command).toBe("gjc");
     expect(captured?.args).toEqual([...commandArgs, "--json-input", JSON.stringify({ scope: scope(cwd) })]);
@@ -418,7 +626,7 @@ describe("GJC SDK transcript identity binding", () => {
     expect(captured?.options).not.toHaveProperty("stdio");
     expect(captured?.options.maxBuffer).toBe(1024 * 1024);
     expect(captured?.options.timeout).toBeGreaterThan(0);
-    expect(captured?.options.timeout).toBeLessThanOrEqual(2_000);
+    expect(captured?.options.timeout).toBeLessThanOrEqual(5_000);
     expect(captured?.options.killSignal).toBe("SIGKILL");
   });
 });

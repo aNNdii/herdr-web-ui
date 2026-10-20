@@ -1,4 +1,5 @@
 import { useCallback, useSyncExternalStore } from "react";
+import { inNativeApp } from "./nativeApp.ts";
 import { t } from "./i18n.ts";
 
 interface InstallChoice {
@@ -17,6 +18,7 @@ let pendingPrompt: BeforeInstallPromptEvent | null = null;
 let installedByEvent = false;
 let relatedInstalled = false;
 let lastInstalled = false;
+let lastAppWindow = false;
 let revision = 0;
 const listeners = new Set<Listener>();
 
@@ -60,12 +62,31 @@ function isStandalone(): boolean {
   const iosNavigator = navigator as Navigator & { standalone?: boolean };
   lastInstalled = installedState({
     matches: (query) => window.matchMedia?.(query).matches === true,
-    iosStandalone: iosNavigator.standalone === true,
+    // the iOS app (app/) is this client installed, as a home-screen app is
+    iosStandalone: iosNavigator.standalone === true || inNativeApp(),
     installedByEvent,
     relatedInstalled,
     previous: lastInstalled,
   });
   return lastInstalled;
+}
+
+/**
+ * Whether this window itself is the installed app's, not a tab of a browser that has the app
+ * installed. A link that opens a new tab of this origin (`target="_blank"`) lands in another app
+ * window there, since the app's scope is the whole origin and no page can send it to the browser.
+ */
+export function isAppWindow(): boolean {
+  if (typeof window === "undefined" || typeof navigator === "undefined") return false;
+  const iosNavigator = navigator as Navigator & { standalone?: boolean };
+  lastAppWindow = installedState({
+    matches: (query) => window.matchMedia?.(query).matches === true,
+    iosStandalone: iosNavigator.standalone === true,
+    installedByEvent: false,
+    relatedInstalled: false,
+    previous: lastAppWindow,
+  });
+  return lastAppWindow;
 }
 
 if (typeof window !== "undefined") {
@@ -146,4 +167,10 @@ export function useInstallPrompt(): InstallPromptState {
     emitChange();
   }, []);
   return { canInstall: pendingPrompt !== null && !installed, installed, install, help: currentInstallHelp() };
+}
+
+/** Whether the page runs in the installed app's own window (isAppWindow), kept current. */
+export function useAppWindow(): boolean {
+  useSyncExternalStore(subscribe, snapshot, snapshot);
+  return isAppWindow();
 }

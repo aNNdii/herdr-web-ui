@@ -1,5 +1,6 @@
 import type { ClientMessage, ClientRole, PendingMessage, ServerFeature, ServerMessage } from "../../shared/protocol.ts";
 import { OUTPUT_STALLED_CLOSE_CODE } from "../../shared/terminal-flow.ts";
+import { ConnectionTrace } from "./connectionTrace.ts";
 
 type Handler = (message: ServerMessage) => void;
 
@@ -60,6 +61,8 @@ const SHOWN_GRACE_MS = 5_000;
 const SOCKET_CLOSING = 2;
 const SOCKET_CLOSED = 3;
 const DISCONNECTED: SubmitResult = { ok: false, code: "disconnected", message: "the connection dropped before the pane confirmed this message" };
+/** The connection dropped before the request's frame left: nothing can have reached the pane. */
+const NOT_TRANSMITTED: SubmitResult = { ok: false, code: "not_transmitted", message: "the connection dropped before this message was sent" };
 
 /**
  * Where the connection stands. `connected` and the input checks still read the socket itself:
@@ -173,7 +176,9 @@ export class HerdrSocket {
   private nextPing = 1;
   /** a page shown again or a network back: a reconnect waiting out its backoff runs now */
   private readonly onWake = (event?: Event): void => {
-    if (event?.type === "pageshow") this.left = false;
+    if (event?.type === "pageshow") { this.left = false; this.trace.record("pageshow"); }
+    if (event?.type === "online") this.trace.record("online");
+    if (event?.type === "visibilitychange") this.trace.record(document.visibilityState === "hidden" ? "hidden" : "visible");
     // a page on its way into the back/forward cache connects again only when it is shown
     if (this.left) return;
     if (typeof document !== "undefined" && document.visibilityState === "hidden") {
@@ -200,6 +205,7 @@ export class HerdrSocket {
    */
   private readonly onLeave = (): void => {
     if (this.disposed) return;
+    this.trace.record("pagehide", { pending: this.submits.size }, true);
     this.left = true;
     this.pageHidden = true;
     if (this.reconnectTimer !== null) window.clearTimeout(this.reconnectTimer);
@@ -235,8 +241,17 @@ export class HerdrSocket {
   /** Receipts match the operation and captured target on this connection, never an ID alone. */
   private readonly requests = new Map<number, { type: "submit" | "pending-action" | "secret"; paneId: string; queued?: boolean; pendingId?: string }>();
 
+  private readonly trace: ConnectionTrace;
+  private connectionEpoch = 0;
+  private probeRefusalRecorded = false;
+
   constructor(url: string = defaultUrl()) {
     this.url = url;
+    this.trace = new ConnectionTrace(url, () => ({
+      connection: this.connectionEpoch, socket_state: this.socket?.readyState ?? null,
+      visibility: typeof document === "undefined" ? "unknown" : document.visibilityState === "hidden" ? "hidden" : "visible",
+      online: typeof navigator === "undefined" || typeof navigator.onLine !== "boolean" ? null : navigator.onLine,
+    }));
   }
 
   get connected(): boolean {
@@ -279,8 +294,11 @@ export class HerdrSocket {
     if (this.reconnectTimer !== null) window.clearTimeout(this.reconnectTimer);
     this.reconnectTimer = null;
     const socket = new WebSocket(this.url);
+    const epoch = ++this.connectionEpoch;
+    const started = Date.now();
     this.socket = socket;
     this.connectionState = "connecting";
+    this.trace.record("connect", { attempt: this.retries });
     this.features = new Set();
     this.inputReady.clear();
     this.outputSeen.clear();
@@ -290,6 +308,7 @@ export class HerdrSocket {
     this.connectTimer = window.setTimeout(() => {
       this.connectTimer = null;
       if (this.socket !== socket || socket.readyState !== WebSocket.CONNECTING) return;
+      this.trace.record("connect_timeout", { elapsed_ms: Date.now() - started, attempt: this.connectTimeouts }, true);
       this.connectTimeouts += 1;
       socket.close();
       // the close event of an attempt that never opened may come late or not at all: end it here
@@ -301,6 +320,7 @@ export class HerdrSocket {
       this.clearConnectTimer();
       this.connectTimeouts = 0;
       this.connectionState = "open";
+      this.trace.record("open", { elapsed_ms: Date.now() - started });
       this.openedAt = Date.now();
       this.lastFrameAt = this.openedAt;
       this.watchIdle(socket);
@@ -321,6 +341,7 @@ export class HerdrSocket {
 
     socket.addEventListener("message", (event) => {
       if (this.socket !== socket) return;
+      this.trace.flush();
       // any frame postpones the idle probe; only the pong of a ping in flight ends a probe (a frame
       // the browser had buffered before a sleep does not prove the path is still there)
       this.lastFrameAt = Date.now();
@@ -334,6 +355,7 @@ export class HerdrSocket {
       // ended before the handlers run, so the input checks they make already read true; the pong
       // goes on to them, so a view that read input as refused during the probe reads it again
       if (message.type === "pong" && this.probeIds.has(message.id)) {
+        this.trace.record("pong");
         this.probeDrops = 0;
         this.endProbe();
       }
@@ -366,6 +388,7 @@ export class HerdrSocket {
         }
         this.markSnapshot();
       }
+      if (message.type === "error" && message.code === "attach_held") this.trace.record("input_held", {}, true);
       if (message.type === "watch-end") this.watched.delete(message.pane_id);
       if (message.type === "pty-data") this.outputSeen.add(message.pane_id);
       if ((message.type === "input-ready" && message.ready !== false) || (message.type === "pty-data" && this.snapshotKnown && !this.features.has("input-ready"))) {
@@ -400,6 +423,7 @@ export class HerdrSocket {
     });
 
     socket.addEventListener("close", (event) => {
+      this.trace.record("close", { code: event.code, pending: this.submits.size, connection: epoch, socket_state: socket.readyState }, event.code !== 1000 && event.code !== 1001);
       if (this.endedEarly.has(socket)) {
         this.endedEarly.delete(socket);
         // the server's own close still decides whether output stopped, even after a replacement started
@@ -419,6 +443,7 @@ export class HerdrSocket {
     });
 
     socket.addEventListener("error", () => {
+      this.trace.record("socket_error", { connection: epoch, socket_state: socket.readyState }, true);
       socket.close();
     });
   }
@@ -436,6 +461,7 @@ export class HerdrSocket {
 
   /** Drops the current connection: its submits settle as disconnected and the disconnect handlers run. */
   private endConnection(): void {
+    if (this.submits.size > 0) this.trace.record("submit_disconnect", { pending: this.submits.size }, true);
     if (this.openedAt !== null && Date.now() - this.openedAt >= STABLE_CONNECTION_MS) this.retries = 0;
     this.openedAt = null;
     this.socket = null;
@@ -468,6 +494,7 @@ export class HerdrSocket {
     const socket = this.socket;
     if (!socket || socket.readyState !== WebSocket.OPEN || !this.pingKnown || this.probeTimer !== null) return;
     this.connectionState = "probing";
+    this.probeRefusalRecorded = false;
     // a paused probe goes on with a fresh ping: whoever waits on it keeps waiting
     if (this.probePaused) this.probePaused = false;
     else this.probeDone = new Promise((resolve) => { this.markProbeDone = resolve; });
@@ -503,12 +530,14 @@ export class HerdrSocket {
       // the page was frozen past the deadline: no pong could have been read meanwhile, so ask again,
       // and a pong to a ping sent before the freeze no longer counts
       if (Date.now() - armedAt > deadline + PROBE_OVERDUE_MS) {
+        this.trace.record("probe_overdue", { elapsed_ms: Date.now() - armedAt, attempt }, true);
         this.probeIds.clear();
         this.ping(socket, 1);
       }
       else if (attempt === 1) this.ping(socket, 2);
       else this.drop(socket);
     }, deadline);
+    this.trace.record(attempt === 1 ? "probe" : "probe_retry", { attempt }, attempt === 2);
     const id = this.nextPing++;
     this.probeIds.add(id);
     // a send that throws leaves the deadline to drop the socket
@@ -537,6 +566,7 @@ export class HerdrSocket {
    * are ignored (it is no longer this.socket).
    */
   private drop(socket: WebSocket): void {
+    this.trace.record("probe_drop", { pending: this.submits.size }, true);
     this.probeDrops += 1;
     this.endConnection();
     // a server close (4008) that comes after this still stops output
@@ -552,6 +582,7 @@ export class HerdrSocket {
     if (this.idleTimer !== null) window.clearInterval(this.idleTimer);
     this.idleTimer = window.setInterval(() => {
       if (this.socket !== socket) return;
+      if (socket.readyState === SOCKET_CLOSING) this.trace.record("closing_wait", { elapsed_ms: Date.now() - this.lastFrameAt, pending: this.submits.size }, true);
       // a hidden page is probed when it comes back (wake)
       if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
       if (Date.now() - this.lastFrameAt >= IDLE_PROBE_MS) this.probe();
@@ -820,7 +851,7 @@ export class HerdrSocket {
 
   /** `stop`: the composer's Stop, a lone ESC the bridge keeps ahead of the next message. */
   sendInput(paneId: string, text: string, stop = false): boolean {
-    if (!this.canInput(paneId)) return false;
+    if (!this.canInput(paneId)) { this.traceProbeRefusal(); return false; }
     try { this.rawSend(stop ? { type: "input", pane_id: paneId, text, stop: true } : { type: "input", pane_id: paneId, text }); return true; } catch { return false; }
   }
 
@@ -854,7 +885,7 @@ export class HerdrSocket {
     return (async (): Promise<SubmitResult> => {
       await Promise.race([this.snapshotSeen, new Promise((resolve) => window.setTimeout(resolve, SNAPSHOT_WAIT_MS))]);
       // a liveness probe in flight is waited out: nothing is sent on a socket that may be dead
-      if (!(await this.probeSettled(socket))) return DISCONNECTED;
+      if (!(await this.probeSettled(socket))) return NOT_TRANSMITTED;
       // refused here, before any frame left: nothing was typed
       if (this.mode === "observe") return { ok: false, code: "read_only", message: "Observe connections cannot submit messages.", typed: false };
       // an older bridge would type it into whatever runs in the pane, a shell included
@@ -881,7 +912,7 @@ export class HerdrSocket {
     if (!this.connected || socket === null || this.mode === "observe") return null;
     return (async (): Promise<SubmitResult> => {
       await Promise.race([this.snapshotSeen, new Promise((resolve) => window.setTimeout(resolve, SNAPSHOT_WAIT_MS))]);
-      if (!(await this.probeSettled(socket))) return DISCONNECTED;
+      if (!(await this.probeSettled(socket))) return NOT_TRANSMITTED;
       if (this.mode === "observe") return { ok: false, code: "read_only", message: "Observe connections cannot change pending messages.", typed: false };
       if (!this.canQueueMessages()) return { ok: false, code: "pending_input_unsupported", message: "Update this PC to manage pending messages.", typed: false };
       return this.submitRequest({ type: "pending-action", id: this.nextSubmit++, pane_id: paneId, pending_id: pendingId, action,
@@ -898,12 +929,13 @@ export class HerdrSocket {
       window.setTimeout(() => {
         if (!this.submits.delete(id)) return;
         this.requests.delete(id);
+        this.trace.record("submit_timeout", { request_id: id }, true);
         resolve({ ok: false, code: "timeout", message: "the pane did not confirm this request in time" });
       }, SUBMIT_TIMEOUT_MS);
     });
-    try { this.rawSend(message); }
+    try { this.rawSend(message); this.trace.record("submit_sent", { request_id: id }); }
     catch {
-      this.submits.get(id)?.(DISCONNECTED);
+      this.submits.get(id)?.(NOT_TRANSMITTED);
       this.submits.delete(id);
       this.requests.delete(id);
     }
@@ -944,6 +976,7 @@ export class HerdrSocket {
   }
 
   private resolveRequest(id: number, result: SubmitResult): void {
+    if (this.requests.get(id)?.type !== "secret") this.trace.record("submit_result", { request_id: id, result: result.ok ? "ok" : "refused" });
     const settle = this.submits.get(id);
     this.submits.delete(id);
     this.requests.delete(id);
@@ -956,12 +989,19 @@ export class HerdrSocket {
     this.requests.clear();
   }
 
+  private traceProbeRefusal(): void {
+    if (!this.probing || this.probeRefusalRecorded) return;
+    this.probeRefusalRecorded = true;
+    this.trace.record("probe_input_blocked", {}, true);
+  }
+
   sendKeys(paneId: string, keys: string[]): boolean {
-    if (!this.canInput(paneId)) return false;
+    if (!this.canInput(paneId)) { this.traceProbeRefusal(); return false; }
     try { this.rawSend({ type: "keys", pane_id: paneId, keys }); return true; } catch { return false; }
   }
 
   close(): void {
+    this.trace.close();
     this.disposed = true;
     if (this.reconnectTimer !== null) window.clearTimeout(this.reconnectTimer);
     this.reconnectTimer = null;

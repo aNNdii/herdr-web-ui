@@ -9,7 +9,7 @@ import type { TelemetrySettings } from "../../shared/telemetry.ts";
 import { mirrorPalette, SHARED_SETTING_KEYS, type SharedSettingKey } from "../../shared/preferences.ts";
 import { createContext, createElement, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useState, type ReactNode } from "react";
 import { blockComments } from "./blockComments.ts";
-import { isThemeId, terminalColors, themeColor as themeTableColor, type ThemeId, type ThemeEntry } from "./themes.ts";
+import { DEFAULT_THEME, isThemeId, terminalColors, themeColor as themeTableColor, type ThemeId, type ThemeEntry } from "./themes.ts";
 import { LANGUAGE_SETTINGS, LOCALE_TAGS, resolveLanguage, setCurrentLanguage, type Language, type LanguageSetting } from "./i18n.ts";
 import type { AlertPrefs, DoneAlerts } from "../../shared/notify-policy.ts";
 import { chatFontStack, sanitizeFontFamily } from "./fontFamily.ts";
@@ -31,7 +31,7 @@ export type AgentMarks = "color" | "mono";
 export type UsageCount = "used" | "left";
 /** the limit a plan meter shows: the plan's week, or its short session (5 hours on Claude and Codex) */
 export type UsageGlance = "week" | "session";
-/** amber: the herdr look (the default); charcoal: neutral Ghostty-style dark;
+/** amber: the herdr look (the default before codex); charcoal: neutral Ghostty-style dark;
  *  catppuccin: Catppuccin Mocha in dark, Latte in light. A record naming a palette that was removed
  *  (report, lilac, forest) loads as amber. */
 export type Palette = ThemeId;
@@ -58,6 +58,9 @@ export type DictationLanguage = "auto" | (typeof DICTATION_LANGUAGES)[number];
 export type DefaultView = "auto" | "chat" | "terminal";
 import { sanitizeShortcutOverrides, type ShortcutOverrides } from "./shortcutBindings.ts";
 import type { StatusIndicators } from "./status.ts";
+import { WEB_LINK_TARGETS, type WebLinkTarget } from "./webPanel.ts";
+import { FILE_OPEN_TARGETS, type FilePresentation } from "./filePresentation.ts";
+import { CLAUDE_LAUNCH_MODES, CODEX_LAUNCH_MODES, type ClaudeLaunchMode, type CodexLaunchMode } from "./agentLaunchMode.ts";
 
 export interface Settings {
   terminalInputMode: "auto" | "line" | "direct";
@@ -165,6 +168,14 @@ export interface Settings {
   markdownWidth: MarkdownWidth;
   /** a repository diff as one column of old and new lines, or the two side by side (a phone shows one column either way) */
   diffStyle: DiffStyle;
+  /** where a file opens from the chat, terminal or Files: the popup, or beside the pane on a wide window (lib/filePresentation.ts) */
+  fileOpen: FilePresentation;
+  /** where a click on a web address opens it: a new tab, or the panel beside the pane (lib/webPanel.ts); Shift opens the other one */
+  webLinks: WebLinkTarget;
+  /** the mode a Claude Code started from the new workspace, tab and worktree dialogs runs in (lib/agentLaunchMode.ts); default adds no flag */
+  claudeLaunchMode: ClaudeLaunchMode;
+  /** the same for Codex: a sandbox and approval preset */
+  codexLaunchMode: CodexLaunchMode;
   /** comment mode for the whole app (file viewer code and preview, chat); a stored `codeCommentMode` is read into it once */
   commentMode: boolean;
   /** comments beside the text: full cards in a margin, or only a count per place */
@@ -192,10 +203,11 @@ export const DIFF_STYLES = ["unified", "split"] as const;
 export type DiffStyle = (typeof DIFF_STYLES)[number];
 
 /** Raw custom text, key combinations and account keys are never copied. Requiring every other
- * Settings field in the projection makes a new field require an explicit collection decision. */
+ * Settings field in the projection makes a new field require an explicit collection decision.
+ * fileOpen, webLinks and the launch modes are not collected: the telemetry schema (shared/telemetry.ts) does not carry them. */
 type TelemetrySourceSettings = Omit<Settings,
   "keyBarExtras" | "keyBarItems" | "shortcutOverrides" | "terminalFontFamily" | "chatFontFamily"
-  | "quickReplies" | "usageOrder" | "usageHidden"
+  | "quickReplies" | "usageOrder" | "usageHidden" | "fileOpen" | "webLinks" | "claudeLaunchMode" | "codexLaunchMode"
   // not collected: the composer's suggestion menus have no field in the report's schema
   | "suggestAgents" | "suggestSkills" | "suggestBuiltins"
   // not collected: the fork's comment settings have no field in the report's schema
@@ -282,7 +294,9 @@ export const SETTING_SCOPE = {
   paletteLight: "device", paletteDark: "device", statusIndicators: "device",
   voiceInput: "device", voiceLanguage: "device", voicePolishChat: "device", voicePolishTerminal: "device",
   // Viewer layout follows this screen, as chatWidth does.
-  wrapCode: "device", markdownWidth: "device", diffStyle: "device",
+  wrapCode: "device", markdownWidth: "device", diffStyle: "device", fileOpen: "device", webLinks: "device",
+  // a new agent starts the same way whichever device opened it
+  claudeLaunchMode: "shared", codexLaunchMode: "shared",
   // comments are kept in this browser's storage, so how they are made is this device's too
   comments: "device", commentMode: "device", commentLayout: "device", commentOnSelect: "device", codeCommentLineClick: "device", mobileCommentGesture: "device", mobileCommentInput: "device",
 } as const satisfies Record<keyof Settings, "shared" | "device">;
@@ -309,11 +323,11 @@ export const DEFAULT_SETTINGS: Settings = {
   agentOrder: "workspace",
   agentMarks: "color",
   statusIndicators: "classic",
-  palette: "amber",
-  paletteLight: "amber",
-  paletteDark: "amber",
-  darkTheme: "amber",
-  lightTheme: "amber",
+  palette: DEFAULT_THEME,
+  paletteLight: DEFAULT_THEME,
+  paletteDark: DEFAULT_THEME,
+  darkTheme: DEFAULT_THEME,
+  lightTheme: DEFAULT_THEME,
   terminalFontSize: 13,
   terminalWheelSpeed: 1,
   terminalFontFamily: "",
@@ -341,8 +355,8 @@ export const DEFAULT_SETTINGS: Settings = {
   quickReplies: ["continue", "yes", "no", "commit and push", "retry"],
   showQuickReplies: false,
   showUsage: false,
-  usageCount: "used",
-  usageGlance: "week",
+  usageCount: "left",
+  usageGlance: "session",
   defaultView: "auto",
   usageOrder: [],
   usageHidden: [],
@@ -359,6 +373,10 @@ export const DEFAULT_SETTINGS: Settings = {
   mobileCommentGesture: "hold",
   mobileCommentInput: "sheet",
   diffStyle: "unified",
+  fileOpen: "popup",
+  webLinks: "tab",
+  claudeLaunchMode: "default",
+  codexLaunchMode: "default",
 };
 
 export const QUICK_REPLIES_MAX = 12;
@@ -468,12 +486,13 @@ export function sanitizeSettings(raw: unknown): Settings {
   const record = typeof raw === "object" && raw !== null ? (raw as Record<string, unknown>) : {};
   const theme = record["theme"] === "dark" || record["theme"] === "light" || record["theme"] === "system" ? record["theme"] : DEFAULT_SETTINGS.theme;
   const palette = isThemeId(record["palette"]) ? record["palette"] : "amber";
-  // Absence migrates; an explicitly unknown id falls back to amber, not a stale pair.
+  // Absence migrates (a record from before themes wore amber, so it keeps amber); an explicitly
+  // unknown id falls back to the default, not a stale pair.
   const darkTheme = "darkTheme" in record
-    ? (isThemeId(record["darkTheme"]) ? record["darkTheme"] : "amber")
+    ? (isThemeId(record["darkTheme"]) ? record["darkTheme"] : DEFAULT_THEME)
     : theme === "dark" ? palette : isThemeId(record["paletteDark"]) ? record["paletteDark"] : theme === "system" && record["paletteDark"] !== undefined ? "amber" : palette;
   const lightTheme = "lightTheme" in record
-    ? (isThemeId(record["lightTheme"]) ? record["lightTheme"] : "amber")
+    ? (isThemeId(record["lightTheme"]) ? record["lightTheme"] : DEFAULT_THEME)
     : theme === "light" ? palette : isThemeId(record["paletteLight"]) ? record["paletteLight"] : theme === "system" && record["paletteLight"] !== undefined ? "amber" : palette;
   const density = record["density"];
   const font = record["terminalFontSize"];
@@ -552,6 +571,10 @@ export function sanitizeSettings(raw: unknown): Settings {
     mobileCommentGesture: MOBILE_COMMENT_GESTURES.find((gesture) => gesture === record["mobileCommentGesture"]) ?? DEFAULT_SETTINGS.mobileCommentGesture,
     mobileCommentInput: MOBILE_COMMENT_INPUTS.find((input) => input === record["mobileCommentInput"]) ?? DEFAULT_SETTINGS.mobileCommentInput,
     diffStyle: DIFF_STYLES.find((style) => style === record["diffStyle"]) ?? DEFAULT_SETTINGS.diffStyle,
+    fileOpen: FILE_OPEN_TARGETS.find((target) => target === record["fileOpen"]) ?? DEFAULT_SETTINGS.fileOpen,
+    webLinks: WEB_LINK_TARGETS.find((target) => target === record["webLinks"]) ?? DEFAULT_SETTINGS.webLinks,
+    claudeLaunchMode: CLAUDE_LAUNCH_MODES.find((mode) => mode === record["claudeLaunchMode"]) ?? DEFAULT_SETTINGS.claudeLaunchMode,
+    codexLaunchMode: CODEX_LAUNCH_MODES.find((mode) => mode === record["codexLaunchMode"]) ?? DEFAULT_SETTINGS.codexLaunchMode,
   };
 }
 
