@@ -129,6 +129,8 @@ export interface Settings {
   comments: boolean;
   /** request a screen wake lock while a pane is open in this visible tab */
   keepScreenOn: boolean;
+  /** the sidebar footer offers Install app while the app runs in a browser tab; off hides it there, and Settings → Phone & devices turns it back on */
+  showInstallApp: boolean;
   /** UI language; `system` follows the browser (src/lib/i18n.ts) */
   language: LanguageSetting;
   /** alerts on this device at all: the bell turns them off (push subscription dropped) and on */
@@ -211,7 +213,9 @@ type TelemetrySourceSettings = Omit<Settings,
   // not collected: the composer's suggestion menus have no field in the report's schema
   | "suggestAgents" | "suggestSkills" | "suggestBuiltins"
   // not collected: the fork's comment settings have no field in the report's schema
-  | "comments" | "commentMode" | "commentLayout" | "commentOnSelect" | "codeCommentLineClick" | "mobileCommentGesture" | "mobileCommentInput">;
+  | "comments" | "commentMode" | "commentLayout" | "commentOnSelect" | "codeCommentLineClick" | "mobileCommentGesture" | "mobileCommentInput"
+  // not collected: the fork's sidebar Install app switch has no field in the report's schema
+  | "showInstallApp">;
 
 /** Compare structured custom settings by content against this app's built-in defaults. */
 function differsFromDefault(value: unknown, defaultValue: unknown): boolean {
@@ -290,7 +294,7 @@ export const SETTING_SCOPE = {
   terminalFontSize: "device",
   terminalWheelSpeed: "device", terminalFontFamily: "device", paneClipboard: "device", releasePaneAway: "device",
   chatFontSize: "device", chatFontFamily: "device", uiFontSize: "device", chatWidth: "device", enterSends: "device",
-  keepScreenOn: "device", alertsOn: "device", alertInput: "device", alertDone: "device", alertInApp: "device", alertSound: "device",
+  keepScreenOn: "device", showInstallApp: "device", alertsOn: "device", alertInput: "device", alertDone: "device", alertInApp: "device", alertSound: "device",
   paletteLight: "device", paletteDark: "device", statusIndicators: "device",
   voiceInput: "device", voiceLanguage: "device", voicePolishChat: "device", voicePolishTerminal: "device",
   // Viewer layout follows this screen, as chatWidth does.
@@ -346,6 +350,7 @@ export const DEFAULT_SETTINGS: Settings = {
   showThinking: false,
   comments: true,
   keepScreenOn: false,
+  showInstallApp: true,
   language: "system",
   alertsOn: true,
   alertInput: true,
@@ -539,6 +544,7 @@ export function sanitizeSettings(raw: unknown): Settings {
     showThinking: typeof record["showThinking"] === "boolean" ? record["showThinking"] : DEFAULT_SETTINGS.showThinking,
     comments: typeof record["comments"] === "boolean" ? record["comments"] : DEFAULT_SETTINGS.comments,
     keepScreenOn: typeof record["keepScreenOn"] === "boolean" ? record["keepScreenOn"] : DEFAULT_SETTINGS.keepScreenOn,
+    showInstallApp: typeof record["showInstallApp"] === "boolean" ? record["showInstallApp"] : DEFAULT_SETTINGS.showInstallApp,
     language: LANGUAGE_SETTINGS.includes(record["language"] as LanguageSetting) ? record["language"] as LanguageSetting : DEFAULT_SETTINGS.language,
     alertsOn: typeof record["alertsOn"] === "boolean" ? record["alertsOn"] : DEFAULT_SETTINGS.alertsOn,
     alertInput: typeof record["alertInput"] === "boolean" ? record["alertInput"] : DEFAULT_SETTINGS.alertInput,

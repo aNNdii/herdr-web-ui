@@ -127,6 +127,14 @@ it("keeps a tab's pane while out of use until this device turns the pause on", (
   expect(sanitizeSettings({ releasePaneAway: "true" }).releasePaneAway).toBe(false);
 });
 
+it("offers Install app in the sidebar until this device hides it", () => {
+  expect(DEFAULT_SETTINGS.showInstallApp).toBe(true);
+  expect(SETTING_SCOPE.showInstallApp).toBe("device");
+  expect(sanitizeSettings({}).showInstallApp).toBe(true);
+  expect(sanitizeSettings({ showInstallApp: false }).showInstallApp).toBe(false);
+  expect(sanitizeSettings({ showInstallApp: "false" }).showInstallApp).toBe(true);
+});
+
 it("keeps the screen wake lock off until this device explicitly enables it", () => {
   expect(DEFAULT_SETTINGS.keepScreenOn).toBe(false);
   expect(sanitizeSettings({}).keepScreenOn).toBe(false);
