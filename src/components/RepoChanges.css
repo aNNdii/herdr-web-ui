@@ -24,6 +24,15 @@
   gap: var(--space-1);
 }
 
+/* what this PC's older bridge leaves out: a calm line under the segments, never an alert */
+.repo-changes-bridge {
+  margin: 0;
+  padding: var(--space-1) var(--space-2);
+  border-bottom: var(--hairline) solid var(--border);
+  color: var(--text-dim);
+  font-size: var(--fs-xs);
+}
+
 .repo-changes-commits {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;

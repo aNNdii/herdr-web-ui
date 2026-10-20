@@ -107,6 +107,24 @@ it("asks for the merge base only in a commit comparison", async () => {
   expect(requests[1]).toStartWith("/api/machines/pc-2/workspace/diff/file?");
 });
 
+it("sends a worktree's revisions with an uncommitted ask, and none with the pane's own", async () => {
+  const requests: string[] = [];
+  globalThis.fetch = (async (url: string) => {
+    requests.push(url);
+    return Response.json({});
+  }) as typeof fetch;
+  await fetchRepoDiffFiles({ paneId: "w1:p1", directory: null, scope: "uncommitted", base: null, head: null });
+  await fetchRepoDiffFiles({ paneId: "w1:p1", directory: "/work/feat-x", scope: "uncommitted", base: "origin/next", head: "feat/x", mergeBase: true });
+  await fetchRepoDiffFile({ paneId: "w1:p1", directory: "/work/feat-x", scope: "uncommitted", base: "c".repeat(40), head: "feat/x" }, "src/a.ts", null);
+  await fetchRepoDiffFiles({ paneId: "w1:p1", directory: null, scope: "staged", base: "main", head: "feat/x", mergeBase: true });
+  expect(requests).toEqual([
+    "/api/workspace/diff/files?pane_id=w1%3Ap1&scope=uncommitted",
+    "/api/workspace/diff/files?pane_id=w1%3Ap1&directory=%2Fwork%2Ffeat-x&scope=uncommitted&base=origin%2Fnext&head=feat%2Fx&merge_base=1",
+    `/api/workspace/diff/file?pane_id=w1%3Ap1&directory=%2Fwork%2Ffeat-x&scope=uncommitted&base=${"c".repeat(40)}&head=feat%2Fx&path=src%2Fa.ts`,
+    "/api/workspace/diff/files?pane_id=w1%3Ap1&scope=staged",
+  ]);
+});
+
 it("reads a repository's branches through the PC's path, by pane or by folder", async () => {
   const requests: string[] = [];
   const list = { repository: { root: "/work", branch: "main", head: "a".repeat(40), detached: false, unborn: false }, branches: [{ name: "main", remote: false, worktree: "/work" }], default_base: "main", truncated: false, limits: { max_branches: 1000 } };

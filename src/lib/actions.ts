@@ -53,6 +53,8 @@ export interface AppActions {
   refresh: () => void;
   /** null without a pane: the files of its folder, each opened in the file viewer */
   openFiles: (() => void) | null;
+  /** null without a pane: the review of its folder, on Changed files → Uncommitted */
+  openReview: (() => void) | null;
   /**
    * herdr's split beside the selected pane (its prefix+v and prefix+-), null without a pane. The
    * selection stays on this pane, as herdr's --no-focus keeps its focus, unless `focus` asks for

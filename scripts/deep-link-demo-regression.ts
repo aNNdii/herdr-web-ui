@@ -545,8 +545,20 @@ try {
         await palette.waitFor();
         await page.waitForFunction(() => document.activeElement?.matches(".command-palette .palette-search input") === true, undefined, { timeout: 5000 });
         assert.equal(await more.count(), 0, "the More sheet has gone");
+        await page.keyboard.press("Escape");
+        await palette.waitFor({ state: "detached" });
+        // a phone's header has no Review button: More has Review changes right after Browse files
+        assert.equal(await page.locator(".header-review-button").count(), 0, "the phone header has no Review button");
+        await page.locator(".header-more-button").tap();
+        await more.waitFor();
+        const labels = await more.locator(".row-sheet-item .row-sheet-label").allTextContents();
+        assert.equal(labels.indexOf("Review changes"), labels.indexOf("Browse files") + 1, "Review changes follows Browse files in More");
+        await more.getByRole("button", { name: "Review changes", exact: true }).tap();
+        await page.getByRole("dialog", { name: "Review", exact: true }).waitFor();
+        assert.equal(await more.count(), 0, "the More sheet has gone");
+        await files.waitFor({ state: "detached" });
       } finally { await palettePhone.close(); }
-      console.log("PASS phone header and Files omit palette buttons; More's first item opens the palette by touch; wider Files and keyboard shortcuts still open it");
+      console.log("PASS phone header and Files omit palette buttons; More's first item opens the palette by touch; wider Files and keyboard shortcuts still open it; More's Review changes opens the review");
 
       // a phone's ⋯ sheet is an entry of its own: Back closes it and stays on the pane; a sheet
       // closed by Cancel or by an item leaves no entry behind, so the next Back goes to the pane before

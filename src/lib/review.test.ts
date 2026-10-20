@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "bun:test";
 
-import { storedHideViewed, storedShowIgnored, storeHideViewed, storeShowIgnored, workspacePick } from "./review.ts";
+import { storedHideViewed, storedNewFilesApart, storedShowIgnored, storeHideViewed, storeNewFilesApart, storeShowIgnored, workspacePick } from "./review.ts";
 
 const original = Object.getOwnPropertyDescriptor(globalThis, "window");
 
@@ -62,6 +62,18 @@ describe("the review's per-device toggles", () => {
     expect(storage.get("herdr-web-ui:review-show-ignored")).toBe("1");
     expect(storedShowIgnored()).toBe(true);
     expect(storedHideViewed()).toBe(false);
+  });
+
+  it("keeps List new files separately under its own key, off until turned on", () => {
+    const storage = memoryStorage();
+    withStorage(storage);
+    expect(storedNewFilesApart()).toBe(false);
+    storeNewFilesApart(true);
+    expect(storage.get("herdr-web-ui:review-new-files-apart")).toBe("1");
+    expect(storedNewFilesApart()).toBe(true);
+    expect(storedHideViewed()).toBe(false);
+    storeNewFilesApart(false);
+    expect(storage.has("herdr-web-ui:review-new-files-apart")).toBe(false);
   });
 
   it("stays off and silent without storage (private mode)", () => {

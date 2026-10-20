@@ -1,5 +1,5 @@
 import { type CSSProperties, type DragEvent, lazy, type ReactNode, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
-import { Bell, Ellipsis, FolderOpen, Link, Menu, MessageSquare, PanelLeft, Search, SquareTerminal, X } from "lucide-react";
+import { Bell, Ellipsis, FolderOpen, GitCompareArrows, Link, Menu, MessageSquare, PanelLeft, Search, SquareTerminal, X } from "lucide-react";
 
 import type { AgentStatus, ServerMessage, AccessRefusal, HealthAuth, HerdrPane } from "../shared/protocol.ts";
 import { ApiError, authenticate, createTab, fetchHealth, fetchBridgeHealth, fetchMachines, fetchSession, pairDevice, routeMissing, sendTestPush, signOut, splitPane, zoomPane, type HealthInfo } from "./lib/api.ts";
@@ -1432,6 +1432,14 @@ export function App() {
       enableNotifications: bellVisible && bell.run === enableNotifications ? () => void enableNotifications() : null,
       refresh: () => void load(),
       openFiles: selectedPaneId !== null ? () => { setDrawerOpen(false); setFilesOpen(true); } : null,
+      // the palette and the Files dialog's Review button: the selected pane's folder as it is now
+      openReview: selectedPaneId !== null ? () => {
+        const pane = snapshotRef.current?.panes.find((candidate) => candidate.pane_id === selectedPaneId);
+        if (!pane) return;
+        setDrawerOpen(false);
+        setFilesOpen(false);
+        setReview({ path: null, paneId: pane.pane_id, directory: pane.foreground_cwd ?? pane.cwd ?? null, machineId: selectedMachineId, id: Date.now() });
+      } : null,
       // herdr's layout calls on the selected pane (components/TabStrip.tsx has the same for the
       // tab's own menu): the new layout reaches every client as session-changed, so only a
       // refusal is left to say, and that is logged as other background failures are
@@ -1508,6 +1516,8 @@ export function App() {
     ...(selectedPane && !selectedPane.restore_error ? [{ id: "find", label: t("Find in terminal"), icon: Search, run: actions.openFind }] : []),
     // from 769px Files has its own button beside the lens switch; a phone keeps it here
     ...(selectedPane && !wideScreen ? [{ id: "files", label: t("Browse files"), icon: FolderOpen, run: () => setFilesOpen(true) }] : []),
+    // the same for Review, which sits beside Files from 769px
+    ...(actions.openReview && !wideScreen ? [{ id: "review", label: t("Review changes"), icon: GitCompareArrows, run: actions.openReview }] : []),
     // the address says where the app is (lib/deepLink.ts); a phone has no address bar to copy it from
     { id: "copy-link", label: t("Copy link"), icon: Link, run: () => void copyText(window.location.href).then((ok) => { if (ok) setHeaderNote("copied"); }) },
     ...(bellVisible ? [{ id: "alerts", label: t("Alerts"), hint: bell.state, checked: bell.on, title: bell.title, icon: Bell, run: () => void bell.run() }] : []),
@@ -1634,6 +1644,11 @@ export function App() {
             <button type="button" className="icon-button header-files-button" aria-label={t("Browse files")} title={t("Browse files")} onClick={() => setFilesOpen(true)}>
               <FolderOpen />
             </button>
+            {actions.openReview && (
+              <button type="button" className="icon-button header-review-button" aria-label={t("Review changes")} title={t("Review changes")} onClick={actions.openReview}>
+                <GitCompareArrows />
+              </button>
+            )}
           </>
         )}
         <div className="header-meta">
@@ -1878,7 +1893,7 @@ export function App() {
         <FilesDialog start={selectedPane.foreground_cwd ?? selectedPane.cwd ?? ""} paneId={selectedPane.pane_id} viewing={(viewing !== null && !fileDocked) || diffViewing !== null || review !== null} onOpenFile={(path) => reviewFile(path, { paneId: selectedPane.pane_id, directory: selectedPane.foreground_cwd ?? selectedPane.cwd ?? null, machineId: selectedMachineId })}
           onOpenDiff={(comparison, file) => openDiff({ machineId: selectedMachineId, paneId: selectedPane.pane_id, directory: selectedPane.foreground_cwd ?? selectedPane.cwd ?? null, ...comparison, path: file.path, oldPath: file.old_path })}
           onBrowseFolders={(path) => actions.openPalette(folderQueryFor(path, null))}
-          onReview={() => { setFilesOpen(false); setReview({ path: null, paneId: selectedPane.pane_id, directory: selectedPane.foreground_cwd ?? selectedPane.cwd ?? null, machineId: selectedMachineId, id: Date.now() }); }}
+          onReview={actions.openReview ?? undefined}
           onClose={() => setFilesOpen(false)} />
       )}
       {/* the comments of one pane, opened from its chat's comments button or its composer's comments bar: as a dialog

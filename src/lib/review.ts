@@ -107,6 +107,17 @@ export function storeHideViewed(hidden: boolean): void {
   storeFlag(HIDE_VIEWED_KEY, hidden);
 }
 
+/** Whether the review's tree lists the new (untracked) files apart, under their own heading (in Changed files). */
+const NEW_FILES_APART_KEY = "herdr-web-ui:review-new-files-apart";
+
+export function storedNewFilesApart(): boolean {
+  return storedFlag(NEW_FILES_APART_KEY);
+}
+
+export function storeNewFilesApart(apart: boolean): void {
+  storeFlag(NEW_FILES_APART_KEY, apart);
+}
+
 /**
  * The changed files a review has marked as viewed, per device: for each repository (by PC and root), each file's path
  * with the stamp it had when it was marked (`RepoDiffFile.stamp`). A file whose stamp is another now has changed since,

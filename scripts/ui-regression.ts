@@ -850,12 +850,31 @@ try {
   await page.locator(".header-more-button").click();
   await page.locator('.row-menu [role="menuitem"]').first().waitFor();
   assert.equal(await page.locator('.row-menu [role="menuitem"]', { hasText: "Browse files" }).count(), 0, "Files left the More menu on a computer");
+  assert.equal(await page.locator('.row-menu [role="menuitem"]', { hasText: "Review changes" }).count(), 0, "Review is not in the More menu on a computer");
   await page.keyboard.press("Escape");
   await page.locator(".row-menu").waitFor({ state: "detached" });
   await filesButton.click();
   await page.getByRole("dialog", { name: "Files", exact: true }).waitFor();
   await page.getByRole("button", { name: "Close files", exact: true }).click();
   await page.getByRole("dialog", { name: "Files", exact: true }).waitFor({ state: "detached" });
+  // Review changes is the header's own button right beside Files, and opens the review dialog
+  const reviewButton = page.locator(".app-header .header-files-button + .header-review-button");
+  assert.equal(await reviewButton.count(), 1, "a computer's header has a Review button beside Files");
+  assert.equal(await reviewButton.getAttribute("aria-label"), "Review changes");
+  assert.equal(await reviewButton.getAttribute("title"), "Review changes");
+  await reviewButton.click();
+  await page.getByRole("dialog", { name: "Review", exact: true }).waitFor();
+  await page.getByRole("button", { name: "Close review", exact: true }).click();
+  await page.getByRole("dialog", { name: "Review", exact: true }).waitFor({ state: "detached" });
+  // the narrowest width with both buttons, beside an open sidebar, still fits the window
+  const headerViewport = page.viewportSize()!;
+  await page.setViewportSize({ width: 769, height: headerViewport.height });
+  await reviewButton.waitFor();
+  assert.equal(await page.locator(".app.sidebar-collapsed").count(), 0, "the sidebar is open at 769px");
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, "no horizontal overflow at 769px");
+  assert.equal(await page.locator(".app-header").evaluate((header) => header.scrollWidth <= header.clientWidth), true, "the header's buttons fit at 769px");
+  await page.setViewportSize(headerViewport);
+  console.log("PASS Review changes sits beside Files in a computer's header, not in More, and fits at 769px");
   // before the permission question is answered the item already reads as on: in-app alerts show
   assert.equal(await alertsState(page), "On in the app");
   assert.equal(await alertsOffMarked(page), false, "alerts that are on leave the More button unmarked");

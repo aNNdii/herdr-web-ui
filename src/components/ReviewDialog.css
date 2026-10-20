@@ -59,8 +59,7 @@
   color: var(--status-done);
 }
 
-/* the tree's filter: the app's field, on the tree's full width, the ignored files' toggle beside it in All files (Hide
-   viewed files in Changed files) */
+/* the tree's filter: the app's field, on the tree's full width, View options beside it (ReviewOptions.css) */
 .review-filter {
   flex: none;
   display: flex;
@@ -73,11 +72,6 @@
   min-width: 0;
   width: 100%;
   box-sizing: border-box;
-}
-
-.review-ignored,
-.review-hide-viewed {
-  flex: none;
 }
 
 /* why the list is short, and under it Show viewed files once every file is viewed; a file still shown follows */
@@ -129,7 +123,7 @@
   font-size: var(--fs-md);
 }
 
-/* the second line under the title: secondary, small and dim */
+/* the second line under the title: what is compared (ComparePicker.css), or a plain folder's place; small and dim */
 .review-meta {
   display: flex;
   flex-wrap: wrap;
@@ -148,19 +142,6 @@
 
 .review-meta-warning {
   color: var(--status-blocked);
-}
-
-/* the branch, after a small glyph */
-.review-meta-branch {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-1);
-  font-family: var(--font-mono);
-}
-
-.review-meta-branch svg {
-  width: 12px;
-  height: 12px;
 }
 
 /* a plain folder's parent: one line, cut at its end (where it starts is what it says; the title names the folder) */
@@ -299,6 +280,27 @@
      it in a `calc()`, where a bare zero is no length */
   --trees-level-gap-override: 0px;
   overflow: hidden;
+}
+
+/* List new files separately: the changed files' tree, then a heading and the new files' tree. Each is as tall as its
+   rows (`--review-tree-rows`, every folder open, set by ReviewDialog.tsx; a row is the library's own height), the
+   first taking the room left; with less room both give way in step and scroll, neither below three rows */
+.review-tree.is-split {
+  --review-tree-height: calc(var(--review-tree-rows) * var(--trees-item-height, 30px) + 2 * var(--space-1) + 2px);
+  flex: 1 1 var(--review-tree-height);
+  min-height: min(var(--review-tree-height), calc(3 * var(--trees-item-height, 30px) + 2 * var(--space-1) + 2px));
+}
+
+.review-tree.is-split.is-new {
+  flex-grow: 0;
+}
+
+.review-tree-heading {
+  flex: none;
+  margin: 0;
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-medium);
+  color: var(--text-dim);
 }
 
 .review-file-pane {
@@ -515,24 +517,18 @@
   padding: var(--space-4);
 }
 
-/* what the changes are compared with: the segmented choice, and for Branches the two fields beneath it, stacked at full width */
-.review-compare {
-  flex: none;
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-2);
+/* under the comparison: what this PC's older bridge leaves out, a worktree that moved on, a branch list that failed,
+   each a calm line, never an alert; a refused comparison in red, its part marked */
+.review-compare-note,
+.review-compare-error {
+  margin: 0;
+  line-height: 1.3;
+  color: var(--text-dim);
+  font-size: var(--fs-xs);
 }
 
-.review-branches {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  gap: var(--space-3);
-}
-
-/* the app's labelled fields (styles.css `.field`), spaced by the grid's gap rather than their own margin */
-.review-branches .field {
-  margin-bottom: 0;
-  min-width: 0;
+.review-compare-error {
+  color: var(--status-blocked);
 }
 
 /* a deleted comment's note, its Undo beside the words */

@@ -163,6 +163,283 @@ describe("workspace and staged changes", () => {
   });
 });
 
+/** A patch as Pierre reads it, down to its hunks. */
+const shape = (patch: string | null) => parsed(patch).map((file) => [file.name, file.prevName, file.type, file.hunks]);
+/** What `git diff HEAD` itself prints for these paths, in the same shape. */
+const fromHead = (cwd: string, ...paths: string[]) => shape(git(cwd, "diff", "--no-color", "--find-renames", "HEAD", "--", ...paths));
+
+describe("uncommitted changes against HEAD", () => {
+  let root: string;
+  beforeAll(() => {
+    root = repository("uncommitted");
+    writeFileSync(join(root, "staged.txt"), "one\n");
+    writeFileSync(join(root, "unstaged.txt"), "one\n");
+    writeFileSync(join(root, "partial.txt"), lines(12));
+    writeFileSync(join(root, "moved-from.txt"), lines(12, "moving"));
+    writeFileSync(join(root, "cached.txt"), "kept on disk\n");
+    git(root, "add", ".");
+    git(root, "commit", "-q", "-m", "first");
+    writeFileSync(join(root, "staged.txt"), "one\ntwo\n");
+    git(root, "add", "staged.txt");
+    writeFileSync(join(root, "unstaged.txt"), "uno\n");
+    // partly staged: line 2 in the index, line 11 only on disk
+    writeFileSync(join(root, "partial.txt"), lines(12).replace("line 2\n", "line two\n"));
+    git(root, "add", "partial.txt");
+    writeFileSync(join(root, "partial.txt"), lines(12).replace("line 2\n", "line two\n").replace("line 11\n", "line eleven\n"));
+    // a staged rename, edited on disk afterwards
+    git(root, "mv", "moved-from.txt", "moved-to.txt");
+    writeFileSync(join(root, "moved-to.txt"), lines(12, "moving").replace("moving 5\n", "moving five\n"));
+    git(root, "rm", "-q", "--cached", "cached.txt");
+    writeFileSync(join(root, "untracked.txt"), "new\n");
+    writeFileSync(join(root, "empty.txt"), "");
+    const nested = join(root, "nested");
+    mkdirSync(nested);
+    git(nested, "init", "-q", "-b", "main");
+    writeFileSync(join(nested, "inner.txt"), "inner\n");
+    git(nested, "add", ".");
+    git(nested, "commit", "-q", "-m", "inner");
+  });
+
+  it("lists staged, unstaged, partly staged and untracked files once each, against HEAD", async () => {
+    const list = await repoDiffFiles(root, query({ scope: "uncommitted" }));
+    expect(list).toMatchObject({ scope: "uncommitted", base: null, head: null, total: 8, truncated: false });
+    expect("merge_base" in list).toBeFalse();
+    expect(list.files).toEqual([
+      { path: "cached.txt", old_path: null, status: "deleted", additions: 0, deletions: 1, binary: false },
+      { path: "empty.txt", old_path: null, status: "untracked", additions: null, deletions: null, binary: null },
+      { path: "moved-to.txt", old_path: "moved-from.txt", status: "renamed", additions: 1, deletions: 1, binary: false },
+      { path: "nested/", old_path: null, status: "untracked", additions: null, deletions: null, binary: null },
+      { path: "partial.txt", old_path: null, status: "modified", additions: 2, deletions: 2, binary: false },
+      { path: "staged.txt", old_path: null, status: "modified", additions: 1, deletions: 0, binary: false },
+      { path: "unstaged.txt", old_path: null, status: "modified", additions: 1, deletions: 1, binary: false },
+      { path: "untracked.txt", old_path: null, status: "untracked", additions: null, deletions: null, binary: null },
+    ]);
+    // an empty untracked file and an embedded repository are listed as the workspace scope lists them
+    const workspace = await repoDiffFiles(root, query());
+    for (const path of ["empty.txt", "nested/"]) expect(list.files.find((file) => file.path === path)).toEqual(workspace.files.find((file) => file.path === path)!);
+  });
+
+  it("patches each tracked file as `git diff HEAD` does, and an untracked one as a new file", async () => {
+    for (const path of ["staged.txt", "unstaged.txt", "partial.txt"]) {
+      const answer = await repoDiffFile(root, query({ scope: "uncommitted", path }));
+      expect(answer).toMatchObject({ scope: "uncommitted", base: null, head: null, unavailable: null });
+      const expected = fromHead(root, path);
+      expect(expected).toHaveLength(1);
+      expect(shape(answer.patch)).toEqual(expected);
+    }
+    const renamed = await repoDiffFile(root, query({ scope: "uncommitted", path: "moved-to.txt", old_path: "moved-from.txt" }));
+    expect(renamed.file).toMatchObject({ status: "renamed", old_path: "moved-from.txt" });
+    expect(shape(renamed.patch)).toEqual(fromHead(root, "moved-from.txt", "moved-to.txt"));
+    expect(parsed(renamed.patch).map((file) => [file.name, file.prevName, file.type])).toEqual([["moved-to.txt", "moved-from.txt", "rename-changed"]]);
+    // removed from the index, still on disk: one deletion, not an untracked file as well
+    const cached = await repoDiffFile(root, query({ scope: "uncommitted", path: "cached.txt" }));
+    expect(cached.file.status).toBe("deleted");
+    expect(parsed(cached.patch).map((file) => [file.name, file.type])).toEqual([["cached.txt", "deleted"]]);
+    const untracked = await repoDiffFile(root, query({ scope: "uncommitted", path: "untracked.txt" }));
+    expect(untracked.file).toEqual({ path: "untracked.txt", old_path: null, status: "untracked", additions: null, deletions: null, binary: false });
+    expect(parsed(untracked.patch).map((file) => [file.name, file.type, file.additionLines])).toEqual([["untracked.txt", "new", ["new\n"]]]);
+  });
+
+  it("refuses merge_base and head without a base as a malformed ask, never as an unknown scope", async () => {
+    const cases: [Record<string, string>, "base" | "head"][] = [[{ merge_base: "1" }, "base"], [{ head: "main" }, "head"], [{ head: "main", merge_base: "1" }, "head"]];
+    for (const [extra, param] of cases) {
+      await expect(repoDiffFiles(root, query({ scope: "uncommitted", ...extra }))).rejects.toMatchObject({ code: "invalid_revision", status: 400, param });
+      await expect(repoDiffFile(root, query({ scope: "uncommitted", path: "staged.txt", ...extra }))).rejects.toMatchObject({ code: "invalid_revision", status: 400, param });
+    }
+  });
+
+  it("lists a conflicted file as unmerged with no patch, where `git diff HEAD` calls it modified", async () => {
+    const conflicted = repository("uncommitted-conflict");
+    writeFileSync(join(conflicted, "c.txt"), "base\n");
+    writeFileSync(join(conflicted, "other.txt"), "base\n");
+    git(conflicted, "add", ".");
+    git(conflicted, "commit", "-q", "-m", "base");
+    git(conflicted, "checkout", "-q", "-b", "side");
+    writeFileSync(join(conflicted, "c.txt"), "side\n");
+    git(conflicted, "commit", "-q", "-a", "-m", "side");
+    git(conflicted, "checkout", "-q", "main");
+    writeFileSync(join(conflicted, "c.txt"), "main\n");
+    git(conflicted, "commit", "-q", "-a", "-m", "main");
+    expect(Bun.spawnSync(["git", "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "-C", conflicted, "merge", "side"], { stdout: "ignore", stderr: "ignore" }).exitCode).toBe(1);
+    writeFileSync(join(conflicted, "other.txt"), "changed\n");
+    expect(git(conflicted, "diff", "--name-status", "HEAD", "--", "c.txt")).toStartWith("M");
+    expect((await repoDiffFiles(conflicted, query({ scope: "uncommitted" }))).files).toEqual([
+      { path: "c.txt", old_path: null, status: "unmerged", additions: null, deletions: null, binary: null },
+      { path: "other.txt", old_path: null, status: "modified", additions: 1, deletions: 1, binary: false },
+    ]);
+    expect(await repoDiffFile(conflicted, query({ scope: "uncommitted", path: "c.txt" }))).toMatchObject({ patch: null, unavailable: "unmerged", file: { status: "unmerged" } });
+  });
+
+  it.skipIf(process.platform === "win32")("says an untracked file swapped for a FIFO cannot be shown, without blocking on it", async () => {
+    const swapped = repository("uncommitted-fifo");
+    writeFileSync(join(swapped, "a.txt"), "one\n");
+    git(swapped, "add", ".");
+    git(swapped, "commit", "-q", "-m", "first");
+    const target = join(swapped, "pipe.txt");
+    writeFileSync(target, "a file while git lists it\n");
+    // git lists the file, then it is a FIFO by the time the server reads it
+    const swapper = join(scratch, "swapping-git");
+    writeFileSync(swapper, `#!/bin/sh\ngit "$@"\ncode=$?\ncase " $* " in *" --others "*) rm -f '${target}' && mkfifo '${target}' ;; esac\nexit $code\n`);
+    chmodSync(swapper, 0o755);
+    const answer = await repoDiffFile(swapped, query({ scope: "uncommitted", path: "pipe.txt" }), { git: swapper });
+    expect(answer).toMatchObject({ patch: null, unavailable: "unsupported", file: { path: "pipe.txt", status: "untracked" } });
+  });
+});
+
+describe("uncommitted changes before the first commit", () => {
+  const probe = join(scratch, "sha256-probe");
+  const sha256 = Bun.spawnSync(["git", "init", "-q", "--object-format=sha256", probe], { stdout: "ignore", stderr: "ignore" }).exitCode === 0;
+
+  const unbornCase = async (name: string, format: "sha1" | "sha256") => {
+    const root = join(scratch, name);
+    mkdirSync(root);
+    git(root, "init", "-q", "-b", "main", `--object-format=${format}`);
+    expect(git(root, "rev-parse", "--show-object-format").trim()).toBe(format);
+    writeFileSync(join(root, "staged.txt"), "staged\n");
+    git(root, "add", "staged.txt");
+    writeFileSync(join(root, "loose.txt"), "loose\n");
+    const list = await repoDiffFiles(root, query({ scope: "uncommitted" }));
+    expect(list.repository).toMatchObject({ unborn: true, head: null });
+    expect(list).toMatchObject({ scope: "uncommitted", base: null, head: null, total: 2 });
+    expect(list.files.map((file) => [file.path, file.status])).toEqual([["loose.txt", "untracked"], ["staged.txt", "added"]]);
+    const answer = await repoDiffFile(root, query({ scope: "uncommitted", path: "staged.txt" }));
+    expect(parsed(answer.patch).map((file) => [file.name, file.type, file.additionLines])).toEqual([["staged.txt", "new", ["staged\n"]]]);
+    // the empty tree is named, never written
+    const emptyTree = git(root, "hash-object", "-t", "tree", "--stdin").trim();
+    expect(emptyTree).toHaveLength(format === "sha1" ? 40 : 64);
+    expect(existsSync(join(root, ".git", "objects", emptyTree.slice(0, 2), emptyTree.slice(2)))).toBeFalse();
+  };
+
+  it("compares a SHA-1 repository's index and files with the empty tree", () => unbornCase("unborn-sha1", "sha1"));
+
+  // skipped only where this git cannot make SHA-256 repositories, and never in CI
+  it.skipIf(!sha256 && !process.env["CI"])("compares a SHA-256 repository's index and files with the empty tree", async () => {
+    if (!sha256) throw new Error("this git cannot create SHA-256 repositories (git init --object-format=sha256 failed)");
+    await unbornCase("unborn-sha256", "sha256");
+  });
+});
+
+describe("uncommitted changes of a branch in its worktree", () => {
+  let root: string;
+  let worktree: string;
+  let forkPoint: string;
+  let mainTip: string;
+  /** a worktree of `root` at `name`, on `branch` made from main */
+  const worktreeFor = (name: string, branch: string): string => {
+    const path = join(scratch, name);
+    git(root, "worktree", "add", "-q", "-b", branch, path, "main");
+    return path;
+  };
+  beforeAll(() => {
+    root = repository("worktrees");
+    writeFileSync(join(root, "shared.txt"), "one\n");
+    git(root, "add", ".");
+    git(root, "commit", "-q", "-m", "first");
+    forkPoint = git(root, "rev-parse", "HEAD").trim();
+    worktree = worktreeFor("worktrees-feat", "feat/x");
+    writeFileSync(join(worktree, "feature.txt"), lines(12, "feature"));
+    git(worktree, "add", ".");
+    git(worktree, "commit", "-q", "-m", "feature");
+    // main moves on after feat/x forked from it
+    writeFileSync(join(root, "later.txt"), "later\n");
+    git(root, "add", ".");
+    git(root, "commit", "-q", "-m", "main moves on");
+    mainTip = git(root, "rev-parse", "HEAD").trim();
+    // the worktree's uncommitted work: unstaged, staged and untracked
+    writeFileSync(join(worktree, "feature.txt"), lines(12, "feature").replace("feature 4\n", "feature four\n"));
+    writeFileSync(join(worktree, "staged.txt"), "staged\n");
+    git(worktree, "add", "staged.txt");
+    writeFileSync(join(worktree, "loose.txt"), "loose\n");
+  });
+  const ask = (values: Record<string, string> = {}) => query({ scope: "uncommitted", base: "main", head: "feat/x", merge_base: "1", ...values });
+
+  it("compares where the branch forked with the worktree's files, untracked ones included", async () => {
+    const list = await repoDiffFiles(worktree, ask());
+    expect(list.repository).toMatchObject({ root: worktree, branch: "feat/x" });
+    expect(list).toMatchObject({ scope: "uncommitted", base: mainTip, head: null, merge_base: forkPoint, total: 3, truncated: false });
+    expect(list.files.map((file) => [file.path, file.status])).toEqual([["feature.txt", "added"], ["loose.txt", "untracked"], ["staged.txt", "added"]]);
+    const answer = await repoDiffFile(worktree, ask({ path: "feature.txt" }));
+    expect(answer).toMatchObject({ scope: "uncommitted", base: mainTip, head: null, merge_base: forkPoint, unavailable: null });
+    const expected = shape(git(worktree, "diff", "--no-color", "--find-renames", forkPoint, "--", "feature.txt"));
+    expect(expected).toHaveLength(1);
+    expect(shape(answer.patch)).toEqual(expected);
+    expect(parsed(answer.patch)[0]!.additionLines).toContain("feature four\n");
+    const untracked = await repoDiffFile(worktree, ask({ path: "loose.txt" }));
+    expect(parsed(untracked.patch).map((file) => [file.name, file.type, file.additionLines])).toEqual([["loose.txt", "new", ["loose\n"]]]);
+    // what main did since is no part of the branch's change
+    await expect(repoDiffFile(worktree, ask({ path: "later.txt" }))).rejects.toMatchObject({ code: "not_found", status: 404 });
+  });
+
+  it("compares from base itself without merge_base, and says nothing of a merge base", async () => {
+    // head only guards which branch the worktree is on; without it nothing is checked
+    for (const values of [{ base: "main", head: "feat/x" }, { base: "main" }] as Record<string, string>[]) {
+      const list = await repoDiffFiles(worktree, query({ scope: "uncommitted", ...values }));
+      expect(list).toMatchObject({ scope: "uncommitted", base: mainTip, head: null });
+      expect("merge_base" in list).toBeFalse();
+      expect(list.files.map((file) => [file.path, file.status])).toEqual([["feature.txt", "added"], ["later.txt", "deleted"], ["loose.txt", "untracked"], ["staged.txt", "added"]]);
+    }
+  });
+
+  it("refuses a worktree that no longer has head checked out, naming head", async () => {
+    const moved = worktreeFor("worktrees-moved", "feat/moved");
+    git(moved, "checkout", "-q", "-b", "other");
+    const refusal = { code: "worktree_moved", status: 409, param: "head" };
+    await expect(repoDiffFiles(moved, ask({ head: "feat/moved" }))).rejects.toMatchObject(refusal);
+    await expect(repoDiffFile(moved, ask({ head: "feat/moved", path: "shared.txt" }))).rejects.toMatchObject(refusal);
+    git(moved, "checkout", "-q", "--detach");
+    await expect(repoDiffFiles(moved, ask({ head: "feat/moved" }))).rejects.toMatchObject(refusal);
+    await expect(repoDiffFiles(moved, ask({ head: "other" }))).rejects.toMatchObject(refusal);
+    // the pane's own checkout is another branch than the one asked for
+    await expect(repoDiffFiles(root, ask())).rejects.toMatchObject(refusal);
+  });
+
+  it("takes a branch that shares its name with a tag", async () => {
+    const dual = worktreeFor("worktrees-dual", "dual");
+    git(root, "tag", "dual", forkPoint);
+    const list = await repoDiffFiles(dual, ask({ head: "dual" }));
+    // made from main's tip, so it forked there
+    expect(list).toMatchObject({ base: mainTip, head: null, merge_base: mainTip, files: [] });
+  });
+
+  it("never takes a head that is an option, an expression or malformed, and never hands it to git", async () => {
+    for (const head of ["", "-x", "--output=/tmp/x", "feat/x\n", "feat\tx", "feat\u0000x", "feat\u007fx", "x".repeat(256)]) {
+      await expect(repoDiffFiles(worktree, ask({ head }))).rejects.toMatchObject({ code: "invalid_revision", status: 400, param: "head" });
+    }
+    // names git would resolve to the checked-out branch are still not that branch's name
+    for (const head of ["@{-1}", "HEAD", "@", "refs/heads/feat/x", "heads/feat/x"]) {
+      await expect(repoDiffFiles(worktree, ask({ head }))).rejects.toMatchObject({ code: "worktree_moved", status: 409, param: "head" });
+    }
+    await expect(repoDiffFiles(worktree, ask({ head: `feat/${"x".repeat(250)}` }))).rejects.toMatchObject({ code: "worktree_moved", status: 409 });
+    const recorded = join(scratch, "worktree-argv");
+    const recorder = join(scratch, "recording-git");
+    writeFileSync(recorder, `#!/bin/sh\nprintf '%s\\n' "$@" >> '${recorded}'\nexec git "$@"\n`);
+    chmodSync(recorder, 0o755);
+    await repoDiffFile(worktree, ask({ path: "feature.txt" }), { git: recorder });
+    expect(Bun.file(recorded).size).toBeGreaterThan(0);
+    expect(await Bun.file(recorded).text()).not.toContain("feat/x");
+  });
+
+  it("refuses merge_base in a worktree with no commit yet, or none in common with base", async () => {
+    const orphan = join(scratch, "worktrees-orphan");
+    git(root, "worktree", "add", "-q", "--orphan", "-b", "lonely", orphan);
+    writeFileSync(join(orphan, "alone.txt"), "alone\n");
+    const refusal = { code: "no_merge_base", status: 409, param: "base" };
+    await expect(repoDiffFiles(orphan, ask({ head: "lonely" }))).rejects.toMatchObject(refusal);
+    git(orphan, "add", ".");
+    git(orphan, "commit", "-q", "-m", "alone");
+    await expect(repoDiffFiles(orphan, ask({ head: "lonely" }))).rejects.toMatchObject(refusal);
+    // without merge_base, base itself is the old side
+    const list = await repoDiffFiles(orphan, query({ scope: "uncommitted", base: "main", head: "lonely" }));
+    expect(list.files.map((file) => [file.path, file.status])).toEqual([["alone.txt", "added"], ["later.txt", "deleted"], ["shared.txt", "deleted"]]);
+  });
+
+  it("names the base a refusal is about, after checking the worktree", async () => {
+    await expect(repoDiffFiles(worktree, ask({ base: "no-such-branch" }))).rejects.toMatchObject({ code: "revision_not_found", status: 404, param: "base" });
+    await expect(repoDiffFiles(worktree, ask({ base: "HEAD..main" }))).rejects.toMatchObject({ code: "invalid_revision", status: 400, param: "base" });
+    await expect(repoDiffFiles(worktree, ask({ base: "no-such-branch", head: "other" }))).rejects.toMatchObject({ code: "worktree_moved", status: 409, param: "head" });
+  });
+});
+
 describe("comparing two commits", () => {
   let root: string;
   let first: string;
@@ -374,17 +651,18 @@ describe("the branches a review can compare", () => {
     git(root, "worktree", "add", "-q", "--detach", join(scratch, "branches-detached"), "main");
   });
 
-  it("lists local branches, then remote ones, each newest first, without a remote's HEAD, with where each is checked out", async () => {
+  it("lists local branches, then remote ones, each newest first, without a remote's HEAD, with where each is checked out and its tip commit", async () => {
     const list = await repoBranches(root);
     expect(list.repository).toMatchObject({ root, branch: "main" });
+    const tip = (ref: string, seconds: number) => ({ hash: git(root, "rev-parse", ref).trim(), time: 1_700_000_000 + seconds, subject: `at ${seconds}` });
     expect(list.branches).toEqual([
-      { name: "feat/new", remote: false, worktree: checkedOut },
-      { name: "feat/old", remote: false, worktree: linked },
-      { name: "feat/gone", remote: false, worktree: null },
-      { name: "main", remote: false, worktree: root },
-      { name: "upstream/feat", remote: true, worktree: null },
-      { name: "origin/next", remote: true, worktree: null },
-      { name: "origin/main", remote: true, worktree: null },
+      { name: "feat/new", remote: false, worktree: checkedOut, commit: tip("feat/new", 4_000) },
+      { name: "feat/old", remote: false, worktree: linked, commit: tip("feat/old", 2_000) },
+      { name: "feat/gone", remote: false, worktree: null, commit: tip("feat/gone", 1_500) },
+      { name: "main", remote: false, worktree: root, commit: tip("main", 1_000) },
+      { name: "upstream/feat", remote: true, worktree: null, commit: tip("upstream/feat", 5_000) },
+      { name: "origin/next", remote: true, worktree: null, commit: tip("origin/next", 3_000) },
+      { name: "origin/main", remote: true, worktree: null, commit: tip("origin/main", 1_000) },
     ]);
     expect(list).toMatchObject({ default_base: "origin/next", truncated: false, limits: { max_branches: REPO_BRANCHES_MAX } });
     // the same list from inside another worktree of the repository
@@ -399,6 +677,29 @@ describe("the branches a review can compare", () => {
     expect(locals.branches.map((branch) => branch.name)).toEqual(["feat/new", "feat/old", "feat/gone", "main"]);
     expect(locals.truncated).toBeTrue();
     expect((await repoBranches(root, { maxBranches: 7 })).truncated).toBeFalse();
+  });
+
+  it("keeps any subject apart, cut at 200 characters, and names no commit for a ref whose tip is not one", async () => {
+    const odd = repository("branches-odd");
+    writeFileSync(join(odd, "a.txt"), "one\n");
+    git(odd, "add", ".");
+    // a first paragraph over two lines, with a tab, a field-like `%00` and more than 200 characters (the cut counts characters, not bytes)
+    const long = `${"ü".repeat(150)}\t%00 ${"x".repeat(100)}`;
+    git(odd, "commit", "-q", "-m", `first line\n${long}\n\nthe body stays out`);
+    git(odd, "branch", "empty-message", git(odd, "commit-tree", "HEAD^{tree}", "-p", "HEAD", "-m", "").trim());
+    git(odd, "tag", "-a", "v1", "-m", "a tag");
+    // git refuses to point a branch at anything but a commit, so the ref files are written by hand
+    writeFileSync(join(odd, ".git", "refs", "heads", "tagged"), git(odd, "rev-parse", "v1"));
+    writeFileSync(join(odd, ".git", "refs", "heads", "blob"), git(odd, "rev-parse", "HEAD:a.txt"));
+    const byName = new Map((await repoBranches(odd)).branches.map((branch) => [branch.name, branch]));
+    const main = byName.get("main")?.commit;
+    expect(main?.hash).toBe(git(odd, "rev-parse", "main").trim());
+    expect(main?.time).toBe(Number(git(odd, "log", "-1", "--format=%ct", "main").trim()));
+    expect(main?.subject).toBe(Array.from(`first line ${long}`).slice(0, 200).join(""));
+    expect(Array.from(main?.subject ?? "")).toHaveLength(200);
+    expect(byName.get("empty-message")?.commit).toMatchObject({ hash: git(odd, "rev-parse", "empty-message").trim(), subject: "" });
+    expect(byName.get("tagged")).toEqual({ name: "tagged", remote: false, worktree: null });
+    expect(byName.get("blob")).toEqual({ name: "blob", remote: false, worktree: null });
   });
 
   it("names the default base: origin/HEAD's branch, else main, else master, else none", async () => {
@@ -552,6 +853,31 @@ describe("GET /api/workspace/diff/*", () => {
     expect(parsed(answer.patch).map((file) => [file.name, file.type])).toEqual([["a.txt", "change"]]);
   });
 
+  it("answers the uncommitted scope on both routes", async () => {
+    const listed = await files(`${directory()}&scope=uncommitted`);
+    expect(listed.status).toBe(200);
+    expect(await listed.json() as RepoDiffFileList).toMatchObject({ scope: "uncommitted", base: null, head: null, files: [{ path: "a.txt", status: "modified" }] });
+    const response = await fetch(`${base}/api/workspace/diff/file?${directory()}&scope=uncommitted&path=a.txt`, { headers: owner });
+    expect(response.status).toBe(200);
+    const answer = await response.json() as RepoDiffFilePatch;
+    expect(answer.scope).toBe("uncommitted");
+    expect(parsed(answer.patch).map((file) => [file.name, file.type])).toEqual([["a.txt", "change"]]);
+  });
+
+  it("answers a branch's worktree named by directory, whatever pane_id says", async () => {
+    const worktree = join(scratch, "http-worktree");
+    git(root, "worktree", "add", "-q", "-b", "feat/http", worktree, "main");
+    writeFileSync(join(worktree, "loose.txt"), "loose\n");
+    const fork = git(root, "rev-parse", "main").trim();
+    const search = `pane_id=no-such-pane&directory=${encodeURIComponent(worktree)}&scope=uncommitted&base=main&head=feat%2Fhttp&merge_base=1`;
+    const listed = await files(search);
+    expect(listed.status).toBe(200);
+    expect(await listed.json() as RepoDiffFileList).toMatchObject({ repository: { root: worktree }, scope: "uncommitted", base: fork, head: null, merge_base: fork, files: [{ path: "loose.txt", status: "untracked" }] });
+    const response = await fetch(`${base}/api/workspace/diff/file?${search}&path=loose.txt`, { headers: owner });
+    expect(response.status).toBe(200);
+    expect(parsed((await response.json() as RepoDiffFilePatch).patch).map((file) => [file.name, file.type])).toEqual([["loose.txt", "new"]]);
+  });
+
   it("refuses bad input in the error envelope", async () => {
     const cases: [string, number, string][] = [
       ["", 400, "missing_directory"],
@@ -562,6 +888,10 @@ describe("GET /api/workspace/diff/*", () => {
       [`${directory()}&scope=commit&base=--output%3D%2Ftmp%2Fx`, 400, "invalid_revision"],
       [`${directory()}&scope=commit&base=nope`, 404, "revision_not_found"],
       [`${directory()}&merge_base=1`, 400, "invalid_scope"],
+      [`${directory()}&scope=uncommitted&merge_base=1`, 400, "invalid_revision"],
+      [`${directory()}&scope=uncommitted&head=main`, 400, "invalid_revision"],
+      [`${directory()}&scope=uncommitted&base=main&head=-x`, 400, "invalid_revision"],
+      [`${directory()}&scope=uncommitted&base=main&head=other&merge_base=1`, 409, "worktree_moved"],
     ];
     for (const [search, status, code] of cases) {
       const response = await files(search);
@@ -578,6 +908,8 @@ describe("GET /api/workspace/diff/*", () => {
     const named = await files(`${directory()}&scope=commit&base=HEAD&head=nope&merge_base=1`);
     expect(named.status).toBe(404);
     expect((await named.json() as ApiError).error).toMatchObject({ code: "revision_not_found", param: "head" });
+    const moved = await files(`${directory()}&scope=uncommitted&base=main&head=other&merge_base=1`);
+    expect((await moved.json() as ApiError).error).toMatchObject({ code: "worktree_moved", param: "head" });
     const unnamed = await files(`${directory()}&scope=all`);
     expect("param" in (await unnamed.json() as ApiError).error).toBeFalse();
     const posted = await files(directory(), { ...owner, "x-herdr-machine": "1" }, "POST");
@@ -595,6 +927,14 @@ describe("GET /api/workspace/diff/*", () => {
       const response = await fetch(`${base}/api/${path}?${directory()}&path=a.txt`, { headers: { cookie: watchCookie } });
       expect([path, response.status]).toEqual([path, 403]);
       expect((await response.json() as ApiError).error.code).toBe("read_only");
+    }
+    // a branch's worktree with its uncommitted changes is closed the same way
+    const worktreeAsk = `${directory()}&scope=uncommitted&base=main&head=main&merge_base=1&path=a.txt`;
+    for (const path of ["workspace/diff/files", "workspace/diff/file"]) {
+      const watched = await fetch(`${base}/api/${path}?${worktreeAsk}`, { headers: { cookie: watchCookie } });
+      expect([path, watched.status, (await watched.json() as ApiError).error.code]).toEqual([path, 403, "read_only"]);
+      const foreign = await fetch(`${base}/api/${path}?${worktreeAsk}`, { headers: { ...owner, "sec-fetch-site": "cross-site" } });
+      expect([path, foreign.status, (await foreign.json() as ApiError).error.code]).toEqual([path, 403, "cross_site"]);
     }
   });
 });

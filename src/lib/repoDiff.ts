@@ -9,10 +9,13 @@ import { VIRTUAL_HIGHLIGHT_CHARS, VIRTUAL_HIGHLIGHT_LINES } from "./sourcePrevie
 /** Which two states of a repository are compared (GET /api/workspace/diff/*). */
 export interface RepoComparison {
   scope: RepoDiffScope;
-  /** `commit` only: full hashes once a list answered, the names typed before */
+  /**
+   * `commit`: full hashes once a list answered, the names typed before. `uncommitted`: with a base,
+   * a worktree's changes since its branch forked off it; `head` then names that branch.
+   */
   base: string | null;
   head: string | null;
-  /** `commit` only: compare from where head forked off base (`merge_base=1`) */
+  /** `commit` and `uncommitted` only: compare from where head forked off base (`merge_base=1`) */
   mergeBase?: boolean;
 }
 
@@ -26,7 +29,8 @@ export interface RepoDiffTarget extends RepoComparison {
   oldPath: string | null;
 }
 
-export const REPO_DIFF_SCOPES: readonly RepoDiffScope[] = ["workspace", "staged", "commit"];
+const SCOPES: Record<RepoDiffScope, true> = { workspace: true, staged: true, commit: true, uncommitted: true };
+export const REPO_DIFF_SCOPES: readonly RepoDiffScope[] = Object.keys(SCOPES) as RepoDiffScope[];
 
 /** git's own letter for a status, as `git status --short` prints it. */
 export const STATUS_MARK: Record<RepoDiffStatus, string> = {
@@ -53,7 +57,8 @@ export function shortHash(revision: string): string {
 
 export function comparisonWord(t: Translate, comparison: RepoComparison): string {
   switch (comparison.scope) {
-    case "workspace": return t("Working tree");
+    case "uncommitted": return t("Uncommitted");
+    case "workspace": return t("Unstaged");
     case "staged": return t("Staged");
     case "commit": return `${shortHash(comparison.base ?? "")}..${shortHash(comparison.head ?? "HEAD")}`;
   }
@@ -62,10 +67,51 @@ export function comparisonWord(t: Translate, comparison: RepoComparison): string
 /** The empty state of a comparison that changed nothing. */
 export function nothingChangedWord(t: Translate, scope: RepoDiffScope): string {
   switch (scope) {
-    case "workspace": return t("No uncommitted changes");
+    case "uncommitted": return t("No uncommitted changes");
+    case "workspace": return t("No unstaged changes");
     case "staged": return t("Nothing staged");
     case "commit": return t("These commits are the same");
   }
+}
+
+/** The same as a sentence, for the review's list notes: each language ends it its own way. */
+export function nothingChangedSentence(t: Translate, scope: RepoDiffScope): string {
+  switch (scope) {
+    case "uncommitted": return t("No uncommitted changes.");
+    case "workspace": return t("No unstaged changes.");
+    case "staged": return t("Nothing staged.");
+    case "commit": return t("Nothing changed here.");
+  }
+}
+
+/** What an older bridge (workspace, staged, commit only) is asked instead of `uncommitted`. */
+export type StandIn = "unstaged" | "commits";
+
+/**
+ * The comparison sent: the wanted one, or once a bridge refused `uncommitted` its stand-in, the
+ * unstaged list for a folder and the commits for a branch's worktree.
+ */
+export function bridgeAsk(wanted: RepoComparison, olderBridge: boolean): { asked: RepoComparison; standIn: StandIn | null } {
+  if (!olderBridge || wanted.scope !== "uncommitted") return { asked: wanted, standIn: null };
+  if (wanted.base === null) return { asked: { scope: "workspace", base: null, head: null }, standIn: "unstaged" };
+  return { asked: { ...wanted, scope: "commit" }, standIn: "commits" };
+}
+
+/** 400 invalid_scope to an `uncommitted` ask: an older bridge; nothing else counts. */
+export function refusedUncommitted(error: unknown, asked: RepoComparison): boolean {
+  return asked.scope === "uncommitted" && error instanceof ApiError && error.code === "invalid_scope";
+}
+
+export function standInMessage(t: Translate, standIn: StandIn): string {
+  switch (standIn) {
+    case "unstaged": return t("This PC's bridge leaves out staged changes.");
+    case "commits": return t("This PC's bridge compares only commits.");
+  }
+}
+
+/** A 409 worktree_moved, said under Compare while the branch list reloads. */
+export function worktreeMovedMessage(t: Translate, branch: string): string {
+  return t("{branch} is no longer checked out in its worktree, so uncommitted changes are left out.", { branch });
 }
 
 /** A refusal of the diff routes, in the user's words: never git's stderr, which the server keeps. */
@@ -77,6 +123,7 @@ export function diffErrorMessage(t: Translate, error: unknown): string {
     case "revision_not_found": return t("No commit by that name.");
     case "invalid_revision": return t("Name a commit, branch or tag.");
     case "no_merge_base": return t("Base and head share no history.");
+    case "worktree_moved": return t("The branch is no longer checked out in its worktree. Turn off “Show uncommitted changes” in View options or choose the branch again.");
     case "git_unavailable": return t("git is not installed on that PC.");
     case "git_timeout": return t("git took too long to answer.");
     case "git_failed": return t("git could not compare these.");

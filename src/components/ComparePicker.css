@@ -1,0 +1,205 @@
+/* what the review compares, under its title: each part a quiet button that opens its picker under itself */
+.compare-line {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px var(--space-1);
+  min-width: 0;
+  max-width: 100%;
+}
+
+.compare-part {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-width: 0;
+  max-width: 100%;
+  min-height: 22px;
+  padding: 0 var(--space-1) 0 var(--space-2);
+  background: var(--bg-elevated);
+  border: var(--hairline) solid transparent;
+  border-radius: var(--radius-md);
+  color: var(--text);
+  font-size: var(--fs-xs);
+  cursor: pointer;
+}
+
+@media (hover: hover) {
+  .compare-part:hover {
+    background: var(--bg-hover);
+    color: var(--text-strong);
+  }
+}
+
+.compare-part[aria-expanded="true"] {
+  background: var(--primary-tint);
+  color: var(--primary);
+}
+
+/* a part the comparison was refused for, or a base not chosen yet */
+.compare-part[aria-invalid="true"] {
+  border-color: var(--status-blocked);
+  color: var(--status-blocked);
+}
+
+.compare-part svg {
+  flex: none;
+  width: 12px;
+  height: 12px;
+}
+
+.compare-part-chevron {
+  color: var(--text-dim);
+}
+
+.compare-part-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* a branch reads as a name, a tip as words */
+.compare-part.is-branch .compare-part-name {
+  font-family: var(--font-mono);
+}
+
+.compare-vs {
+  color: var(--text-dim);
+}
+
+/* fingers: a part reaches the touch target's height through an invisible expander, the line keeps its height */
+@media (pointer: coarse) {
+  .compare-part {
+    position: relative;
+  }
+
+  .compare-part::before {
+    content: "";
+    position: absolute;
+    inset: calc((22px - var(--touch-target)) / 2) 0;
+  }
+}
+
+/* the picker: at fixed coordinates under its part (ComparePicker.tsx places it and caps its height to the room left),
+   over the tree and the file; the list scrolls between the search field and the notes */
+.compare-picker {
+  position: fixed;
+  z-index: var(--z-popover);
+  width: min(460px, calc(100vw - var(--space-4)));
+  gap: var(--space-1);
+  /* the line it opens from is small and dim: the picker reads at the menus' size and colour */
+  color: var(--text);
+  font-size: var(--fs-sm);
+  line-height: normal;
+}
+
+/* a phone's: the bottom sheet every `.modal` is there, over its own scrim */
+.compare-picker.is-sheet {
+  position: static;
+  width: 100%;
+  padding: var(--space-2) var(--space-3) var(--space-3);
+}
+
+.compare-picker-title {
+  margin: 0;
+  padding: var(--space-1) var(--space-1) 0;
+  color: var(--text-strong);
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-semibold);
+}
+
+.compare-picker-tabs {
+  flex: none;
+  align-self: flex-start;
+}
+
+.compare-picker-search {
+  flex: none;
+  font-family: var(--font-mono);
+}
+
+.compare-picker-list {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+  overflow-y: auto;
+  /* a scroll that reaches the list's end stays in it: the review under it keeps still */
+  overscroll-behavior: contain;
+}
+
+/* a row: the check, then the name with its worktree and commit on a dim line under it */
+.compare-picker-option,
+.compare-picker-tip {
+  gap: var(--space-2);
+  padding: var(--space-2);
+  width: 100%;
+}
+
+/* aria-selected is the name compared now; the keyboard/pointer row is data-active and carries the highlight, which
+   the shared menu gives aria-selected elsewhere */
+.compare-picker-option[aria-selected="true"] {
+  background: transparent;
+}
+
+.compare-picker-option[data-active],
+.compare-picker-tip:focus-visible {
+  outline: none;
+  background: var(--bg-hover);
+  color: var(--text-strong);
+}
+
+.compare-picker-mark {
+  display: flex;
+  flex: none;
+  width: 16px;
+  color: var(--primary);
+}
+
+.menu-item .compare-picker-mark svg {
+  color: var(--primary);
+}
+
+.compare-picker-text {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.compare-picker-name,
+.compare-picker-meta {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.compare-picker-option .compare-picker-name {
+  font-family: var(--font-mono);
+}
+
+.compare-picker-option[aria-selected="true"] .compare-picker-name,
+.compare-picker-tip[aria-current="true"] .compare-picker-name {
+  color: var(--text-strong);
+  font-weight: var(--fw-semibold);
+}
+
+.compare-picker-meta {
+  color: var(--text-dim);
+  font-size: var(--fs-xs);
+}
+
+.compare-picker-worktree {
+  color: var(--primary);
+}
+
+.compare-picker-note {
+  flex: none;
+  margin: 0;
+  padding: var(--space-2);
+  border-top: var(--hairline) solid var(--border);
+  color: var(--text-dim);
+  font-size: var(--fs-xs);
+}
