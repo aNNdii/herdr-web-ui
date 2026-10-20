@@ -10,8 +10,9 @@ import type { RepoDiffFile, RepoDiffFileList, RepoDiffScope } from "../../shared
 import { changeTree, changeTreeFolders, type ChangeTreeEntry } from "../lib/changeTree.ts";
 import { useLocale, useT } from "../lib/i18n.ts";
 import { useMachineApi } from "../lib/machineContext.tsx";
-import { diffErrorMessage, nothingChangedWord, STATUS_MARK, statusWord, type RepoComparison } from "../lib/repoDiff.ts";
+import { bridgeAsk, diffErrorMessage, nothingChangedWord, refusedUncommitted, standInMessage, STATUS_MARK, statusWord, type RepoComparison } from "../lib/repoDiff.ts";
 import { skeletonRows } from "../lib/skeleton.ts";
+import { useAnnouncedText } from "../lib/useAnnouncedText.ts";
 
 export interface RepoChangesProps {
   paneId: string;
@@ -24,21 +25,28 @@ type Load = { status: "pending" } | { status: "failed"; error: unknown } | { sta
 const PENDING: Load = { status: "pending" };
 
 /**
- * What changed in the repository the pane sits in: the working tree, the index, or two commits,
- * one file per row with its status and counts, each opened as its diff, under the folders they
- * sit in (lib/changeTree.ts): every folder starts open, and what the reader folds stays folded
+ * What changed in the repository the pane sits in: everything not committed yet, the index, or two
+ * commits, one file per row with its status and counts, each opened as its diff, under the folders
+ * they sit in (lib/changeTree.ts): every folder starts open, and what the reader folds stays folded
  * across refreshes and comparisons. The list is read on each choice and on Refresh, never polled;
  * while it is read, the last list's repository line stays and placeholder rows hold its height.
+ * A bridge from before `uncommitted` refuses it once; from then on this asks it the unstaged list
+ * instead and says so under the segments (lib/repoDiff.ts bridgeAsk).
  */
 export function RepoChanges({ paneId, directory, onOpenDiff }: RepoChangesProps) {
   const t = useT();
   const locale = useLocale();
   const { fetchRepoDiffFiles } = useMachineApi();
-  const [scope, setScope] = useState<RepoDiffScope>("workspace");
+  const [scope, setScope] = useState<RepoDiffScope>("uncommitted");
   const [base, setBase] = useState("");
   const [head, setHead] = useState("");
-  // the comparison read last: a commit comparison waits for Compare, the others read on choice
-  const [asked, setAsked] = useState<RepoComparison | null>({ scope: "workspace", base: null, head: null });
+  // the comparison chosen last: a commit comparison waits for Compare, the others read on choice
+  const [wanted, setWanted] = useState<RepoComparison | null>({ scope: "uncommitted", base: null, head: null });
+  // this PC's bridge refused `uncommitted` as an unknown scope: kept for as long as the tab is open
+  const [olderBridge, setOlderBridge] = useState(false);
+  const { asked, standIn } = useMemo(() => (wanted === null ? { asked: null, standIn: null } : bridgeAsk(wanted, olderBridge)), [wanted, olderBridge]);
+  // one calm line under the segments while the stand-in is read, in the document from the first render (lib/useAnnouncedText.ts)
+  const bridgeNote = useAnnouncedText(standIn === null ? null : standInMessage(t, standIn));
   const [load, setLoad] = useState<Load>(PENDING);
   // the last listing, kept while the next is read: its repository line stays and its rows size the placeholders
   const [last, setLast] = useState<RepoDiffFileList | null>(null);
@@ -53,7 +61,12 @@ export function RepoChanges({ paneId, directory, onOpenDiff }: RepoChangesProps)
         setLoad({ status: "ready", listing });
         setLast(listing);
       },
-      (error: unknown) => { if (id === request.current) setLoad({ status: "failed", error }); },
+      (error: unknown) => {
+        if (id !== request.current) return;
+        // the stand-in is asked next, by the effect below: the list stays pending, never a failure
+        if (refusedUncommitted(error, comparison)) setOlderBridge(true);
+        else setLoad({ status: "failed", error });
+      },
     );
   }, [fetchRepoDiffFiles, paneId, directory]);
 
@@ -61,14 +74,14 @@ export function RepoChanges({ paneId, directory, onOpenDiff }: RepoChangesProps)
 
   const choose = (next: RepoDiffScope): void => {
     setScope(next);
-    if (next === "commit") { setAsked(null); setLoad(PENDING); return; }
-    setAsked({ scope: next, base: null, head: null });
+    if (next === "commit") { setWanted(null); setLoad(PENDING); return; }
+    setWanted({ scope: next, base: null, head: null });
   };
   const compare = (event: FormEvent): void => {
     event.preventDefault();
     const from = base.trim();
     if (from === "") return;
-    setAsked({ scope: "commit", base: from, head: head.trim() || null });
+    setWanted({ scope: "commit", base: from, head: head.trim() || null });
   };
 
   const listing = load.status === "ready" ? load.listing : null;
@@ -130,7 +143,7 @@ export function RepoChanges({ paneId, directory, onOpenDiff }: RepoChangesProps)
     <div className="repo-changes" role="group" aria-label={t("Changes")} aria-busy={load.status === "pending"}>
       <div className="repo-changes-bar">
         <div className="segmented repo-changes-scopes" role="group" aria-label={t("Compare")}>
-          <button type="button" aria-pressed={scope === "workspace"} onClick={() => choose("workspace")}>{t("Working tree")}</button>
+          <button type="button" aria-pressed={scope === "uncommitted"} onClick={() => choose("uncommitted")}>{t("Uncommitted")}</button>
           <button type="button" aria-pressed={scope === "staged"} onClick={() => choose("staged")}>{t("Staged")}</button>
           <button type="button" aria-pressed={scope === "commit"} onClick={() => choose("commit")}>{t("Commits")}</button>
         </div>
@@ -143,6 +156,7 @@ export function RepoChanges({ paneId, directory, onOpenDiff }: RepoChangesProps)
           </button>
         </div>
       </div>
+      <p className={bridgeNote === null ? "visually-hidden repo-changes-bridge" : "repo-changes-bridge"} role="status">{bridgeNote}</p>
       {scope === "commit" && (
         <form className="repo-changes-commits" onSubmit={compare}>
           <label className="field">

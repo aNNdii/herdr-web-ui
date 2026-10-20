@@ -637,21 +637,22 @@ export interface RepoDiffQuery {
   paneId: string | null;
   directory: string | null;
   scope: RepoDiffScope;
-  /** `commit` only: the list's hashes, so a file is read from the same comparison */
+  /** `commit` and `uncommitted` only: the list's hashes, so a file is read from the same comparison */
   base: string | null;
   head: string | null;
-  /** `commit` only: compare from where head forked off base (`merge_base=1`); ignored in the other scopes */
+  /** `commit` and `uncommitted` only: compare from where head forked off base (`merge_base=1`); ignored in the other scopes */
   mergeBase?: boolean;
 }
 
 function repoDiffQuery(query: RepoDiffQuery): URLSearchParams {
+  const revisions = query.scope === "commit" || query.scope === "uncommitted";
   return new URLSearchParams({
     ...(query.paneId ? { pane_id: query.paneId } : {}),
     ...(query.directory ? { directory: query.directory } : {}),
     scope: query.scope,
-    ...(query.scope === "commit" && query.base ? { base: query.base } : {}),
-    ...(query.scope === "commit" && query.head ? { head: query.head } : {}),
-    ...(query.scope === "commit" && query.mergeBase ? { merge_base: "1" } : {}),
+    ...(revisions && query.base ? { base: query.base } : {}),
+    ...(revisions && query.head ? { head: query.head } : {}),
+    ...(revisions && query.mergeBase ? { merge_base: "1" } : {}),
   });
 }
 

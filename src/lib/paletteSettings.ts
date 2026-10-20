@@ -48,6 +48,7 @@ export function actionAliases(t: Translate): Readonly<Record<string, string>> {
     notifications: t("alerts push bell"),
     lock: t("logout log out lock"),
     files: t("folder explorer open file"),
+    review: t("diff git changes uncommitted staged branch compare"),
     refresh: t("reload update sync"),
   };
 }

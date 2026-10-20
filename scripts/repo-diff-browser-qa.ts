@@ -1,15 +1,16 @@
 /**
  * The repository diff viewer (Files → Changes → RepoDiffViewer) in the built app, against real git
- * repositories answered by the server's own repo-diff module: the changed files of the working
- * tree, the index and two commits with their statuses; a 10 000-line diff as a bounded window of
+ * repositories answered by the server's own repo-diff module: the changed files not committed yet
+ * (the default), of the index and of two commits with their statuses; a 10 000-line diff as a bounded window of
  * rows, unified and split, at the top, the middle and the end; the layout setting kept across a
  * reload and declined on a phone; the context folded and shown again with the line numbers kept;
  * native selection and a real copy that keep blank lines and leave the gutters out; binary,
  * too-large, conflicted, deleted, untracked and renamed files and their notes; a folder that is no
  * repository and a commit that does not exist; the file itself opened on the owning PC; Escape,
  * Back and Close with the focus returned; a narrow list that cuts a deep folder at its front first,
- * keeps name ends and gives a rename's old name way first; a remote PC's routes; the rows in the
- * app's palette; and the static demo's fixture.
+ * keeps name ends and gives a rename's old name way first; a remote PC's routes; a PC whose older
+ * bridge refuses `uncommitted`, read as the unstaged list with a note; the rows in the app's
+ * palette; and the static demo's fixture.
  *
  * The browser is Playwright's headless shell, whose clipboard is its own: a real Cmd+C here never
  * touches the clipboard of the PC running the check.
@@ -129,6 +130,20 @@ const repos = fixtures();
 const deepRepo = deepFixture();
 const panes = new Map([["pane-main", repos.main], ["pane-conflict", repos.detached], ["pane-plain", repos.plain], ["pane-deep", deepRepo]]);
 const requests: string[] = [];
+/** each diff route asked, with its scope: `files uncommitted` */
+const asks: string[] = [];
+/** The main repository's unstaged files: what an older bridge's stand-in lists. */
+const UNSTAGED_ROWS = [
+  "M assets/pic.bin Binary",
+  "M docs/new-name.md +1−1",
+  "M notes/dir with space/ünï 文件.txt +1−1",
+  "M src/big.ts +2,000−2,000",
+  "D src/gone.ts +0−3",
+  "M src/large.txt +8,000−8,000",
+  "M src/money.ts +3−2",
+  "? src/new.ts",
+  "M src/staged.ts +1−1",
+];
 let browser: Awaited<ReturnType<typeof chromium.launch>> | undefined;
 let server: ReturnType<typeof Bun.serve> | undefined;
 let demoServer: ReturnType<typeof Bun.serve> | undefined;
@@ -138,6 +153,9 @@ async function api(request: Request, url: URL): Promise<Response | null> {
   const diff = /^\/api\/(?:machines\/([^/]+)\/)?workspace\/diff\/(files|file)$/.exec(url.pathname);
   if (diff) {
     requests.push(url.pathname);
+    asks.push(`${diff[2]} ${url.searchParams.get("scope")}`);
+    // a PC whose bridge is from before `uncommitted` refuses it as an unknown scope
+    if (diff[1] === "old-fixture" && url.searchParams.get("scope") === "uncommitted") return Response.json({ error: { code: "invalid_scope", message: "scope must be workspace, staged or commit" } }, { status: 400 });
     const paneId = url.searchParams.get("pane_id");
     const cwd = (paneId !== null ? panes.get(paneId) : undefined) ?? url.searchParams.get("directory");
     if (!cwd) return Response.json({ error: { code: "pane_not_found", message: "no such pane" } }, { status: 404 });
@@ -178,7 +196,7 @@ async function closeFiles(page: Page): Promise<void> {
   await page.getByRole("dialog", { name: "Files", exact: true }).waitFor({ state: "detached" });
 }
 /** The Changes list once it has answered for `scope`: its rows as `mark path counts`. */
-async function changeRows(page: Page, scope = "workspace"): Promise<string[]> {
+async function changeRows(page: Page, scope = "uncommitted"): Promise<string[]> {
   const list = page.locator(`.repo-changes:not([aria-busy='true']) .repo-changes-list[data-scope='${scope}']`);
   await list.waitFor();
   return list.locator(".repo-change").evaluateAll((rows) => rows.map((row) => `${row.querySelector(".repo-change-mark")?.textContent} ${row.querySelector(".repo-change-path")?.textContent} ${row.querySelector(".repo-change-counts")?.textContent ?? ""}`.trim()));
@@ -314,12 +332,13 @@ try {
     });
     await page.goto(origin);
 
-    // the working tree's changes, each with its status, counts and the repository they are in
+    // everything not committed yet, staged or not, each with its status, counts and the repository they are in
     await openFiles(page, "pane-main");
     const rows = await changeRows(page);
     assert.deepEqual(rows, [
       "M assets/pic.bin Binary",
-      "M docs/new-name.md +1−1",
+      "A docs/new-name.md +5−0",
+      "D docs/old-name.md +0−5",
       "M notes/dir with space/ünï 文件.txt +1−1",
       "M src/big.ts +2,000−2,000",
       "D src/gone.ts +0−3",
@@ -327,7 +346,10 @@ try {
       "M src/money.ts +3−2",
       "? src/new.ts",
       "M src/staged.ts +1−1",
-    ], `${label}: the working tree's changed files`);
+    ], `${label}: the uncommitted changed files`);
+    const segments = await page.locator(".repo-changes-scopes button").evaluateAll((buttons) => buttons.map((button) => `${button.textContent}${button.getAttribute("aria-pressed") === "true" ? " (pressed)" : ""}`));
+    assert.deepEqual(segments, ["Uncommitted (pressed)", "Staged", "Commits"], `${label}: the Compare segments`);
+    assert.equal(await page.locator(".repo-changes-bridge").textContent(), "", `${label}: a current bridge leaves the note empty`);
     assert.equal(await page.locator(".repo-changes-branch").textContent(), "main", `${label}: the branch`);
     assert.equal(await page.locator(".repo-changes-root").textContent(), repos.main, `${label}: the repository root`);
     await shot(page, `list-${width}-${theme}`);
@@ -356,7 +378,7 @@ try {
     assert.deepEqual(numbers.context, ["1", "1"], `${label}: a context row carries its old and new numbers: ${JSON.stringify(numbers)}`);
     assert.ok(numbers.deletion === "4" && numbers.addition === "4", `${label}: the first change is line 4 on both sides: ${JSON.stringify(numbers)}`);
     const meta = await page.locator(".repo-diff-meta").first().textContent();
-    assert.ok(meta?.includes("Modified") && meta.includes("+2,000") && meta.includes("−2,000") && meta.includes("Working tree"), `${label}: the header's status, counts and comparison: ${meta}`);
+    assert.ok(meta?.includes("Modified") && meta.includes("+2,000") && meta.includes("−2,000") && meta.includes("Uncommitted"), `${label}: the header's status, counts and comparison: ${meta}`);
     await shot(page, `top-${width}-${theme}`);
     await scrollDiff(page, "middle");
     await rowReached(page, Math.floor(BIG_LINES / 2) - 1000, `${label} middle`);
@@ -584,7 +606,11 @@ try {
     page.on("pageerror", (error) => errors.push(error.message));
     await page.goto(origin);
     await openFiles(page, "pane-deep");
-    assert.deepEqual(await changeRows(page), [`M ${DEEP_FOLDER}/rule-import-service.test.ts +1−1`, `M ${DEEP_FOLDER}/rule-import-service.ts +1−1`], "the deep folder's rows say their whole paths");
+    assert.deepEqual(await changeRows(page), [
+      `R ${DEEP_FOLDER}/legacy-rule-import-adapter.ts → ${DEEP_FOLDER}/rule-import-adapter-for-mobile-dispatch.ts +0−0`,
+      `M ${DEEP_FOLDER}/rule-import-service.test.ts +1−1`,
+      `M ${DEEP_FOLDER}/rule-import-service.ts +1−1`,
+    ], "the deep folder's rows say their whole paths");
     const folder = page.locator(".repo-change-folder-name").first();
     assert.equal(await folder.textContent(), DEEP_FOLDER, "the folder row says its whole path");
     assert.equal(await folder.getAttribute("title"), DEEP_FOLDER, "the folder row's tooltip is its path");
@@ -680,6 +706,42 @@ try {
     console.log("PASS a remote PC's changes and files read through its bridge");
   }
 
+  // a PC whose bridge is from before `uncommitted`: one refusal, then the unstaged list with a calm note, asked
+  // directly from then on; the diff opened from it reads the answered scope and needs no fallback of its own
+  {
+    const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+    await context.addInitScript(() => localStorage.setItem("herdr-web-ui:settings", JSON.stringify({ language: "en", theme: "dark" })));
+    const page = await context.newPage();
+    page.setDefaultTimeout(15_000);
+    const errors: string[] = [];
+    page.on("pageerror", (error) => errors.push(error.message));
+    await page.goto(origin);
+    asks.length = 0;
+    await openFiles(page, "pane-main", "old-fixture");
+    assert.deepEqual(await changeRows(page, "workspace"), UNSTAGED_ROWS, "an older bridge's stand-in lists the unstaged files");
+    const bridgeNote = page.locator(".repo-changes-bridge");
+    await bridgeNote.filter({ hasText: "This PC's bridge leaves out staged changes." }).waitFor();
+    assert.equal(await bridgeNote.getAttribute("role"), "status", "the note is a status, never an alert");
+    assert.equal(await page.locator(".repo-changes-error").count(), 0, "the refusal is not shown as an error");
+    assert.equal(await page.getByRole("button", { name: "Uncommitted", exact: true }).getAttribute("aria-pressed"), "true", "Uncommitted stays chosen");
+    await shot(page, "older-bridge-1440-dark");
+    await openChange(page, "src/money.ts");
+    await waitRows(page);
+    assert.ok((await page.locator(".repo-diff-meta").first().textContent())?.includes("Unstaged"), "the diff reads the answered stand-in");
+    await closeDiff(page);
+    assert.deepEqual(asks, ["files uncommitted", "files workspace", "file workspace"], `the older bridge's asks: ${asks.join(", ")}`);
+    await page.getByRole("button", { name: "Staged", exact: true }).click();
+    await changeRows(page, "staged");
+    assert.equal(await bridgeNote.textContent(), "", "Staged needs no note");
+    await page.getByRole("button", { name: "Uncommitted", exact: true }).click();
+    assert.deepEqual(await changeRows(page, "workspace"), UNSTAGED_ROWS, "Uncommitted again reads the stand-in");
+    assert.deepEqual(asks.slice(3), ["files staged", "files workspace"], `the refusal is remembered: ${asks.join(", ")}`);
+    await bridgeNote.filter({ hasText: "This PC's bridge leaves out staged changes." }).waitFor();
+    assert.deepEqual(errors, [], "no errors on an older bridge");
+    await context.close();
+    console.log("PASS an older bridge's refusal of uncommitted reads the unstaged list with a note, remembered for the tab");
+  }
+
   // the static demo answers the routes from its fixture: the list, a diff and no missing route
   {
     const app = join(root, "demo");
@@ -708,6 +770,7 @@ try {
     await page.getByRole("button", { name: "Changes", exact: true }).click();
     const demoRows = await changeRows(page);
     assert.deepEqual(demoRows, ["M docs/checkout-flow.png Binary", "R src/idempotency.ts → src/lib/idempotency.ts +0−0", "? src/money.test.ts", "M src/money.ts +4−1"], `the demo's changes: ${JSON.stringify(demoRows)}`);
+    assert.equal(await page.locator(".repo-changes-bridge").textContent(), "", "the demo answers uncommitted and shows no note");
     await openChange(page, "src/money.ts");
     await waitRows(page);
     const demoDiff = await mounted(page);

@@ -1,8 +1,8 @@
-import { closeSync, lstatSync, openSync, readSync, realpathSync } from "node:fs";
+import { closeSync, constants, fstatSync, lstatSync, openSync, readSync, realpathSync } from "node:fs";
 import { readdir } from "node:fs/promises";
 import { join } from "node:path";
 
-import type { RepoBranchList, RepoDiffFile, RepoDiffFileList, RepoDiffFilePatch, RepoDiffRepository, RepoDiffScope, RepoDiffStatus, RepoDiffTree } from "../shared/protocol.ts";
+import type { RepoBranch, RepoBranchCommit, RepoBranchList, RepoDiffFile, RepoDiffFileList, RepoDiffFilePatch, RepoDiffRepository, RepoDiffScope, RepoDiffStatus, RepoDiffTree } from "../shared/protocol.ts";
 import { errorResponse, jsonResponse } from "./http.ts";
 
 /**
@@ -164,8 +164,8 @@ async function mergeBaseOf(context: Context, root: string, base: string, head: s
 
 function scopeOf(value: string | null): RepoDiffScope {
   if (value === null || value === "" || value === "workspace") return "workspace";
-  if (value === "staged" || value === "commit") return value;
-  throw new RepoDiffError("invalid_scope", "scope must be workspace, staged or commit", 400);
+  if (value === "staged" || value === "commit" || value === "uncommitted") return value;
+  throw new RepoDiffError("invalid_scope", "scope must be workspace, staged, commit or uncommitted", 400);
 }
 
 /** A path inside the repository, as git names it: relative, forward slashes, no `..`. */
@@ -178,24 +178,85 @@ function repositoryPath(name: string, value: string): string {
 }
 
 /** `mergeBase` is set only when `merge_base=1` asked for it: undefined keeps it out of the answer. */
-interface Comparison { scope: RepoDiffScope; base: string | null; head: string | null; mergeBase?: string; args: string[] }
+interface Comparison {
+  scope: RepoDiffScope;
+  base: string | null;
+  head: string | null;
+  mergeBase?: string;
+  args: string[];
+  /** the new side is the working tree: `ls-files --others` joins the list and `ls-files -u` marks conflicts */
+  newSideIsWorkingTree: boolean;
+}
 
-async function comparisonOf(context: Context, root: string, params: URLSearchParams): Promise<Comparison> {
+/** The empty tree's id in this repository's hash, named and never written: what an unborn HEAD is compared as. */
+async function emptyTreeOf(context: Context, root: string): Promise<string> {
+  // stdin is empty, so this hashes an empty tree; `--no-filters` keeps the repository's clean filters from running
+  const run = await runGit(context, root, ["hash-object", "-t", "tree", "--no-filters", "--stdin"], 1024);
+  const oid = run.stdout.trim();
+  if (run.code !== 0 || !/^[0-9a-f]{40,64}$/.test(oid)) throw new RepoDiffError("git_failed", "git could not name the empty tree", 500);
+  return oid;
+}
+
+/** A branch name as `head` may give it in `uncommitted`: only ever compared as text, so this keeps out what no branch is called. */
+const MAX_BRANCH_BYTES = 255;
+const CONTROL = /[\u0000-\u001f\u007f]/;
+
+/**
+ * 409 worktree_moved unless the worktree at `root` still has `branch` checked out, as `refs/heads/<branch>` exactly
+ * (`--short` would print `heads/x` beside a tag `x`). `branch` is compared as text and never handed to git.
+ */
+async function assertCheckedOut(context: Context, root: string, branch: string): Promise<void> {
+  const run = await runGit(context, root, ["symbolic-ref", "--quiet", "HEAD"], 16 * 1024);
+  if (run.code !== 0 || run.stdout.replace(/\r?\n$/, "") !== `refs/heads/${branch}`) {
+    throw new RepoDiffError("worktree_moved", "that worktree no longer has head checked out", 409, "head");
+  }
+}
+
+async function comparisonOf(context: Context, repository: RepoDiffRepository, params: URLSearchParams): Promise<Comparison> {
+  const root = repository.root;
   const scope = scopeOf(params.get("scope"));
   const base = params.get("base");
   const head = params.get("head");
   const fromMergeBase = params.get("merge_base") === "1";
+  if (scope === "uncommitted") {
+    // a malformed ask is invalid_revision, never invalid_scope: to a client that one means an older bridge
+    if (base === null) {
+      if (head !== null) throw new RepoDiffError("invalid_revision", "head applies to scope=uncommitted only with a base", 400, "head");
+      if (fromMergeBase) throw new RepoDiffError("invalid_revision", "merge_base needs a base revision", 400, "base");
+      // HEAD as this request resolved it, so a commit made meanwhile cannot split the names from their counts
+      const commit = repository.head ?? (await emptyTreeOf(context, root));
+      return { scope, base: null, head: null, args: [commit], newSideIsWorkingTree: true };
+    }
+    if (head !== null && (head === "" || head.startsWith("-") || CONTROL.test(head) || Buffer.byteLength(head) > MAX_BRANCH_BYTES)) {
+      throw new RepoDiffError("invalid_revision", "head must name one local branch", 400, "head");
+    }
+    // the branch list the ask was made from may be stale: the worktree must still be on that branch. The check and
+    // base's lookup need nothing of each other, so both run at once; a moved worktree is named before a bad base
+    const [checked, resolved] = await Promise.allSettled([
+      head === null ? Promise.resolve() : assertCheckedOut(context, root, head),
+      resolveRevision(context, root, "base", base),
+    ]);
+    if (checked.status === "rejected") throw checked.reason;
+    if (resolved.status === "rejected") throw resolved.reason;
+    const from = resolved.value;
+    // the new side is the working tree, never a commit `head` names
+    if (!fromMergeBase) return { scope, base: from, head: null, args: [from], newSideIsWorkingTree: true };
+    // HEAD as this request resolved it: a worktree with no commit yet forked from nothing
+    if (repository.head === null) throw new RepoDiffError("no_merge_base", "base and head share no history", 409, "base");
+    const fork = await mergeBaseOf(context, root, from, repository.head);
+    return { scope, base: from, head: null, mergeBase: fork, args: [fork], newSideIsWorkingTree: true };
+  }
   if (scope !== "commit") {
     if (base !== null || head !== null) throw new RepoDiffError("invalid_revision", "base and head apply to scope=commit only", 400);
     if (fromMergeBase) throw new RepoDiffError("invalid_scope", "merge_base applies to scope=commit only", 400);
-    return { scope, base: null, head: null, args: scope === "staged" ? ["--cached"] : [] };
+    return { scope, base: null, head: null, args: scope === "staged" ? ["--cached"] : [], newSideIsWorkingTree: scope === "workspace" };
   }
   if (base === null) throw new RepoDiffError("invalid_revision", "scope=commit needs a base revision", 400, "base");
   const [from, to] = await Promise.all([resolveRevision(context, root, "base", base), resolveRevision(context, root, "head", head ?? "HEAD")]);
-  if (!fromMergeBase) return { scope, base: from, head: to, args: [from, to] };
+  if (!fromMergeBase) return { scope, base: from, head: to, args: [from, to], newSideIsWorkingTree: false };
   // `base...head`, as a pull request shows it: what head changed since it forked from base
   const fork = await mergeBaseOf(context, root, from, to);
-  return { scope, base: from, head: to, mergeBase: fork, args: [fork, to] };
+  return { scope, base: from, head: to, mergeBase: fork, args: [fork, to], newSideIsWorkingTree: false };
 }
 
 const DIFF_FLAGS = ["--no-color", "--no-ext-diff", "--no-textconv", "--find-renames", "--ignore-submodules=dirty", "--src-prefix=a/", "--dst-prefix=b/"];
@@ -210,16 +271,26 @@ function fields(output: string): string[] {
 
 interface Listing { files: RepoDiffFile[]; complete: boolean }
 
+/** The paths with a merge conflict in the index, from `ls-files -u -z` (`<mode> <oid> <stage>\t<path>`, once per stage). */
+function conflictedPaths(run: GitRun): Set<string> {
+  const paths = new Set<string>();
+  for (const entry of fields(run.stdout)) {
+    const tab = entry.indexOf("\t");
+    if (tab >= 0 && tab < entry.length - 1) paths.add(entry.slice(tab + 1));
+  }
+  return paths;
+}
+
 async function changedFiles(context: Context, root: string, comparison: Comparison, pathspec: string[]): Promise<Listing> {
   const tail = [...comparison.args, "--", ...pathspec];
-  const [names, counts, others] = await Promise.all([
+  const none = Promise.resolve<GitRun>({ code: 0, stdout: "", overflow: false });
+  const [names, counts, others, unmerged] = await Promise.all([
     runGit(context, root, ["diff", ...DIFF_FLAGS, "--name-status", "-z", ...tail], context.maxListBytes),
     runGit(context, root, ["diff", ...DIFF_FLAGS, "--numstat", "-z", ...tail], context.maxListBytes),
-    comparison.scope === "workspace"
-      ? runGit(context, root, ["ls-files", "-z", "--others", "--exclude-standard", "--", ...pathspec], context.maxListBytes)
-      : Promise.resolve<GitRun>({ code: 0, stdout: "", overflow: false }),
+    comparison.newSideIsWorkingTree ? runGit(context, root, ["ls-files", "-z", "--others", "--exclude-standard", "--", ...pathspec], context.maxListBytes) : none,
+    comparison.newSideIsWorkingTree ? runGit(context, root, ["ls-files", "-z", "-u", "--", ...pathspec], context.maxListBytes) : none,
   ]);
-  for (const run of [names, counts, others]) {
+  for (const run of [names, counts, others, unmerged]) {
     if (!run.overflow && run.code !== 0) throw new RepoDiffError("git_failed", "git could not compare this repository", 500);
   }
   const stats = new Map<string, { additions: number | null; deletions: number | null; binary: boolean }>();
@@ -249,11 +320,15 @@ async function changedFiles(context: Context, root: string, comparison: Comparis
     if (found.get(path)?.status !== "unmerged") found.set(path, file);
     index += paired ? 3 : 2;
   }
+  // `git diff <commit>` names a conflicted file modified; the index says it is a conflict
+  for (const path of conflictedPaths(unmerged)) {
+    found.set(path, { path, old_path: null, status: "unmerged", additions: null, deletions: null, binary: null });
+  }
   for (const path of fields(others.stdout)) {
     if (!found.has(path)) found.set(path, { path, old_path: null, status: "untracked", additions: null, deletions: null, binary: null });
   }
   const files = [...found.values()].sort((left, right) => (left.path < right.path ? -1 : left.path > right.path ? 1 : 0));
-  return { files, complete: !names.overflow && !others.overflow };
+  return { files, complete: !names.overflow && !others.overflow && !unmerged.overflow };
 }
 
 /**
@@ -274,7 +349,7 @@ function fileStamp(root: string, file: RepoDiffFile): string {
 export async function repoDiffFiles(cwd: string, params: URLSearchParams, options: RepoDiffOptions = {}): Promise<RepoDiffFileList> {
   const context = contextOf(options);
   const repository = await repositoryOf(context, cwd);
-  const comparison = await comparisonOf(context, repository.root, params);
+  const comparison = await comparisonOf(context, repository, params);
   const listing = await changedFiles(context, repository.root, comparison, []);
   const files = listing.files.slice(0, context.maxFiles);
   return {
@@ -291,14 +366,22 @@ export async function repoDiffFiles(cwd: string, params: URLSearchParams, option
   };
 }
 
-/** What an untracked path is on disk, without following a link out of the repository. */
+/** Absent on Windows, which has no FIFOs either: there a link is caught by `lstat` before the open. */
+const NO_FOLLOW = constants.O_NOFOLLOW as number | undefined;
+
+/**
+ * What an untracked path is on disk, without following a link out of the repository. The open itself refuses a link
+ * and never waits on a FIFO, and the open file is what is looked at, so a path swapped after git listed it cannot
+ * stall the server.
+ */
 function untrackedKind(path: string, maxBytes: number): "text" | "binary" | "too_large" | "unsupported" {
   let fd: number | null = null;
   try {
-    const stat = lstatSync(path);
+    if (NO_FOLLOW === undefined && lstatSync(path).isSymbolicLink()) return "unsupported";
+    fd = openSync(path, constants.O_RDONLY | (NO_FOLLOW ?? 0) | ((constants.O_NONBLOCK as number | undefined) ?? 0));
+    const stat = fstatSync(fd);
     if (!stat.isFile()) return "unsupported";
     if (stat.size > maxBytes) return "too_large";
-    fd = openSync(path, "r");
     const buffer = Buffer.alloc(SNIFF_BYTES);
     return buffer.subarray(0, readSync(fd, buffer, 0, SNIFF_BYTES, 0)).includes(0) ? "binary" : "text";
   } catch {
@@ -389,7 +472,7 @@ export async function repoDiffFile(cwd: string, params: URLSearchParams, options
   const oldParam = params.get("old_path");
   const oldPath = oldParam === null || oldParam === "" ? null : repositoryPath("old_path", oldParam);
   const repository = await repositoryOf(context, cwd);
-  const comparison = await comparisonOf(context, repository.root, params);
+  const comparison = await comparisonOf(context, repository, params);
   const pathspec = oldPath !== null && oldPath !== path ? [oldPath, path] : [path];
   const listing = await changedFiles(context, repository.root, comparison, pathspec);
   const file = listing.files.find((candidate) => candidate.path === path);
@@ -434,19 +517,40 @@ export async function repoDiffFile(cwd: string, params: URLSearchParams, options
 /** A review's branch list cut at this many entries; local branches are never left out. */
 export const REPO_BRANCHES_MAX = 1_000;
 
-/** The refs under `prefix` (`refs/heads/`, `refs/remotes/`), newest commit first, named without it; symbolic refs (`origin/HEAD`) left out. */
-async function refsUnder(context: Context, root: string, prefix: string): Promise<{ names: string[]; complete: boolean }> {
-  const run = await runGit(context, root, ["for-each-ref", "--sort=-committerdate", "--format=%(refname)%00%(symref)", prefix], context.maxListBytes);
+/** A branch's commit subject is cut at this many characters. */
+const BRANCH_SUBJECT_MAX = 200;
+
+interface Ref {
+  name: string;
+  /** absent when the ref's tip is not a commit (a hand-written ref to a tag or a blob) */
+  commit?: RepoBranchCommit;
+}
+
+/** The tip commit from `for-each-ref`'s fields; undefined when they name no commit (no committer time, or no object id). */
+function refCommit(hash: string, time: string, subject: string): RepoBranchCommit | undefined {
+  if (!/^[0-9a-f]{40,64}$/.test(hash) || !/^\d+$/.test(time)) return undefined;
+  return { hash, time: Number(time), subject: Array.from(subject).slice(0, BRANCH_SUBJECT_MAX).join("") };
+}
+
+/**
+ * The refs under `prefix` (`refs/heads/`, `refs/remotes/`), newest commit first, named without it, each with its tip
+ * commit; symbolic refs (`origin/HEAD`) left out. git prints a subject on one line, so NUL-separated fields keep any text apart.
+ */
+async function refsUnder(context: Context, root: string, prefix: string): Promise<{ refs: Ref[]; complete: boolean }> {
+  const format = "--format=%(refname)%00%(symref)%00%(objectname)%00%(committerdate:unix)%00%(contents:subject)";
+  const run = await runGit(context, root, ["for-each-ref", "--sort=-committerdate", format, prefix], context.maxListBytes);
   if (!run.overflow && run.code !== 0) throw new RepoDiffError("git_failed", "git could not list the branches of this repository", 500);
   const lines = run.stdout.split("\n");
   // a cut listing ends inside its last line
   if (run.overflow || lines.at(-1) === "") lines.pop();
-  const names: string[] = [];
+  const refs: Ref[] = [];
   for (const line of lines) {
-    const [ref = "", symref = ""] = line.split("\0");
-    if (symref === "" && ref.startsWith(prefix) && ref.length > prefix.length) names.push(ref.slice(prefix.length));
+    const [ref = "", symref = "", hash = "", time = "", subject = ""] = line.split("\0");
+    if (symref !== "" || !ref.startsWith(prefix) || ref.length === prefix.length) continue;
+    const commit = refCommit(hash, time, subject);
+    refs.push({ name: ref.slice(prefix.length), ...(commit === undefined ? {} : { commit }) });
   }
-  return { names, complete: !run.overflow };
+  return { refs, complete: !run.overflow };
 }
 
 /** Each local branch checked out in a worktree, with that worktree's folder; a detached worktree, or one whose folder is gone, names none. */
@@ -487,19 +591,19 @@ export async function repoBranches(cwd: string, options: RepoDiffOptions = {}): 
     worktreesOf(context, repository.root),
     runGit(context, repository.root, ["symbolic-ref", "--quiet", "refs/remotes/origin/HEAD"], 16 * 1024),
   ]);
-  const room = Math.max(0, maxBranches - locals.names.length);
-  const branches = [
-    ...locals.names.map((name) => ({ name, remote: false, worktree: worktrees.get(name) ?? null })),
-    ...remotes.names.slice(0, room).map((name) => ({ name, remote: true, worktree: null })),
+  const room = Math.max(0, maxBranches - locals.refs.length);
+  const branches: RepoBranch[] = [
+    ...locals.refs.map(({ name, commit }) => ({ name, remote: false, worktree: worktrees.get(name) ?? null, ...(commit === undefined ? {} : { commit }) })),
+    ...remotes.refs.slice(0, room).map(({ name, commit }) => ({ name, remote: true, worktree: null, ...(commit === undefined ? {} : { commit }) })),
   ];
   const target = originHead.code === 0 ? originHead.stdout.trim() : "";
-  const local = new Set(locals.names);
+  const local = new Set(locals.refs.map((ref) => ref.name));
   const defaultBase = target.startsWith("refs/remotes/") && target.length > "refs/remotes/".length ? target.slice("refs/remotes/".length) : local.has("main") ? "main" : local.has("master") ? "master" : null;
   return {
     repository,
     branches,
     default_base: defaultBase,
-    truncated: !remotes.complete || remotes.names.length > room,
+    truncated: !remotes.complete || remotes.refs.length > room,
     limits: { max_branches: maxBranches },
   };
 }

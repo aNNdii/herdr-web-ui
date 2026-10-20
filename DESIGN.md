@@ -712,7 +712,8 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
 - The header is one line at every width. Anatomy, left to right: mobile drawer toggle / desktop
   sidebar toggle and the command palette (`.header-side`); the flexible context, agent mark and
   title then the PC › workspace › folder crumb; segmented Chat/Terminal switch; from `769px` a
-  hairline and the Files button (`.header-files-button`); the connection
+  hairline, the Files button (`.header-files-button`) and the Review button
+  (`.header-review-button`, `GitCompareArrows`, "Review changes"); the connection
   chip while the bridge is not live (herdr version in its tooltip), the offline pill, sign out and
   the More menu (`⋯`). Theme lives in Settings and the palette; the herdr version is also read
   in Settings.
@@ -1283,9 +1284,13 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
 
 ### Changes list and diff viewer (`.repo-changes`, `.repo-diff*`)
 - Files has two faces, **Browse** | **Changes** (`.segmented` in its header). **Changes** lists
-  what a comparison changed in the repository the pane sits in: the working tree against the
-  index, the index against HEAD, or two commits named by hand (**From commit**, **To commit**,
-  **Compare**); a Refresh button re-reads it, nothing polls. Under the controls, the branch
+  what a comparison changed in the repository the pane sits in: **Uncommitted** (the default:
+  the working tree against HEAD, staged, unstaged and untracked files once each, against the empty
+  tree before the first commit), **Staged** (the index against HEAD), or **Commits**, two named by
+  hand (**From commit**, **To commit**, **Compare**); a Refresh button re-reads it, nothing polls.
+  A PC whose bridge predates Uncommitted lists its unstaged changes instead, and a dim
+  `.repo-changes-bridge` (`role="status"`, `--fs-xs`) under the segments says so ("This PC's
+  bridge leaves out staged changes."), never an alert. Under the controls, the branch
   (`Detached HEAD`, `No commits yet`) beside a `GitBranch` glyph and the repository's root, mono,
   cut from its start. The files sit under the folders they are in (lib/changeTree.ts): a
   `.repo-change-folder` button row (caret, `--accent` folder glyph, name, and the count of files
@@ -1310,7 +1315,8 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   it alone and return the focus to its row; a reload restores it. Its header is the file viewer's:
   the name cut inside its stem, a mono meta line with the status in words (`.repo-diff-status`,
   tinted like the chip), the counts, a `--notice` warning with an icon when the rows are left
-  plain or forced to one column, the comparison (`Working tree`, `Staged`, `abc1234..def5678`),
+  plain or forced to one column, the comparison (`Uncommitted`, `Staged`, `Unstaged` on an older
+  bridge, `abc1234..def5678`),
   and the folder giving way first. Its actions: **Unified** | **Split** (`.segmented`, the
   `diffStyle` setting; Split is disabled at `<=640px` with the reason as its tooltip and the note
   in the meta line), **Fold context** (an `aria-pressed` icon button: one unchanged line around
@@ -1335,6 +1341,79 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   rename or mode change (`No lines changed.`), a file that no longer differs, and every refusal of
   the routes in the app's words.
 
+### Review dialog comparison (`.compare-line`, `.compare-picker`)
+- Under the review's title, one `.compare-line` says what is compared, each part a quiet
+  `.compare-part` button (`--bg-elevated`, `--fs-xs`, a dim chevron, `--primary-tint` while its
+  picker is open) that opens its picker right under itself: **Uncommitted changes** (the default,
+  as in Changes) or **Staged changes**, and under Branches `⑂ compare` **vs** `⑂ base`, the names
+  mono, read the way GitHub's compare view reads them and compared from where compare forked off
+  base. Each branch part carries a visually hidden "Compare" or "Base" before its name. A base not
+  chosen yet reads **Choose a base**; it and a part a comparison was refused for are marked
+  `aria-invalid` (a `--status-blocked` edge and text). The tree column holds no comparison fields.
+- The pickers follow Zed's branch pickers: one `.compare-picker` popover (`.menu`, `role="dialog"`
+  named Compare or Base) holds the search field and the list, no second overlay, at fixed
+  coordinates under its part, left edges lined up, and above it when the room below is short.
+  It is placed before the first paint, so it neither jumps nor is cut by the review's scroll
+  boxes. At `<=640px` it is a `.modal` bottom sheet (`.is-sheet`) over its own scrim with the
+  part's name as its title; Back and a swipe down close it, as the More menu's sheet.
+- Compare's picker has **Uncommitted** | **Staged** | **Branches** on top (`.compare-picker-tabs`,
+  a `.segmented`). Uncommitted and Staged show one row with what they compare on a dim line under
+  it; Branches, and Base's picker alone, show the search field (`.compare-picker-search`, mono,
+  "Branch, tag or commit") and the listbox: local branches, then remote ones, each group under a
+  `.menu-heading`. The branch compared now has a `--primary` check and a bold name. Under each
+  name a dim `.compare-picker-meta` line names the worktree the branch is checked out in
+  (`.compare-picker-worktree`, `--primary`, "this worktree" for the pane's own, its path as the
+  tooltip), then the tip commit as `hash · age · subject` (seven hex digits, the age from
+  lib/commitAge.ts in the UI language) where the bridge names it; an older bridge's rows stay one
+  line. The branch list is read the first time a picker shows it; **Loading…** and a cut list's
+  note sit under the list (`.compare-picker-note`).
+- Typing filters the list, the arrow keys, Home and End move in it (lib/combobox.ts), and Enter
+  takes the active branch or the text as typed (a tag, a commit). Escape closes the picker and
+  gives the focus back to its part; a press outside or the focus leaving closes it too.
+- Under the line, one dim `.review-compare-note` (`role="status"`, `--fs-xs`, in the document from
+  the first render) says what is left out: an older bridge's stand-in, or a worktree that has
+  another branch checked out now ("`feat` is no longer checked out in its worktree, so
+  uncommitted changes are left out."), never in red. Further dim `.review-compare-note` lines say
+  that the branches could not be listed or that an older bridge compares the branch tips. A
+  refused comparison is a `.review-compare-error` (`role="alert"`, `--status-blocked`) that its
+  part names as its description.
+
+### Review view options (`.review-options`)
+- A `.review-options` icon button (`SlidersHorizontal`, "View options") beside the tree's filter
+  opens `.review-options-menu`: a `.menu` at fixed coordinates under the button, right edges
+  aligned, above it when the screen ends first, inside the review's focus trap. A 6px `--primary`
+  dot (`.review-options-dot`) sits at the button's corner while any row shown differs from its
+  default.
+- Each row is a `menuitemcheckbox` (`.review-option`): its label, a dim `--fs-xs` line under it
+  saying what it does (its `aria-describedby`), and the settings switch drawn at its end (the row
+  is the control, so the switch has no box of its own). Rows are listed only where they apply,
+  never disabled, in this order:
+  - **Show uncommitted changes** ("Not yet committed in <worktree>", the worktree's path as the
+    tooltip), on by default: under Branches in Changed files, when compare is a local branch
+    checked out in a worktree (the pane's own included) and the bridge knows Uncommitted. On, the
+    review reads that worktree's folder (list, tree, file text, title, Viewed marks), compares the
+    fork point with its files on disk, and comments go on new-side lines as file comments; the
+    removed-lines hint names the way out. Off, it compares the commits alone.
+  - **Show viewed files** ("Files you marked as viewed"), on by default: in Changed files where
+    the bridge marks files as viewed. Off hides them, kept per device under Hide viewed files'
+    old key.
+  - **Show ignored files** ("Files git ignores, like build output"), off by default: in All
+    files, kept per device.
+  - **List new files separately** ("Untracked files under their own heading"), off by default: in
+    Changed files whenever untracked files are listed, kept per device. On, the untracked files
+    follow the others under a dim **New files** heading (`.review-tree-heading`), each group a
+    tree of its own folders (`.review-tree.is-split`, as tall as its rows through
+    `--review-tree-rows`; the new files' `.is-new` tree does not grow). Selection, Viewed marks,
+    the filter and Show viewed files work in both.
+- A row toggles in place and the menu stays open for the next one. The arrow keys, Home and End
+  move between rows, Space and Enter toggle one; Escape, a press outside, the focus leaving and
+  a resize close the menu and give the focus back to the button; Tab closes it too.
+
+### Review entry points
+- The review opens from the header's Review button (from `769px`), **Review changes** in the More
+  menu below that, the palette at every width (`openReview`), and the Files dialog's **Review**
+  button, all with the same `GitCompareArrows` glyph.
+
 ### Header context and connection
 - A selected pane shows agent mark + title (`--fs-md`), then on the same line the crumb
   PC › workspace › folder (`--fs-xs`, `--text-dim`); with one PC registered the PC is left out, as
@@ -1348,7 +1427,8 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   with the location on two lines, "PC › workspace" then the full path in mono. Its first item,
   at every width, is **Search panes and actions**, which opens the command palette (its shortcut
   as the item's hint where the pointer is fine); then **Find in terminal**, **Browse files** (at
-  `<=768px` only: from `769px` Files is the header's own button), **Copy link** and **Alerts**,
+  `<=768px` only: from `769px` Files is the header's own button), **Review changes** (the same
+  widths, for the header's Review button), **Copy link** and **Alerts**,
   each under the condition its own button had. New tab stays on the tab strip's `+`. The Alerts item says
   this device's state in words after its label ("On in the app", "On in this tab", "On, pushed to
   this device", "Off on this device") and switches it: it is a `menuitemcheckbox` with

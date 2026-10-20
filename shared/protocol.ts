@@ -183,14 +183,22 @@ export type { Machine, MachineEvent, PaneTarget, SetupJob, SetupRequest, SetupAc
  *         (what changed in the git repository the pane's folder, or `directory`, is inside: read
  *         only, on the PC that owns the pane. `directory` is absolute, `~/…`, or relative to the
  *         pane's folder; one of pane_id and directory is required. scope: workspace (the default:
- *         working tree against the index, plus untracked files), staged (index against HEAD) or
- *         commit (`base` against `head`, HEAD when absent; each one commit). In commit, `merge_base=1`
- *         compares from where head forked off base (`base...head`, as a pull request does) and names
- *         that commit as `merge_base`; without it the comparison stays two-dot. The list is capped
- *         (`limits`), and `truncated` says when it was. 400 invalid_scope (also merge_base outside
- *         commit) / invalid_revision / invalid_cwd / missing_directory, 404 revision_not_found,
- *         409 not_a_repository, 409 no_merge_base (base and head share no history), 503
- *         git_unavailable, 504 git_timeout; 403 read_only for a watching device, as a file read.
+ *         working tree against the index, plus untracked files), staged (index against HEAD),
+ *         commit (`base` against `head`, HEAD when absent; each one commit) or uncommitted (HEAD, the
+ *         empty tree before the first commit, against the working tree, plus untracked files; with
+ *         `base`, from that commit instead, and `head` names the branch the folder's worktree must
+ *         still have checked out). In commit and uncommitted, `merge_base=1` compares from where head
+ *         (in uncommitted: the worktree's HEAD) forked off base (`base...head`, as a pull request does)
+ *         and names that commit as `merge_base`; without it the comparison stays two-dot. `base` and
+ *         `merge_base` are taken in commit and uncommitted only, `head` in commit and, only with
+ *         `base`, in uncommitted. The list is capped (`limits`), and `truncated` says when it
+ *         was. 400 invalid_scope (also merge_base outside commit and uncommitted; an older server
+ *         or bridge also for uncommitted itself) / invalid_revision (a malformed uncommitted ask, never invalid_scope) /
+ *         invalid_cwd / missing_directory, 404 revision_not_found, 409 not_a_repository, 409
+ *         no_merge_base (base and head share no history), 409 worktree_moved (param head: the
+ *         worktree no longer has that branch checked out; a guard against a stale branch list, not
+ *         an access check), 503 git_unavailable, 504 git_timeout; 403 read_only for a watching
+ *         device, as a file read.
  *         invalid_revision, revision_not_found and no_merge_base name the field at fault in
  *         `error.param`: "base" or "head"; an older server or bridge never sends it)
  *  GET    /api/workspace/diff/tree?pane_id=&directory=  -> RepoDiffTree (every file the repository holds,
@@ -776,10 +784,14 @@ export interface ProjectFavicon {
   icon: FileInfo | null;
 }
 
-/** Which two states of a repository are compared. */
-export type RepoDiffScope = "workspace" | "staged" | "commit";
+/**
+ * Which two states of a repository are compared. `uncommitted`: a commit (HEAD, the empty tree
+ * when unborn, or with `base` where the worktree's branch forked) against the working tree,
+ * untracked files included.
+ */
+export type RepoDiffScope = "workspace" | "staged" | "commit" | "uncommitted";
 
-/** How one file changed. `untracked` exists only in the `workspace` scope. */
+/** How one file changed. `untracked` exists only in the `workspace` and `uncommitted` scopes. */
 export type RepoDiffStatus = "added" | "deleted" | "modified" | "renamed" | "copied" | "type_changed" | "unmerged" | "untracked";
 
 /** The repository a comparison was read from, on the PC that owns it. */
@@ -814,7 +826,10 @@ export interface RepoDiffFile {
 export interface RepoDiffFileList {
   repository: RepoDiffRepository;
   scope: RepoDiffScope;
-  /** the commits compared, as full hashes, in the `commit` scope; null in the others */
+  /**
+   * the commits compared, as full hashes, in the `commit` scope; in `uncommitted` with a base,
+   * `base` is that commit and `head` is always null (the working tree is the new side); null in the others
+   */
   base: string | null;
   head: string | null;
   /** where head forked off base, as a full hash: only with `merge_base=1`, and absent from an older server or bridge */
@@ -871,6 +886,18 @@ export interface RepoBranch {
   remote: boolean;
   /** the absolute folder (symlinks resolved) of the worktree it is checked out in; null when none is, or that worktree's folder is gone */
   worktree: string | null;
+  /** its tip commit; absent from an older bridge, and when git names no commit for the ref */
+  commit?: RepoBranchCommit;
+}
+
+/** A branch's tip commit, as `for-each-ref` reads it. */
+export interface RepoBranchCommit {
+  /** the full object id */
+  hash: string;
+  /** committer time, Unix seconds */
+  time: number;
+  /** the message's first paragraph on one line, cut at 200 characters; may be empty */
+  subject: string;
 }
 
 /** GET /api/workspace/diff/branches */

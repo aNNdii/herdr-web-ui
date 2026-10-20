@@ -21,7 +21,7 @@ import "./ReviewDialog.css";
 import type { RepoDiffFile, RepoDiffFilePatch } from "../../shared/protocol.ts";
 import { blockComments, useBlockComments } from "../lib/blockComments.ts";
 import { branchTarget, branchTargetOf, placeBranchComments, type BranchComment, type BranchTarget } from "../lib/branchComments.ts";
-import { diffQueryOf, type ReviewComparison } from "../lib/branchReview.ts";
+import { commentPlace, diffQueryOf, type ReviewComparison } from "../lib/branchReview.ts";
 import { diffSides, type DiffRow } from "../lib/diffSides.ts";
 import { fileLines, isFileComment, pathLabel, type FileComment, type LineRange } from "../lib/fileComments.ts";
 import { formatBytes } from "../lib/bridgeProgress.ts";
@@ -686,8 +686,10 @@ export function ReviewFile({ owner, paneId, directory, root, path, change, diffM
   const text = source.status === "ready" ? source.text : null;
   const lines = useMemo(() => (text === null ? null : fileLines(text)), [text]);
   const showDiff = diffMode && changed;
+  // where the comparison's comments go: on the file on disk, on a branch comparison's versions, or nowhere
+  const place = comparison === null ? null : commentPlace(comparison);
   // the branch comparison whose diff is shown: its comments are on the patch's lines, not the file's on disk
-  const branch = comparison?.scope === "branches" ? comparison.branches : null;
+  const branch = place?.kind === "branch" ? place.branches : null;
   const diffBranch = showDiff ? branch : null;
   // a Markdown file opens as its rendered preview (the file viewer's renderer); its source is one click away
   const isMarkdown = /\.(md|markdown)$/i.test(path);
@@ -742,8 +744,8 @@ export function ReviewFile({ owner, paneId, directory, root, path, change, diffM
   const fileNotes = useMemo(() => fileShown.map((note): LineAnnotation<ReviewNote> => ({ lineNumber: note.lines[1], metadata: note })), [fileShown]);
   // a working-tree comment is on a line of the working tree, a branch comment on a line of the branch's diff; the
   // index's diff has other line numbers and takes none
-  const commentsOnDiff = comparison !== null && comparison.scope !== "staged";
-  const diffShown = comparison?.scope === "workspace" ? fileShown : branchShown;
+  const commentsOnDiff = place !== null && place.kind !== "none";
+  const diffShown = place?.kind === "file" ? fileShown : branchShown;
   const diffNotes = useMemo(() => diffShown.map((note): DiffLineAnnotation<ReviewNote> => ({ lineNumber: note.lines[1], side: note.side, metadata: note })), [diffShown]);
 
   // drawn rows the user picked: in a branch's diff the lines of one of its versions (`branchTarget`); otherwise the
@@ -1020,8 +1022,12 @@ export function ReviewFile({ owner, paneId, directory, root, path, change, diffM
       <button type="button" className="btn btn-ghost" onClick={undoDelete}>{t("Undo")}</button>
     </p>}
     {/* the working tree's refusal; a branch diff takes removed lines */}
-    {refused && diffBranch === null && <p className="review-file-hint" role="status">{t("Comments go on lines of the file as it is now, not on removed ones.")}</p>}
-    {showDiff && comparison?.scope === "staged" && <p className="review-file-hint">{t("Comments on staged changes aren't supported.")}</p>}
+    {refused && diffBranch === null && <p className="review-file-hint" role="status">
+      {t("Comments go on lines of the file as it is now, not on removed ones.")}
+      {/* a branch's worktree compared with its uncommitted changes: without them its diff takes removed lines */}
+      {comparison?.scope === "uncommitted" && comparison.worktree !== null && <> {t("Turn off “Show uncommitted changes” in View options to comment on removed lines.")}</>}
+    </p>}
+    {showDiff && place?.kind === "none" && <p className="review-file-hint">{t("Comments on staged changes aren't supported.")}</p>}
     {draft !== null && draftAt !== null && !sheetInput && draftAnchor !== null && <DraftField key={`${draftOnBase(draft) ? "base" : "head"}-${draftAt[0]}-${draftAt[1]}`} anchor={draftAnchor}>
       <CommentPopover placement="row" reference={{ path, lines: draftAt }} showReference quote={{ text: "" }} comment="" onSave={(value) => save(draft, value)} onDelete={() => setDraft(null)} onClose={() => setDraft(null)} opener={noFocus} fallback={noFocus} />
     </DraftField>}

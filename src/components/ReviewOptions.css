@@ -1,0 +1,100 @@
+/* View options beside the tree's filter: an icon button, a dot at its corner while an option differs from its default */
+.review-options {
+  position: relative;
+  flex: none;
+}
+
+.review-options-dot {
+  position: absolute;
+  top: var(--space-1);
+  right: var(--space-1);
+  width: 6px;
+  height: 6px;
+  border-radius: var(--radius-pill);
+  background: var(--primary);
+  pointer-events: none;
+}
+
+/* the menu, at fixed coordinates under the button (ReviewOptions.tsx places it and caps its height to the room left),
+   over the tree and the file; `.menu` hides its overflow, so the scroll box is here */
+.review-options-menu {
+  position: fixed;
+  z-index: var(--z-popover);
+  width: min(320px, calc(100vw - var(--space-4)));
+  overflow-y: auto;
+}
+
+/* a row: its label with a dim line under it, the switch at its end */
+.review-option {
+  gap: var(--space-3);
+  padding: var(--space-2);
+}
+
+.review-option:focus-visible {
+  outline: none;
+  background: var(--bg-hover);
+  color: var(--text-strong);
+}
+
+.review-option-text {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.review-option-label,
+.review-option-description {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.review-option-description {
+  color: var(--text-dim);
+  font-size: var(--fs-xs);
+}
+
+/* the settings switch (SettingsControls.css `.settings-toggle`), drawn only: the row is the control, so the switch
+   needs no finger-sized box of its own */
+.review-option-switch {
+  position: relative;
+  flex: none;
+  width: calc(var(--space-6) + var(--space-4) + 4px);
+  height: calc(var(--space-4) + 4px);
+  box-sizing: border-box;
+  background: var(--bg-input);
+  border: var(--hairline) solid var(--border-strong);
+  border-radius: var(--radius-pill);
+  transition: background-color var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out);
+}
+
+/* the thumb sits 2px inside the track's outer edge, off and on */
+.review-option-thumb {
+  position: absolute;
+  top: calc(2px - var(--hairline));
+  left: calc(2px - var(--hairline));
+  width: var(--space-4);
+  height: var(--space-4);
+  border-radius: var(--radius-pill);
+  background: var(--text-dim);
+  transition: transform var(--dur-fast) var(--ease-out), background-color var(--dur-fast) var(--ease-out);
+}
+
+.review-option[aria-checked="true"] .review-option-switch {
+  background: var(--primary-tint);
+  border-color: var(--primary);
+}
+
+.review-option[aria-checked="true"] .review-option-thumb {
+  background: var(--primary);
+  transform: translateX(var(--space-6));
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .review-option-switch,
+  .review-option-thumb {
+    transition: none;
+  }
+}

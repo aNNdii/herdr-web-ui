@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, type PointerEvent } from "react";
+import { useEffect, useLayoutEffect, useRef, type CSSProperties, type PointerEvent } from "react";
 import { FileTree, useFileTree } from "@pierre/trees/react";
 import type { FileTree as FileTreeModel } from "@pierre/trees";
 
@@ -23,6 +23,9 @@ export interface ReviewTreeProps {
   viewed?: ReadonlySet<string>;
   viewedTitle?: string;
   onOpen: (path: string) => void;
+  /** classes and style beside `review-tree` (a list split in two sizes each tree, ReviewDialog.css) */
+  className?: string;
+  style?: CSSProperties;
 }
 
 /** Whether the tree shows `folder` open (the tree may name it with a trailing slash). */
@@ -48,7 +51,7 @@ function showRowPath(event: PointerEvent<HTMLElement>): void {
  * The filter is the Review's own search field (ReviewDialog.tsx), so the tree only gets the paths
  * it keeps. Only files open; a folder click just toggles it.
  */
-export function ReviewTree({ paths, marks, selected, listing, expandAll, viewed, viewedTitle = "", onOpen }: ReviewTreeProps) {
+export function ReviewTree({ paths, marks, selected, listing, expandAll, viewed, viewedTitle = "", onOpen, className, style }: ReviewTreeProps) {
   const openRef = useRef(onOpen);
   useLayoutEffect(() => { openRef.current = onOpen; }, [onOpen]);
   // read as the rows draw: the tree takes its decoration once, as it is made
@@ -116,5 +119,5 @@ export function ReviewTree({ paths, marks, selected, listing, expandAll, viewed,
     // again with new paths: a tree that loads after its file is shown (or a filter's) marks it once it lists it
   }, [model, selected, paths]);
 
-  return <FileTree className="review-tree" model={model} onPointerOver={showRowPath} />;
+  return <FileTree className={className === undefined ? "review-tree" : `review-tree ${className}`} style={style} model={model} onPointerOver={showRowPath} />;
 }

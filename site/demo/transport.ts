@@ -13,7 +13,7 @@
  * What does not: files, images, push and remote PCs, which need a real machine.
  */
 import type { AgentIntegration, AgentStatus, ConversationTurn, IntegrationsResponse, Machine, MachineEvent, OmoActivity, PaneDirection, PaneFindMatch, PaneFindRequest, PanePlan, PaneResized, PaneSplit, PaneSubagents, PaneSwapped, PaneZoomed, PendingMessage, PlanStep, PluginActionResult, PluginActions, PluginActionsResponse, PortalStatus, ServerMessage, SessionSnapshot, TabMoved, UsageReport, WorkspaceCreated, WorkspaceInfo, WorktreeEntry, WorktreeListing, WorktreeOpened, WorktreeRemoved } from "../../shared/protocol.ts";
-import type { RepoBranch, RepoBranchList, RepoDiffFile, RepoDiffFileList, RepoDiffFilePatch, RepoDiffRepository, RepoDiffScope, RepoDiffTree } from "../../shared/protocol.ts";
+import type { RepoBranch, RepoBranchCommit, RepoBranchList, RepoDiffFile, RepoDiffFileList, RepoDiffFilePatch, RepoDiffRepository, RepoDiffScope, RepoDiffTree } from "../../shared/protocol.ts";
 import { VOICE_DEFAULTS, type VoiceStatus } from "../../shared/voice.ts";
 import { isAgentName } from "../../shared/agent-name.ts";
 import { neighborPane } from "../../src/lib/layoutMap.ts";
@@ -472,6 +472,20 @@ function demoHash(name: string): string {
   let hash = 0x811c9dc5;
   for (const char of name) hash = Math.imul(hash ^ char.charCodeAt(0), 0x01000193) >>> 0;
   return hash.toString(16).padStart(8, "0").repeat(5);
+}
+
+/** Made-up tip commits for the demo's branches, in list order: subjects and how many minutes ago each was made. */
+const DEMO_BRANCH_COMMITS = [
+  { subject: "Retry payment webhooks with an idempotency key", minutes: 12 },
+  { subject: "Show refunds in the monthly report", minutes: 3 * 60 },
+  { subject: "Round money in one place", minutes: 2 * 24 * 60 },
+  { subject: "Bump the checkout API to v2", minutes: 9 * 24 * 60 },
+];
+
+/** The `index`th branch's tip commit: `hash` as the demo resolves that branch, a subject and a time from the list. */
+function demoCommit(hash: string, index: number): RepoBranchCommit {
+  const made = DEMO_BRANCH_COMMITS[index % DEMO_BRANCH_COMMITS.length] ?? { subject: "Update the checkout", minutes: 60 };
+  return { hash, time: Math.floor(Date.now() / 1000) - made.minutes * 60, subject: made.subject };
 }
 
 const DEMO_DIFF_LIMITS = { max_files: 2000, max_list_bytes: 2 * 1024 * 1024, max_patch_bytes: 1024 * 1024, context_lines: 3 };
@@ -1093,7 +1107,9 @@ async function route(url: URL, method: string, init: RequestInit | undefined, in
   if (path === "/api/voice/config") return error("demo", "the demo saves no OpenAI key", 409);
   if (path === "/api/voice/transcribe") return error("voice_not_configured", "transcription is unavailable in the demo", 409);
   if (path === "/api/workspace/diff/files" || path === "/api/workspace/diff/file" || path === "/api/workspace/diff/tree" || path === "/api/workspace/diff/branches") {
-    const root = snapshot().panes.find((pane) => pane.pane_id === paneId)?.cwd ?? query.get("directory") ?? "/home/demo/checkout-api";
+    // an absolute `directory` (a branch's worktree) is read instead of the pane's folder, as the server does
+    const named = query.get("directory");
+    const root = (named?.startsWith("/") ? named : undefined) ?? snapshot().panes.find((pane) => pane.pane_id === paneId)?.cwd ?? named ?? "/home/demo/checkout-api";
     // a worktree's checkout is on its own branch, as the sidebar and the footer say
     const branch = [...repositories.values()].flatMap((repo) => repo.checkouts).find((checkout) => checkout.path === root)?.branch ?? "main";
     const repository: RepoDiffRepository = { root, branch, head: "4f2a9c1d7e3b5a8c6d0e1f2a3b4c5d6e7f8a9b0c", detached: false, unborn: false };
@@ -1105,22 +1121,37 @@ async function route(url: URL, method: string, init: RequestInit | undefined, in
     // the repository's branches: each checkout's own (with its folder), then two of origin's
     const repo = [...repositories.values()].find((candidate) => candidate.checkouts.some((checkout) => checkout.path === root));
     const local = (repo?.checkouts ?? [{ path: root, branch }]).flatMap((checkout): RepoBranch[] => checkout.branch === null ? [] : [{ name: checkout.branch, remote: false, worktree: checkout.path }]);
-    const branches = [...local, ...DEMO_REMOTE_BRANCHES.map((name): RepoBranch => ({ name, remote: true, worktree: null }))];
+    // each tip as `resolve` below names it: the checkout's branch at the repository's head, any other at its made-up hash
+    const branches = [...local, ...DEMO_REMOTE_BRANCHES.map((name): RepoBranch => ({ name, remote: true, worktree: null }))]
+      .map((entry, index): RepoBranch => ({ ...entry, commit: demoCommit((entry.name === branch ? repository.head : null) ?? demoHash(entry.name), index) }));
     if (path === "/api/workspace/diff/branches") {
       return json({ repository, branches, default_base: "origin/main", truncated: false, limits: { max_branches: 1000 } } satisfies RepoBranchList);
     }
     const scope = query.get("scope") || "workspace";
-    if (scope !== "workspace" && scope !== "staged" && scope !== "commit") return error("invalid_scope", "scope must be workspace, staged or commit", 400);
+    if (scope !== "workspace" && scope !== "staged" && scope !== "commit" && scope !== "uncommitted") return error("invalid_scope", "scope must be workspace, staged, commit or uncommitted", 400);
     const fromMergeBase = query.get("merge_base") === "1";
-    if (scope !== "commit" && fromMergeBase) return error("invalid_scope", "merge_base applies to scope=commit only", 400);
+    if (scope !== "commit" && scope !== "uncommitted" && fromMergeBase) return error("invalid_scope", "merge_base applies to scope=commit and scope=uncommitted only", 400);
     let compared: { base: string | null; head: string | null; merge_base?: string } = { base: null, head: null };
+    // a branch's hash is made up but stable; HEAD and the checkout's branch are the repository's head
+    const resolve = (name: string): string | null => {
+      if (name === "HEAD" || name === branch) return repository.head;
+      if (branches.some((candidate) => candidate.name === name)) return demoHash(name);
+      return /^[0-9a-f]{40}$/.test(name) ? name : null;
+    };
+    if (scope === "uncommitted") {
+      // without a base, HEAD against the working tree, as workspace; with one, from base (or where the checkout forked off it)
+      const baseName = query.get("base");
+      const headName = query.get("head");
+      if (baseName === null && headName !== null) return error("invalid_revision", "head applies to scope=uncommitted only with a base", 400, "head");
+      if (baseName === null && fromMergeBase) return error("invalid_revision", "merge_base needs a base revision", 400, "base");
+      if (headName !== null && headName !== branch) return error("worktree_moved", "that worktree no longer has head checked out", 409, "head");
+      if (baseName !== null) {
+        const base = resolve(baseName);
+        if (base === null) return error("revision_not_found", `${baseName} names no commit in this repository`, 404, "base");
+        compared = { base, head: null, ...(fromMergeBase ? { merge_base: base === repository.head ? base : DEMO_MERGE_BASE } : {}) };
+      }
+    }
     if (scope === "commit") {
-      // a branch's hash is made up but stable; HEAD and the checkout's branch are the repository's head
-      const resolve = (name: string): string | null => {
-        if (name === "HEAD" || name === branch) return repository.head;
-        if (branches.some((candidate) => candidate.name === name)) return demoHash(name);
-        return /^[0-9a-f]{40}$/.test(name) ? name : null;
-      };
       const baseName = query.get("base");
       if (baseName === null) return error("invalid_revision", "scope=commit needs a base revision", 400, "base");
       const headName = query.get("head") ?? "HEAD";
@@ -1132,7 +1163,7 @@ async function route(url: URL, method: string, init: RequestInit | undefined, in
     }
     // everything in the demo is unstaged work; a branch comparison shows the same changes, committed
     const committed = DEMO_DIFF.map((entry) => entry.file.status === "untracked" ? { ...entry, file: { ...entry.file, status: "added" as const } } : entry);
-    const changed = scope === "workspace" ? DEMO_DIFF : scope === "commit" && compared.head !== (compared.merge_base ?? compared.base) ? committed : [];
+    const changed = scope === "workspace" || scope === "uncommitted" ? DEMO_DIFF : scope === "commit" && compared.head !== (compared.merge_base ?? compared.base) ? committed : [];
     const shared = { repository, scope: scope as RepoDiffScope, ...compared };
     if (path === "/api/workspace/diff/files") {
       return json({ ...shared, files: changed.map((entry) => entry.file), total: changed.length, truncated: false, limits: { max_files: DEMO_DIFF_LIMITS.max_files, max_list_bytes: DEMO_DIFF_LIMITS.max_list_bytes } } satisfies RepoDiffFileList);

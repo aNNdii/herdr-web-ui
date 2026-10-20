@@ -23,6 +23,7 @@ import type { MachineManager } from "./machines.ts";
 import { TailnetIdentitySource } from "./tailscale.ts";
 import { forgetTranscriptState } from "./conversation.ts";
 import type { RepoBranchList, RepoDiffFileList, RepoDiffFilePatch } from "../shared/protocol.ts";
+import { DeviceStore } from "./devices.ts";
 
 /**
  * Contract test for herdr-web-ui's HTTP + WS surface.
@@ -3742,6 +3743,66 @@ describe("repository diff of a pane's folder", () => {
     }
   });
 
+  it("reads a branch's worktree with its uncommitted changes from the folder named, and closes it to another site and a watching device", async () => {
+    const repo = realpathSync(mkdtempSync(join(tmpdir(), "herdr-web-ui-test-repo-worktree-")));
+    const watchState = mkdtempSync(join(tmpdir(), "herdr-web-ui-test-repo-worktree-state-"));
+    let workspaceId: string | null = null;
+    let watchServer: ReturnType<typeof createServer> | null = null;
+    try {
+      const git = (cwd: string, ...args: string[]) => {
+        const result = Bun.spawnSync(["git", "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "-c", "commit.gpgsign=false", "-C", cwd, ...args], { stdout: "pipe", stderr: "pipe" });
+        if (result.exitCode !== 0) throw new Error(`git ${args.join(" ")} failed: ${result.stderr.toString()}`);
+        return result.stdout.toString().trim();
+      };
+      const main = join(repo, "main");
+      mkdirSync(main);
+      git(main, "init", "-q", "-b", "main");
+      writeFileSync(join(main, "a.txt"), "one\n");
+      git(main, "add", ".");
+      git(main, "commit", "-q", "-m", "first");
+      const fork = git(main, "rev-parse", "HEAD");
+      const worktree = join(repo, "feat");
+      git(main, "worktree", "add", "-q", "-b", "feat/x", worktree);
+      writeFileSync(join(worktree, "loose.txt"), "loose\n");
+      // the pane sits in the main checkout, which has another branch checked out
+      const created = await workspaceCreate({ cwd: main, label: "herdr-web-ui-test-repo-worktree" });
+      workspaceId = created.workspace.workspace_id;
+      const pane = `pane_id=${encodeURIComponent(created.root_pane.pane_id)}`;
+      const ask = "scope=uncommitted&base=main&head=feat%2Fx&merge_base=1";
+      const search = `${pane}&directory=${encodeURIComponent(worktree)}&${ask}`;
+
+      const listed = await fetch(`${base()}/api/workspace/diff/files?${search}`);
+      expect(listed.status).toBe(200);
+      expect((await listed.json()) as RepoDiffFileList).toMatchObject({ repository: { root: worktree, branch: "feat/x" }, scope: "uncommitted", base: fork, head: null, merge_base: fork, files: [{ path: "loose.txt", status: "untracked" }] });
+      const patched = await fetch(`${base()}/api/workspace/diff/file?${search}&path=loose.txt`);
+      expect(patched.status).toBe(200);
+      expect(((await patched.json()) as RepoDiffFilePatch).patch).toStartWith("diff --git a/loose.txt b/loose.txt\n");
+      // without the folder, the pane's own checkout is asked, and it is not on feat/x
+      const own = await fetch(`${base()}/api/workspace/diff/files?${pane}&${ask}`);
+      expect(own.status).toBe(409);
+      expect(((await own.json()) as ApiError).error).toMatchObject({ code: "worktree_moved", param: "head" });
+
+      for (const route of ["files", "file"]) {
+        const crossSite = await fetch(`${base()}/api/workspace/diff/${route}?${search}&path=loose.txt`, { headers: { "sec-fetch-site": "cross-site" } });
+        expect([route, crossSite.status, ((await crossSite.json()) as ApiError).error.code]).toEqual([route, 403, "cross_site"]);
+      }
+      const store = new DeviceStore(watchState);
+      const watchToken = store.pair(store.startPairing().code, "Watch", "watch")!.token;
+      // a first pairing is a device only once its cookie came back: that return is what saves it
+      expect(store.match(watchToken)).not.toBeNull();
+      watchServer = createServer({ port: 0, stateDir: watchState, token: "test-repo-worktree", tailscaleOwner: null, machines: false });
+      for (const route of ["files", "file"]) {
+        const watched = await fetch(`http://127.0.0.1:${watchServer.port}/api/workspace/diff/${route}?${search}&path=loose.txt`, { headers: { cookie: `herdr_web_device=${watchToken}` } });
+        expect([route, watched.status, ((await watched.json()) as ApiError).error.code]).toEqual([route, 403, "read_only"]);
+      }
+    } finally {
+      watchServer?.stop();
+      if (workspaceId) await workspaceClose(workspaceId).catch(() => undefined);
+      rmSync(repo, { recursive: true, force: true });
+      rmSync(watchState, { recursive: true, force: true });
+    }
+  });
+
   it("lists a folder's branches on this PC and its local alias, for a GET from this app only", async () => {
     const repo = realpathSync(mkdtempSync(join(tmpdir(), "herdr-web-ui-test-repo-branches-")));
     try {
@@ -3762,7 +3823,7 @@ describe("repository diff of a pane's folder", () => {
         const list = (await response.json()) as RepoBranchList;
         expect(list.repository).toMatchObject({ root: repo, branch: "main" });
         expect(list.branches.map((branch) => branch.name).sort()).toEqual(["feat/x", "main"]);
-        expect(list.branches.find((branch) => branch.name === "main")).toEqual({ name: "main", remote: false, worktree: repo });
+        expect(list.branches.find((branch) => branch.name === "main")).toEqual({ name: "main", remote: false, worktree: repo, commit: { hash: expect.stringMatching(/^[0-9a-f]{40}$/), time: expect.any(Number), subject: "first" } });
         expect(list).toMatchObject({ default_base: "main", truncated: false });
       }
       const posted = await fetch(`${base()}/api/workspace/diff/branches?${search}`, { method: "POST", headers: { "x-herdr-machine": "1" } });

@@ -55,6 +55,15 @@ describe("settings entries", () => {
   it("has an alias for every action the palette can offer", () => {
     expect(Object.keys(actionAliases(identity))).toContain("theme");
   });
+
+  it("finds Review changes by diff, git, uncommitted, staged and branch", () => {
+    const aliases = actionAliases(identity);
+    const rows = [
+      { item: "files", title: "Browse files", aliases: aliases.files },
+      { item: "review", title: "Review changes", aliases: aliases.review },
+    ];
+    for (const word of ["diff", "git", "uncommitted", "staged", "branch", "compare", "changes"]) expect({ word, found: rankByTitle(word, rows) }).toEqual({ word, found: ["review"] });
+  });
 });
 
 describe("requested page", () => {

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { FolderSearch, ListTree, X } from "lucide-react";
+import { FolderSearch, GitCompareArrows, X } from "lucide-react";
 
 import "./FilesDialog.css";
 import { DirectoryBrowser } from "./DirectoryBrowser.tsx";
@@ -65,7 +65,7 @@ export function FilesDialog({ start, paneId, viewing, onOpenFile, onOpenDiff, on
             <button type="button" aria-pressed={tab === "browse"} onClick={() => show("browse")}>{t("Browse")}</button>
             <button type="button" aria-pressed={tab === "changes"} onClick={() => show("changes")}>{t("Changes")}</button>
           </div>
-          {onReview && <button type="button" className="files-dialog-review" aria-label={t("Review all files")} title={t("Review all files")} onClick={onReview}><ListTree aria-hidden="true" /><span>{t("Review")}</span></button>}
+          {onReview && <button type="button" className="files-dialog-review" aria-label={t("Review changes")} title={t("Review changes")} onClick={onReview}><GitCompareArrows aria-hidden="true" /><span>{t("Review")}</span></button>}
           {!phone && <button type="button" className="icon-button" aria-label={t("Browse folders in the palette")} title={t("Browse folders in the palette")} onClick={browseFolders}><FolderSearch aria-hidden="true" /></button>}
           <button type="button" className="icon-button" aria-label={t("Close files")} onClick={onClose}><X aria-hidden="true" /></button>
         </header>

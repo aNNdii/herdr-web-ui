@@ -4,6 +4,8 @@
  * so marking it viewed does not pull it out from under the reader, but a filter that misses it
  * still drops it. The note says why the list is short, in this order: nothing changed, the filter
  * matches nothing, every remaining file is viewed. A kept file is still listed under that note.
+ * In Changed, the new files can be listed apart (List new files separately), after the others:
+ * the filter, hiding and the note work over both groups as over one list.
  */
 
 export type ReviewListNote = "nothing-changed" | "no-match" | "all-viewed" | "all-matching-viewed";
@@ -17,10 +19,15 @@ export interface ReviewListInput {
   hidden: ReadonlySet<string> | null;
   /** the file being shown, listed even when hidden */
   keep: string | null;
+  /** the new (untracked) files to list apart, or null to list them with the others; All never lists them apart */
+  apart: ReadonlySet<string> | null;
 }
 
 export interface ReviewList {
+  /** the files listed, the new ones listed apart left out */
   paths: readonly string[];
+  /** the new files listed apart, under their own heading after `paths`; empty when none are */
+  newPaths: readonly string[];
   note: ReviewListNote | null;
   /** a filter narrows the list */
   filtered: boolean;
@@ -28,7 +35,7 @@ export interface ReviewList {
   query: string;
 }
 
-export function reviewList({ scope, paths, query, hidden, keep }: ReviewListInput): ReviewList {
+export function reviewList({ scope, paths, query, hidden, keep, apart }: ReviewListInput): ReviewList {
   const filter = query.trim().toLowerCase();
   const filtered = filter !== "";
   const matching = filtered ? paths.filter((path) => path.toLowerCase().includes(filter)) : paths;
@@ -38,5 +45,33 @@ export function reviewList({ scope, paths, query, hidden, keep }: ReviewListInpu
   if (scope === "changed" && paths.length === 0) note = "nothing-changed";
   else if (matching.length === 0) note = "no-match";
   else if (hide !== null && matching.every((path) => hide.has(path))) note = filtered ? "all-matching-viewed" : "all-viewed";
-  return { paths: shown, note, filtered, query: filter };
+  const split = scope === "changed" ? apart : null;
+  if (split === null) return { paths: shown, newPaths: [], note, filtered, query: filter };
+  return { paths: shown.filter((path) => !split.has(path)), newPaths: shown.filter((path) => split.has(path)), note, filtered, query: filter };
+}
+
+/**
+ * The rows a review tree draws for `paths` with every folder open: one per file and one per folder, where a folder
+ * whose only entry is a folder shares that folder's row (the tree flattens it, `a / b / c`). A list split in two sizes
+ * each tree by it.
+ */
+export function drawnRows(paths: readonly string[]): number {
+  // each folder's entries, a folder's own entry named with a trailing slash
+  const entries = new Map<string, Set<string>>();
+  for (const path of paths) {
+    let child = path;
+    for (let slash = path.lastIndexOf("/"); slash > 0; slash = path.lastIndexOf("/", slash - 1)) {
+      const folder = path.slice(0, slash);
+      const known = entries.get(folder);
+      if (known === undefined) entries.set(folder, new Set([child]));
+      else known.add(child);
+      child = `${folder}/`;
+    }
+  }
+  let folders = 0;
+  for (const children of entries.values()) {
+    const only = children.size === 1 ? [...children][0]! : null;
+    if (only === null || !only.endsWith("/")) folders++;
+  }
+  return paths.length + folders;
 }
