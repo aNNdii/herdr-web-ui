@@ -119,6 +119,56 @@ export function storeNewFilesApart(apart: boolean): void {
 }
 
 /**
+ * Whether the review's own keys (`[` `]` `v` and the line cursor) are turned off on this device; on by default, off for
+ * speech input or a habit they get in the way of (WCAG 2.1.4). Escape works either way.
+ */
+const REVIEW_KEYS_OFF_KEY = "herdr-web-ui:review-keys-off";
+
+export function storedReviewKeysOff(): boolean {
+  return storedFlag(REVIEW_KEYS_OFF_KEY);
+}
+
+export function storeReviewKeysOff(off: boolean): void {
+  storeFlag(REVIEW_KEYS_OFF_KEY, off);
+}
+
+/** How the review shows a Markdown file: its rendered preview, or its source (as a diff in Changed files). */
+export type MarkdownView = "preview" | "source";
+
+/** The Markdown view of each list, chosen apart: Changed files is read for its changes, All files for the text. */
+export type MarkdownViews = Readonly<Record<"changed" | "all", MarkdownView>>;
+
+const MARKDOWN_VIEW_PREFIX = "herdr-web-ui:review-markdown-view:";
+const MARKDOWN_VIEW_DEFAULTS: MarkdownViews = { changed: "source", all: "preview" };
+
+function storedMarkdownView(scope: keyof MarkdownViews): MarkdownView {
+  try {
+    const value = window.localStorage.getItem(`${MARKDOWN_VIEW_PREFIX}${scope}`);
+    return value === "preview" || value === "source" ? value : MARKDOWN_VIEW_DEFAULTS[scope];
+  } catch {
+    return MARKDOWN_VIEW_DEFAULTS[scope];
+  }
+}
+
+/** Each list's Markdown view as last chosen on this device; one never chosen (or unreadable) is its list's default. */
+export function storedMarkdownViews(): MarkdownViews {
+  return { changed: storedMarkdownView("changed"), all: storedMarkdownView("all") };
+}
+
+/**
+ * The views with `scope`'s set to `view`, kept for the next opening under that list's key alone. The choice is written
+ * as it is, a default too, so another default later leaves it as chosen.
+ */
+export function storeMarkdownView(views: MarkdownViews, scope: keyof MarkdownViews, view: MarkdownView): MarkdownViews {
+  try {
+    window.localStorage.setItem(`${MARKDOWN_VIEW_PREFIX}${scope}`, view);
+  } catch {
+    // private mode: it holds for this opening only
+  }
+  return { ...views, [scope]: view };
+}
+
+/**
  * The changed files a review has marked as viewed, per device: for each repository (by PC and root), each file's path
  * with the stamp it had when it was marked (`RepoDiffFile.stamp`). A file whose stamp is another now has changed since,
  * and is not viewed any more.

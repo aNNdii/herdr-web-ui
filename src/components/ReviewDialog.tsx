@@ -1,10 +1,10 @@
-import { useEffect, useId, useMemo, useRef, useState, type CSSProperties } from "react";
+import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { ArrowLeft, PanelLeft, PanelLeftClose, X } from "lucide-react";
 
 import "./ReviewDialog.css";
 import { ComparePicker } from "./ComparePicker.tsx";
 import { RenderBoundary } from "./RenderBoundary.tsx";
-import { ReviewFile, ReviewLoading } from "./ReviewFile.tsx";
+import { ReviewFile, ReviewLoading, type ReviewFileKeyboard } from "./ReviewFile.tsx";
 import { ReviewOptions, type ReviewOption } from "./ReviewOptions.tsx";
 import { ReviewTree } from "./ReviewTree.tsx";
 import { ReviewTreeResizer } from "./ReviewTreeResizer.tsx";
@@ -16,8 +16,9 @@ import { useMachineApi, useMachineId } from "../lib/machineContext.tsx";
 import { diffErrorMessage, nothingChangedSentence, refusedUncommitted, standInMessage, worktreeMovedMessage } from "../lib/repoDiff.ts";
 import { ApiError, routeMissing } from "../lib/api.ts";
 import { branchChoices, branchDefaults, branchFieldError, reviewAsk, reviewComparison, worktreeOf, type BranchPick, type ReviewAsk, type ReviewChoice } from "../lib/branchReview.ts";
-import { storedHideViewed, storedNewFilesApart, storedShowIgnored, storedViewed, storeHideViewed, storeNewFilesApart, storeShowIgnored, storeViewed, treeMarks, type TreeMark, type ViewedFiles } from "../lib/review.ts";
-import { drawnRows, reviewList, type ReviewListNote } from "../lib/reviewList.ts";
+import { storedHideViewed, storedMarkdownViews, storedNewFilesApart, storedReviewKeysOff, storedShowIgnored, storedViewed, storeHideViewed, storeMarkdownView, storeNewFilesApart, storeReviewKeysOff, storeShowIgnored, storeViewed, treeMarks, type MarkdownView, type TreeMark, type ViewedFiles } from "../lib/review.ts";
+import { reviewKeyOf } from "../lib/reviewKeys.ts";
+import { drawnRows, reviewList, stepFile, treeOrder, type ReviewListNote } from "../lib/reviewList.ts";
 import { reviewTreeColumn, storedReviewTreeWidth } from "../lib/reviewTreeWidth.ts";
 import { SHEET_QUERY } from "../lib/sheets.ts";
 import { useAnnouncedText } from "../lib/useAnnouncedText.ts";
@@ -158,8 +159,12 @@ export function ReviewDialog({ paneId, directory, initialPath = null, onClose }:
   // the viewed files, in Changed files: shown until hidden, then kept hidden per device
   const [hideViewed, setHideViewed] = useState(storedHideViewed);
   const chooseHideViewed = (on: boolean): void => { storeHideViewed(on); setHideViewed(on); };
+  // the review's own keys (lib/reviewKeys.ts): on until turned off in View options, per device
+  const [keysOn, setKeysOn] = useState(() => !storedReviewKeysOff());
   // the new (untracked) files, in Changed files: listed with the others until listed apart, then kept so per device
   const [newApart, setNewApart] = useState(storedNewFilesApart);
+  // how each list shows a Markdown file (Source in Changed files, Preview in All files until chosen), kept per device
+  const [markdownViews, setMarkdownViews] = useState(storedMarkdownViews);
   // the tree column's width as the user dragged it, per device; null is its default width
   const [treeWidth, setTreeWidth] = useState(storedReviewTreeWidth);
   // the path to show (the opening's, then one a shown file links to), until it is found; one the server finds only
@@ -388,18 +393,13 @@ export function ReviewDialog({ paneId, directory, initialPath = null, onClose }:
     setDecided(null);
   };
 
-  useEffect(() => {
-    const onKey = (event: KeyboardEvent): void => {
-      if (event.key === "Escape" && !nativeModalOver(surface.current)) onClose();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [onClose, surface]);
-
   const changedPaths = useMemo(() => new Set(changes.map((one) => one.path)), [changes]);
   // the list the tree shows: all of the repository's (or the folder's) files, or only those git lists as changed; then the
   // filter, and in Changed the viewed files left out once hidden (the file shown stays)
   const listShown = plain ? "all" : scope;
+  // a jump to a line shows the source until the user picks a view or another list: then the list's view holds again
+  const chooseMarkdownView = (view: MarkdownView): void => { setMarkdownViews(storeMarkdownView(markdownViews, listShown, view)); setJump(null); };
+  const chooseScope = (next: "all" | "changed"): void => { setScope(next); setJump(null); };
   const listing = listShown === "changed" ? changesNow : treeNow;
   // Hide viewed files is offered only where a file can be marked viewed: a changed file with a stamp
   const hideable = !plain && scope === "changed" && changes.some((one) => one.stamp !== undefined);
@@ -419,6 +419,45 @@ export function ReviewDialog({ paneId, directory, initialPath = null, onClose }:
     keep,
     apart,
   }), [listShown, changedPaths, treeValue, query, hidden, keep, apart]);
+  // the order the tree draws its files in, which `[` and `]` step through
+  const order = useMemo(() => treeOrder(list, apart), [list, apart]);
+  // the shown file's Viewed mark (null: none to set: unchanged, no stamp, a plain folder), for its button and `v`
+  const viewedNow = plain || change === null || change.stamp === undefined ? null : viewedPaths.has(change.path);
+
+  // what the last review key did, for a screen reader: the file `[` or `]` opened (its path: two files may share a name),
+  // or the Viewed mark `v` set. Each one is said, the same words again too: its count keys the words, so they are new
+  // text in the live region, which an unchanged text would not be
+  const [announcement, setAnnouncement] = useState<{ text: string; count: number } | null>(null);
+  const announce = (text: string): void => setAnnouncement((was) => ({ text, count: (was?.count ?? 0) + 1 }));
+  const announced = useAnnouncedText(announcement?.text ?? null);
+  // the shown file is asked about a review key first: a cursor it moved, or a comment open, which the key stays out of
+  const fileKeyboard = useRef<ReviewFileKeyboard>(null);
+  // one keydown listener for the review; its handler is read here, so it sees this render's list and file
+  const onKey = useRef<(event: KeyboardEvent) => void>(() => {});
+  useLayoutEffect(() => {
+    onKey.current = (event) => {
+      const key = reviewKeyOf(event, surface.current, keysOn);
+      // no review key here (a text field, a native dialog, a repeated Escape): Escape still closes as it always did
+      if (key === null) { if (event.key === "Escape" && !nativeModalOver(surface.current)) onClose(); return; }
+      const answer = fileKeyboard.current?.press(key, document.activeElement) ?? "passed";
+      if (answer === "taken") { event.preventDefault(); return; }
+      if (answer === "blocked") return;
+      if (key === "clear") { if (!nativeModalOver(surface.current)) onClose(); return; }
+      if (key === "next" || key === "previous") {
+        const to = stepFile(order, selected, key === "next" ? 1 : -1);
+        if (to !== null) { event.preventDefault(); pick(to); announce(to); }
+      } else if (key === "viewed" && change !== null && viewedNow !== null) {
+        event.preventDefault();
+        setViewed(change, !viewedNow);
+        announce(viewedNow ? t("Not viewed") : t("Marked as viewed"));
+      }
+    };
+  });
+  useEffect(() => {
+    const listener = (event: KeyboardEvent): void => onKey.current(event);
+    window.addEventListener("keydown", listener);
+    return () => window.removeEventListener("keydown", listener);
+  }, []);
   const notes: Record<ReviewListNote, string> = {
     // the tip's own words (nothing uncommitted, nothing staged); a branch comparison's are the general ones
     "nothing-changed": ask === null || choice?.scope === "branches" ? t("Nothing changed here.") : nothingChangedSentence(t, ask.list.scope),
@@ -471,6 +510,10 @@ export function ReviewDialog({ paneId, directory, initialPath = null, onClose }:
     id: "new-files", label: t("List new files separately"), description: t("Untracked files under their own heading"),
     checked: newApart, byDefault: false, onChange: (on) => { storeNewFilesApart(on); setNewApart(on); },
   });
+  viewOptions.push({
+    id: "keys", label: t("Keyboard shortcuts"), description: t("Review keys like ] for the next file and v for viewed"),
+    checked: keysOn, byDefault: true, onChange: (on) => { storeReviewKeysOff(!on); setKeysOn(on); },
+  });
   const showFile = narrow && file !== null;
   // with no file chosen the tree shows, whatever it was folded to: else a narrow screen would show nothing
   const treeVisible = treeShown || file === null;
@@ -510,9 +553,9 @@ export function ReviewDialog({ paneId, directory, initialPath = null, onClose }:
         <div className="review-body" style={{ "--review-tree-column": reviewTreeColumn(treeWidth) } as CSSProperties}>
           <div className="review-tree-pane">
             {!plain && <div className="segmented review-scope" role="group" aria-label={t("Files shown")}>
-              <button type="button" aria-pressed={scope === "all"} onClick={() => setScope("all")}>{t("All files")}</button>
+              <button type="button" aria-pressed={scope === "all"} onClick={() => chooseScope("all")}>{t("All files")}</button>
               {/* the changed files' count on their button (with Viewed marks: how many of them are viewed) */}
-              <button type="button" aria-pressed={scope === "changed"} onClick={() => setScope("changed")}>
+              <button type="button" aria-pressed={scope === "changed"} onClick={() => chooseScope("changed")}>
                 {t("Changed files")}
                 {changesValue !== null && <span className="review-badge" aria-label={viewedPaths.size > 0 ? t("{viewed} of {count} viewed", { viewed: viewedPaths.size, count: changes.length }) : t("{count} changed", { count: changes.length })}>
                   {viewedPaths.size > 0 ? `${viewedPaths.size}/${changes.length}` : changes.length}
@@ -549,13 +592,15 @@ export function ReviewDialog({ paneId, directory, initialPath = null, onClose }:
             {file !== null && fileRoot !== null && decided === file
               ? <RenderBoundary resetKey={file} fallback={() => <p className="repo-diff-note" role="alert">{t("This file can't be shown.")}</p>}>
                 <ReviewFile key={file} owner={paneStorageId(machineId, paneId)} paneId={paneId} directory={folder} root={fileRoot} path={file.slice(fileRoot.replace(/[\\/]+$/, "").length + 1)} change={plain ? null : change} plain={plain} ignored={ignoredFile}
-                  viewed={plain || change === null || change.stamp === undefined ? null : viewedPaths.has(change.path)} onViewed={(on) => { if (change !== null) setViewed(change, on); }} diffMode={!plain && scope === "changed"} comparison={review} line={jump !== null && jump.file === file ? jump.line : undefined} onClose={closeFile} onOpen={openPath} />
+                  keyboard={fileKeyboard} keysOn={keysOn} viewed={viewedNow} onViewed={(on) => { if (change !== null) setViewed(change, on); }} diffMode={!plain && scope === "changed"} comparison={review} line={jump !== null && jump.file === file ? jump.line : undefined} markdownView={markdownViews[listShown]} onMarkdownView={chooseMarkdownView} onClose={closeFile} onOpen={openPath} />
               </RenderBoundary>
               : file !== null || wanted !== null || fallback !== null ? <ReviewLoading />
               : missing !== null ? <p className="repo-diff-note" role="alert">{t("This file can't be shown.")}</p>
               : <p className="repo-diff-note">{t("Choose a file in the tree.")}</p>}
           </div>
         </div>
+        {/* in the document from the first render, so its words are announced (lib/useAnnouncedText.ts) */}
+        <p className="visually-hidden" role="status">{announced === null ? null : <span key={announcement?.count}>{announced}</span>}</p>
       </section>
     </div>
   );

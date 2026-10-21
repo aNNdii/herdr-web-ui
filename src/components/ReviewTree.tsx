@@ -6,6 +6,7 @@ import type { FileTree as FileTreeModel } from "@pierre/trees";
 import treeCss from "./ReviewTree.shadow.css?inline";
 
 import type { TreeMark } from "../lib/review.ts";
+import { TREE_SORT } from "../lib/reviewList.ts";
 import { foldersOf, treeReset, type DrawnTree } from "../lib/reviewTreeReset.ts";
 
 export interface ReviewTreeProps {
@@ -58,14 +59,20 @@ export function ReviewTree({ paths, marks, selected, listing, expandAll, viewed,
   const viewedRef = useRef({ viewed, title: viewedTitle });
   viewedRef.current = { viewed, title: viewedTitle };
 
+  // the tree's selection set by the file shown, not by the reader: each deselect tells its own change, whose last row is
+  // not the file to open (a row left over from a Ctrl+click would be opened before the shown file is selected)
+  const syncing = useRef(false);
   const { model } = useFileTree({
     paths: [],
     flattenEmptyDirectories: true,
     initialExpansion: "closed",
+    // the order the file keys step by (stepFile in lib/reviewList.ts)
+    sort: TREE_SORT,
     unsafeCSS: treeCss,
     // a viewed file's check, in the row's decoration lane before git's mark
     renderRowDecoration: ({ item }) => (viewedRef.current.viewed?.has(item.path) === true ? { text: "✓", title: viewedRef.current.title } : null),
     onSelectionChange: (selectedPaths) => {
+      if (syncing.current) return;
       const last = selectedPaths[selectedPaths.length - 1];
       if (last === undefined) return;
       const item = model.getItem(last);
@@ -99,7 +106,12 @@ export function ReviewTree({ paths, marks, selected, listing, expandAll, viewed,
   useEffect(() => {
     // no file shown (a phone's Back): the row lets go, so a tap on the same file is a selection again and opens it
     if (selected === null) {
-      for (const path of model.getSelectedPaths()) model.getItem(path)?.deselect();
+      syncing.current = true;
+      try {
+        for (const path of model.getSelectedPaths()) model.getItem(path)?.deselect();
+      } finally {
+        syncing.current = false;
+      }
       revealedRef.current = null;
       return;
     }
@@ -113,8 +125,15 @@ export function ReviewTree({ paths, marks, selected, listing, expandAll, viewed,
       const folderItem = model.getItem(folder) ?? model.getItem(`${folder}/`);
       if (folderItem !== null && "expand" in folderItem) folderItem.expand();
     }
-    const item = model.getItem(selected);
-    if (item !== null && !item.isSelected()) item.select();
+    // one row selected: the file opened by a key or by its path leaves no other row marked
+    syncing.current = true;
+    try {
+      for (const path of model.getSelectedPaths()) if (path !== selected) model.getItem(path)?.deselect();
+      const item = model.getItem(selected);
+      if (item !== null && !item.isSelected()) item.select();
+    } finally {
+      syncing.current = false;
+    }
     model.scrollToPath(selected);
     // again with new paths: a tree that loads after its file is shown (or a filter's) marks it once it lists it
   }, [model, selected, paths]);

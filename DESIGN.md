@@ -1405,6 +1405,8 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
     tree of its own folders (`.review-tree.is-split`, as tall as its rows through
     `--review-tree-rows`; the new files' `.is-new` tree does not grow). Selection, Viewed marks,
     the filter and Show viewed files work in both.
+  - **Keyboard shortcuts** ("Review keys like ] for the next file and v for viewed"), on by
+    default: in every review, kept per device. Off, only Escape acts (see Review keyboard).
 - A row toggles in place and the menu stays open for the next one. The arrow keys, Home and End
   move between rows, Space and Enter toggle one; Escape, a press outside, the focus leaving and
   a resize close the menu and give the focus back to the button; Tab closes it too.
@@ -1413,6 +1415,45 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
 - The review opens from the header's Review button (from `769px`), **Review changes** in the More
   menu below that, the palette at every width (`openReview`), and the Files dialog's **Review**
   button, all with the same `GitCompareArrows` glyph.
+
+### Review keyboard
+- The review's own keys follow Gerrit's: `]` and `[` open the next and previous file in the order the
+  tree draws them (`sort: "default"` of `@pierre/trees`, the new files after the others, files in
+  closed folders counted, no wrap at the ends), `j` `k` and the arrows move a line cursor, Shift
+  with them selects lines as a text selection does, and `c` (or Enter, where no focused control
+  keeps it) opens a comment on them. Viewed is `v`, not Gerrit's `r`: here the mark reads
+  "Viewed", so the key is its first letter. The rules live in one place (`src/lib/reviewKeys.ts`),
+  and the table in docs/guide.md is checked against it.
+- The keys take no modifier and work only while the review is open, never in a text field, an
+  open popover or a native dialog, nor during IME composition; a held key repeats only the moves.
+  Punctuation and non-Latin letters are read by where they sit, as the app's other shortcuts are.
+  The Markdown preview has no cursor: there `j` `k` and the arrows scroll it a line (40px, the
+  browser's arrow), as the focus on the dialog leaves the browser nothing to scroll. In the file
+  viewer's view only `]` `[` `v` act.
+- The cursor is the library's selected line with a bar of `--rail-w` in `--text-strong` on the
+  line number (`REVIEW_CSS` in `src/components/ReviewFile.tsx`), on the side it stands on in a split
+  view: a removed line's left, any other right. The selection tint alone barely differs from the
+  row; the bar is what shows the cursor. Not `--accent`: under the selection's blue tint on a
+  changed line it falls below 3:1 in several palettes, while `--text-strong` stands 3:1 on every
+  row of every palette (`scripts/herdr-themes.test.ts`). A mouse selection or drag is drawn without the bar, and
+  the next key shows the cursor where the selection ended.
+- Escape drops a Shift selection first and closes the review only then; while a comment is open
+  it is the comment's.
+- Space, Shift+Space, PageDown and PageUp page the file's body (seven eighths of its view, as the
+  browser pages), in the preview too: the focus rests on the dialog, not on the scrolling body, so
+  the browser's own paging would find nothing to scroll. They are the browser's keys, not
+  shortcuts, so they stay with Keyboard shortcuts off, and so do the arrows, which then scroll the
+  file a line instead of moving the cursor; a focused control or tree keeps them.
+- `c` on a line under a saved comment opens that comment to edit (the newest, on its side), as a
+  click on its card does; on a Shift selection only a comment on exactly those lines. A new
+  comment's field on a whole line starts at the line's text, where its card will be, not at the
+  row's far end; on a text selection it stays centred where the selection ends.
+- After `[` `]` a status line (`role="status"`, `useAnnouncedText`) says the file's path (two files
+  may share a name), after `v` "Marked as viewed" or "Not viewed". The same words again are said
+  again: a count keys them, so they are new text in the live region. The Viewed button's tooltip
+  names the key ("Mark as viewed (V)", "Viewed (V)", `aria-keyshortcuts="v"`).
+- Single-key shortcuts must be switchable (WCAG 2.1.4): View options' **Keyboard shortcuts** row,
+  on by default and kept per device, turns them off; Escape still closes the review.
 
 ### Header context and connection
 - A selected pane shows agent mark + title (`--fs-md`), then on the same line the crumb
