@@ -1,8 +1,9 @@
 import { describe, expect, it } from "bun:test";
 
-import { parsePatchFiles, type FileDiffMetadata } from "@pierre/diffs";
+import { parsePatchFiles, trimPatchContext, type FileDiffMetadata } from "@pierre/diffs";
 
-import { diffSelection, diffSides, sideLines, type DiffRow } from "./diffSides.ts";
+import { diffSelection, diffSides, diffTrack, sideLines, type DiffRow } from "./diffSides.ts";
+import type { LineTrack } from "./lineCursor.ts";
 
 function parsed(patch: string): FileDiffMetadata {
   const file = parsePatchFiles(patch, "diff-sides-test", true)[0]?.files[0];
@@ -87,6 +88,71 @@ describe("diffSides", () => {
     expect(sideLines(added.head, [1, 2])).toEqual(["first", "second"]);
     expect(added.base.text.length).toBe(0);
     expect(added.unchanged.size).toBe(0);
+  });
+});
+
+describe("diffTrack", () => {
+  const rows = (track: LineTrack): string[] => Array.from({ length: track.length }, (_, index) => {
+    const row = track.row(index);
+    return `${row.old ? "-" : "+"}${row.line}`;
+  });
+
+  it("runs in unified order: context by its new number, each change's removed lines before its added ones", () => {
+    expect(rows(diffTrack(parsed(PATCH)))).toEqual([
+      "+28", "+29", "-30", "+30", "+31", "-32", "-33", "+32",
+      "+58", "+59", "+60", "+61",
+    ]);
+  });
+
+  it("leaves out the lines between hunks", () => {
+    const track = diffTrack(parsed(PATCH));
+    expect(track.indexOf({ line: 40, old: false })).toBe(-1);
+    expect(track.indexOf({ line: 1, old: false })).toBe(-1);
+    expect(track.indexOf({ line: 33, old: false })).toBe(-1);
+  });
+
+  it("finds each drawn row by its line and side", () => {
+    const track = diffTrack(parsed(PATCH));
+    for (let index = 0; index < track.length; index++) expect(track.indexOf(track.row(index))).toBe(index);
+    expect(track.indexOf({ line: 30, old: true })).toBe(2);
+    expect(track.indexOf({ line: 30, old: false })).toBe(3);
+    expect(track.indexOf({ line: 0, old: false })).toBe(-1);
+    expect(track.indexOf({ line: Number.NaN, old: true })).toBe(-1);
+  });
+
+  it("finds an unchanged row a split view's left column draws by its old number", () => {
+    const track = diffTrack(parsed(PATCH));
+    expect(track.indexOf({ line: 34, old: true })).toBe(track.indexOf({ line: 32, old: false }));
+    expect(track.indexOf({ line: 60, old: true })).toBe(track.indexOf({ line: 58, old: false }));
+  });
+
+  it("follows a folded patch: the context it hides is not on the track", () => {
+    const patch = [
+      "diff --git a/c.ts b/c.ts",
+      "index 1111111..2222222 100644",
+      "--- a/c.ts",
+      "+++ b/c.ts",
+      "@@ -1,9 +1,9 @@",
+      " one",
+      " two",
+      " three",
+      " four",
+      "-five",
+      "+FIVE",
+      " six",
+      " seven",
+      " eight",
+      " nine",
+      "",
+    ].join("\n");
+    expect(rows(diffTrack(parsed(patch)))).toEqual(["+1", "+2", "+3", "+4", "-5", "+5", "+6", "+7", "+8", "+9"]);
+    expect(rows(diffTrack(parsed(trimPatchContext(patch, 1))))).toEqual(["+4", "-5", "+5", "+6"]);
+  });
+
+  it("has no rows for a patch without hunks", () => {
+    const track = diffTrack({ ...parsed(PATCH), hunks: [] });
+    expect(track.length).toBe(0);
+    expect(track.indexOf({ line: 28, old: false })).toBe(-1);
   });
 });
 

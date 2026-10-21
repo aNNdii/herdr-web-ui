@@ -40,6 +40,24 @@
  * are the worktree's; the branch list stays the pane's folder's), and from its commits alone once it is off. A
  * worktree that moved on to another branch is asked once, then left out with a note under the comparison, the branch list
  * read again. A bridge from before `uncommitted` gets its stand-ins and a note, and is asked them directly from then on.
+ *
+ * The review's keys (lib/reviewKeys.ts), on a repository of their own: a Markdown file opens as its source in Changed
+ * files and as its preview in All files, and the view chosen holds for the list's next file and after the review is
+ * opened again. `]` and `[` step through the files in the order the tree draws them, a closed folder's files and a file
+ * the filter leaves out included, one tree row selected after each, the status line naming the file by its path (the
+ * same words again as new text); `v` and Shift+v
+ * toggle Viewed and say so. `j`/`k` put the cursor on the first line in view, then move it a line (unified: a removed
+ * line before its added one; split: a removed line on the left), past folded lines, kept from unified to split; its bar
+ * stands 3:1 or more against `--bg` and its selected number's own background on an unchanged, an added and a removed line
+ * in both themes. In the virtualized file
+ * it lands where the reader scrolled and follows past the rows drawn; a mouse drag there is drawn as it goes, with a
+ * cursor shown or not, and no selection by the mouse draws the cursor until a key comes. Shift+j selects, `c` opens the
+ * comment on the lines and turns comment mode on, and Escape gives the focus back; Enter after a click on Viewed
+ * comments, Enter and Space on a button reached by Tab press it. A selection the mouse leaves on the page does not hold
+ * the cursor back. A whole line's field starts at its text; `c` on a commented line opens that comment to edit; Space
+ * pages the diff. Escape drops a selection first, then closes. The keys do
+ * nothing in a comment, in the filter, under View options and once switched off; in the preview the arrows, j and k
+ * scroll it a line and Space pages it, with the focus on the dialog.
  */
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
@@ -166,9 +184,48 @@ function kindsFixture(): string {
   return kinds;
 }
 
+/** The pane whose review shows {@link keysFixture}. */
+const KEYS_PANE = "pane-keys";
+/**
+ * keysFixture's changed files as the tree draws them (`sort: "default"` of `@pierre/trees`): folders first, a folder's
+ * own folders before its files, `file2` before `file10`.
+ */
+const KEYS_ORDER = ["docs/a.md", "docs/b.md", "src/zeta/deep.ts", "src/code.ts", "file2.ts", "file10.ts"];
+/** Numbered lines, line 10 changed, line 20 removed and a line added after 30: hunks at 7–13, 17–23 and 28–33. */
+const CODE_FILE = "src/code.ts";
+/** Unchanged, and past LINE_ELEMENT_LIMIT (src/lib/highlight.ts, 20 000 lines): All files draws it in the virtualized view. */
+const BIG_FILE = "big.ts";
+const BIG_LINES = 25_000;
+
+/** A repository for the review's keys: two Markdown files, a code diff, a folder of its own and a large text. */
+function keysFixture(): string {
+  const keys = join(root, "keys");
+  mkdirSync(join(keys, "docs"), { recursive: true });
+  mkdirSync(join(keys, "src", "zeta"), { recursive: true });
+  git(keys, "init", "-q", "-b", "main");
+  // long enough that its preview scrolls
+  const guide = (changed: number | null): string => `# Guide\n\n${Array.from({ length: 200 }, (_, index) => `Paragraph ${index + 1}${index + 1 === changed ? ", changed" : ""} of the guide.`).join("\n\n")}\n`;
+  const code = numbered(40);
+  const small = ["src/zeta/deep.ts", "file2.ts", "file10.ts"];
+  writeFileSync(join(keys, "docs", "a.md"), guide(null));
+  writeFileSync(join(keys, "docs", "b.md"), "# Notes\n\nfirst\n");
+  writeFileSync(join(keys, CODE_FILE), `${code.join("\n")}\n`);
+  for (const name of small) writeFileSync(join(keys, name), "first\n");
+  writeFileSync(join(keys, BIG_FILE), `${numbered(BIG_LINES).join("\n")}\n`);
+  git(keys, "add", ".");
+  git(keys, "commit", "-q", "-m", "first");
+  writeFileSync(join(keys, "docs", "a.md"), guide(3));
+  writeFileSync(join(keys, "docs", "b.md"), "# Notes\n\nfirst\nsecond\n");
+  const changed = [...code.slice(0, 9), "export const line10 = 100;", ...code.slice(10, 19), ...code.slice(20, 30), "export const added = 31;", ...code.slice(30)];
+  writeFileSync(join(keys, CODE_FILE), `${changed.join("\n")}\n`);
+  for (const name of small) writeFileSync(join(keys, name), "first\nsecond\n");
+  return keys;
+}
+
 const repo = fixture();
 const branchRepo = branchFixture();
 const kindsRepo = kindsFixture();
+const keysRepo = keysFixture();
 let browser: Awaited<ReturnType<typeof chromium.launch>> | undefined;
 let server: ReturnType<typeof Bun.serve> | undefined;
 
@@ -177,10 +234,10 @@ async function api(url: URL): Promise<Response | null> {
   const diff = /^\/api\/workspace\/diff\/(files|file|tree|branches)$/.exec(url.pathname);
   if (diff) {
     // an absolute folder is read as asked (a worktree, a shown file's folder), as the server does; without one the
-    // branch fixture's pane reviews its repository, the kinds pane its own, every other pane the deep one
+    // branch fixture's pane reviews its repository, the kinds and the keys panes their own, every other pane the deep one
     const directory = url.searchParams.get("directory") ?? "";
     const pane = url.searchParams.get("pane_id");
-    const cwd = directory.startsWith("/") ? directory : pane === BRANCH_PANE ? branchRepo.repo : pane === KINDS_PANE ? kindsRepo : repo;
+    const cwd = directory.startsWith("/") ? directory : pane === BRANCH_PANE ? branchRepo.repo : pane === KINDS_PANE ? kindsRepo : pane === KEYS_PANE ? keysRepo : repo;
     return repoDiffResponse(diff[1] as RepoDiffRoute, cwd, url.searchParams);
   }
   // the file routes the opened file is read through: an image as such, the rest as text
@@ -354,6 +411,145 @@ async function chooseTip(page: Page, tip: "Uncommitted" | "Staged"): Promise<voi
 const endCut = (shown: string, full: string): boolean => shown.endsWith("…") && shown.length >= 2 && full.startsWith(shown.slice(0, -1));
 /** A name cut at its start: "…", then its end (nothing of it, at the narrowest). */
 const startCut = (shown: string, full: string): boolean => shown.startsWith("…") && full.endsWith(shown.slice(1));
+
+/** `count` frames of the page: long enough for a key's render to land, without a fixed sleep. */
+async function frames(page: Page, count: number): Promise<void> {
+  await page.evaluate((count) => new Promise<void>((resolve) => {
+    let left = count;
+    const next = (): void => { left -= 1; if (left <= 0) resolve(); else requestAnimationFrame(next); };
+    requestAnimationFrame(next);
+  }), count);
+}
+/** What `read` gives once `test` holds, read frame by frame; fails with the last reading after 10s. */
+async function settled<T>(page: Page, what: string, read: () => Promise<T>, test: (value: T) => boolean): Promise<T> {
+  const started = Date.now();
+  for (;;) {
+    const value = await read();
+    if (test(value)) return value;
+    assert.ok(Date.now() - started < 10_000, `${what}: ${JSON.stringify(value)}`);
+    await frames(page, 2);
+  }
+}
+
+/** A drawn row of the file shown: its number, its kind (`context`, `change-addition`, `change-deletion`) and whether it is in a split view's left column. */
+interface KeyRow { line: number; type: string; left: boolean }
+/** The same row: its number on the same side (a removed line is the old file's, as is the left column). */
+const sameRow = (a: KeyRow, b: KeyRow): boolean => a.line === b.line && a.left === b.left && a.type.includes("deletion") === b.type.includes("deletion");
+
+/**
+ * What the file shown draws of the line cursor: the rows whose number the library marks selected, those of them that
+ * carry the cursor's bar (REVIEW_CSS's box-shadow on the number), and whether the code's host has the cursor's class.
+ */
+async function cursorDrawn(page: Page): Promise<{ selected: KeyRow[]; barred: KeyRow[]; bar: boolean }> {
+  return page.evaluate(() => {
+    const host = document.querySelector<HTMLElement>(".review-file diffs-container");
+    const cells = [...host?.shadowRoot?.querySelectorAll<HTMLElement>("[data-column-number][data-selected-line]") ?? []];
+    const row = (cell: HTMLElement) => ({ line: Number(cell.dataset["columnNumber"]), type: cell.dataset["lineType"] ?? "", left: cell.closest("[data-deletions]") !== null });
+    return { selected: cells.map(row), barred: cells.filter((cell) => getComputedStyle(cell).boxShadow !== "none").map(row), bar: host?.classList.contains("review-cursor") === true };
+  });
+}
+/** Until the cursor alone is drawn, on `row`: one bar, and (`single`) one selected number, which a split view's unchanged line doubles. */
+async function cursorOn(page: Page, row: KeyRow, what: string, single = true): Promise<void> {
+  await settled(page, what, () => cursorDrawn(page), (drawn) => drawn.bar && drawn.barred.length === 1 && sameRow(drawn.barred[0]!, row) && (!single || drawn.selected.length === 1));
+}
+/**
+ * The first row the cursor may stand on that the file's scroll box shows whole (in a split view a removed line on the
+ * left, every other row on the right), as the first `j` should find it; null before any is drawn.
+ */
+async function firstRowInView(page: Page): Promise<KeyRow | null> {
+  return page.evaluate(() => {
+    const body = document.querySelector<HTMLElement>(".review-file");
+    const scroller = body?.querySelector<HTMLElement>(".review-scroll");
+    if (!body || !scroller) return null;
+    const view = scroller.getBoundingClientRect();
+    const rows = [...body.querySelector("diffs-container")?.shadowRoot?.querySelectorAll<HTMLElement>("[data-line]") ?? []]
+      .map((element) => ({ line: Number(element.dataset["line"]), type: element.dataset["lineType"] ?? "", left: element.closest("[data-deletions]") !== null, box: element.getBoundingClientRect() }))
+      .filter((row) => (!row.left || row.type.includes("deletion")) && row.box.height > 0 && row.box.top >= view.top - 0.5 && row.box.bottom <= view.bottom + 0.5)
+      // a removed line and its added one side by side: the removed one first, as the cursor runs
+      .sort((a, b) => a.box.top - b.box.top || Number(b.left) - Number(a.left));
+    const first = rows[0];
+    return first === undefined ? null : { line: first.line, type: first.type, left: first.left };
+  });
+}
+/** The middle of the code (`gutter`: the number) of the drawn row of `line`, on the right or the unified column. */
+async function rowPoint(page: Page, line: number, gutter: boolean): Promise<{ x: number; y: number }> {
+  const point = await page.evaluate(([line, gutter]) => {
+    const root = document.querySelector(".review-file diffs-container")?.shadowRoot;
+    const element = [...root?.querySelectorAll<HTMLElement>(gutter ? `[data-column-number="${line}"]` : `[data-line="${line}"]`) ?? []]
+      .find((one) => one.closest("[data-deletions]") === null && !(one.dataset["lineType"] ?? "").includes("deletion"));
+    if (element === undefined) return null;
+    const box = element.getBoundingClientRect();
+    return { x: gutter ? box.left + box.width / 2 : box.left + 40, y: box.top + box.height / 2 };
+  }, [line, gutter] as const);
+  assert.ok(point !== null, `the row of line ${line} is drawn`);
+  return point;
+}
+/**
+ * The contrast of the cursor's bar on the row it stands on: against `--bg`, and against the number's own background as
+ * drawn (the selection's tint over the row's), each colour painted on a canvas so any CSS colour reads as sRGB.
+ */
+async function barContrast(page: Page): Promise<{ type: string; bar: string; bg: number; drawn: number }> {
+  return page.evaluate(() => {
+    const cell = [...document.querySelector(".review-file diffs-container")?.shadowRoot?.querySelectorAll<HTMLElement>("[data-column-number][data-selected-line]") ?? []]
+      .find((one) => getComputedStyle(one).boxShadow !== "none");
+    if (cell === undefined) return { type: "", bar: "", bg: 0, drawn: 0 };
+    const canvas = document.createElement("canvas");
+    canvas.width = 1;
+    canvas.height = 1;
+    const context = canvas.getContext("2d", { willReadFrequently: true })!;
+    const paint = (layers: string[]): number[] => {
+      context.clearRect(0, 0, 1, 1);
+      for (const layer of layers) {
+        context.fillStyle = layer;
+        context.fillRect(0, 0, 1, 1);
+      }
+      return [...context.getImageData(0, 0, 1, 1).data].slice(0, 3);
+    };
+    const luminance = (rgb: number[]): number => {
+      const [r = 0, g = 0, b = 0] = rgb.map((value) => { const s = value / 255; return s <= 0.04045 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4; });
+      return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+    };
+    const ratio = (a: number[], b: number[]): number => {
+      const [high, low] = [luminance(a), luminance(b)].sort((x, y) => y - x);
+      return (high! + 0.05) / (low! + 0.05);
+    };
+    const probe = document.createElement("div");
+    probe.style.backgroundColor = "var(--bg)";
+    document.body.append(probe);
+    const bg = getComputedStyle(probe).backgroundColor;
+    probe.remove();
+    // the shadow's colour comes first in its computed value: `rgb(…) -3px 0px 0px 0px inset`
+    const bar = /^(.*?)\s+-?[\d.]+px/.exec(getComputedStyle(cell).boxShadow)?.[1] ?? "";
+    const under = [bg, getComputedStyle(cell).backgroundColor];
+    return { type: cell.dataset["lineType"] ?? "", bar, bg: ratio(paint([bg, bar]), paint([bg])), drawn: ratio(paint([...under, bar]), paint(under)) };
+  });
+}
+/** The file the review shows, by its absolute path (its header's tooltip); null with none shown. */
+async function shownFile(page: Page): Promise<string | null> {
+  return page.evaluate(() => document.querySelector(".review-file-head .review-file-path")?.getAttribute("title") ?? null);
+}
+/** The rows the tree marks selected, by path. */
+async function treeSelected(page: Page): Promise<string[]> {
+  return page.evaluate(() => [...document.querySelector(".review-tree")?.shadowRoot?.querySelectorAll<HTMLElement>("[data-type='item'][aria-selected='true']:not([data-file-tree-sticky-row])") ?? []].map((row) => row.dataset["itemPath"] ?? ""));
+}
+/** Opens the keys fixture's review, its Changed files listed: the dialog. */
+async function openKeysReview(page: Page): Promise<Locator> {
+  await page.evaluate(([pane, directory]) => window.reviewTreeQA.open(pane!, directory!), [KEYS_PANE, keysRepo]);
+  const dialog = page.getByRole("dialog", { name: "Review", exact: true });
+  await dialog.waitFor();
+  await listedUntil(page, "keys: Changed lists every changed file", (shown) => shown.length === KEYS_ORDER.length);
+  return dialog;
+}
+/** Opens `path` from the tree (its folder open): the focus is the tree's then. */
+async function openFromTree(page: Page, path: string): Promise<void> {
+  await page.locator(`.review-tree [data-item-path="${path}"]:not([data-file-tree-sticky-row])`).click();
+  await settled(page, `${path} opens`, () => shownFile(page), (shown) => shown === join(keysRepo, path));
+}
+/** A click on the shown file's path: the focus on the review itself, no control, field or tree. */
+async function focusReview(page: Page): Promise<void> {
+  await page.locator(".review-file-head .review-file-path").click();
+  assert.ok(await page.evaluate(() => document.activeElement?.closest("button, a, input, textarea, [role='tree'], .review-tree") == null), "the focus is on no control");
+}
 
 try {
   const app = join(import.meta.dir, ".."), output = join(root, "dist");
@@ -1363,7 +1559,435 @@ try {
     assert.deepEqual(errors, [], "older bridge: no page errors");
     await context.close();
   }
-  console.log("review tree: browser OK (Uncommitted lists every kind of change once and takes a comment on the file on disk; a worktree's uncommitted changes are read there while Show uncommitted changes is on (View options, which also holds Show viewed files and Show ignored files), a moved worktree once, then left out with a note; an older bridge gets its stand-ins and a note; Branches load from the merge base, the comparison's pickers work by keyboard and as a bottom sheet by touch on a phone, and every line of a branch diff takes a comment that names its version, in unified and split; front folders give way first to their first letter, the last folder and file names keep their end, short names whole; a level indents about 14px; Viewed is the file's last tool in every view; folders keep their state as viewed files drop out; every file viewed leaves a note and a way to show them again; a viewed file's check stays in sight, its name faded; rows show their path as a tooltip; the column drags, steps and resets, its limits drawn and never stored)");
+  /** A page of its own for the review's keys, Settings as given (and the system's colours), its errors collected. */
+  const keysPage = async (settings: Record<string, unknown>, colorScheme?: "dark" | "light") => {
+    const context = await browser!.newContext({ viewport: { width: 1440, height: 900 }, ...(colorScheme === undefined ? {} : { colorScheme }) });
+    await context.addInitScript((settings) => localStorage.setItem("herdr-web-ui:settings", JSON.stringify(settings)), settings);
+    const page = await context.newPage();
+    page.setDefaultTimeout(15_000);
+    const errors: string[] = [];
+    page.on("pageerror", (error) => errors.push(error.message));
+    page.on("console", (message) => { if (message.type() === "error") errors.push(`console: ${message.text()}`); });
+    await page.goto(`http://127.0.0.1:${server!.port}/`);
+    return { context, page, errors };
+  };
+  // keys: `]` and `[` in the tree's order, a closed folder's files and a file the filter leaves out included, one row
+  // selected after each and the status line naming the file; `v` says what it did; no key acts in the filter, under
+  // View options or switched off, and off is kept
+  {
+    const { context, page, errors } = await keysPage({ language: "en" });
+    const dialog = await openKeysReview(page);
+    assert.deepEqual(await listed(page), KEYS_ORDER, "keys: the tree draws folders first and numbers by value");
+    const status = page.locator("section.review-dialog > p.visually-hidden[role='status']");
+    const said = async (text: string, what: string): Promise<void> => { await settled(page, what, () => status.textContent(), (shown) => shown === text); };
+    const opened = async (path: string, what: string): Promise<void> => {
+      await settled(page, what, () => shownFile(page), (shown) => shown === join(keysRepo, path));
+      await settled(page, `${what}, its row alone selected in the tree`, () => treeSelected(page), (rows) => JSON.stringify(rows) === JSON.stringify([path]));
+    };
+    const stays = async (path: string, what: string): Promise<void> => {
+      await frames(page, 10);
+      assert.equal(await shownFile(page), join(keysRepo, path), what);
+    };
+    // the reader closes src: its files still count, and the tree opens it again for the one shown
+    await page.locator(".review-tree [data-item-type='folder']:is([data-item-path='src'], [data-item-path='src/']):not([data-file-tree-sticky-row])").click();
+    await listedUntil(page, "keys: src closes", (shown) => shown.length > 0 && !shown.some((path) => path.startsWith("src/")));
+    await page.getByText("Choose a file in the tree.", { exact: true }).click();
+    await page.keyboard.press("]");
+    await opened(KEYS_ORDER[0]!, "keys: ] with no file open opens the first file");
+    await said("docs/a.md", "keys: the status line names the file ] opened, by its path");
+    for (const path of KEYS_ORDER.slice(1)) {
+      await page.keyboard.press("]");
+      await opened(path, `keys: ] opens ${path} next`);
+    }
+    await said("file10.ts", "keys: the status line names each file");
+    if (evidence) await page.locator(".review-tree-pane").screenshot({ path: join(evidence, "review-keys-last-file.png") });
+    await page.keyboard.press("]");
+    await stays("file10.ts", "keys: ] at the last file does nothing");
+    await page.keyboard.press("[");
+    await opened("file2.ts", "keys: [ opens the file before");
+    // a row added by Ctrl+click opens its file; a key from there leaves no row it passes through open
+    await page.locator(`.review-tree [data-item-path="${CODE_FILE}"]:not([data-file-tree-sticky-row])`).click({ modifiers: ["ControlOrMeta"] });
+    await settled(page, "keys: a Ctrl+click opens its row's file", () => shownFile(page), (shown) => shown === join(keysRepo, CODE_FILE));
+    await focusReview(page);
+    await page.keyboard.press("[");
+    await opened("src/zeta/deep.ts", "keys: [ from two rows selected opens the file before the shown one");
+    await stays("src/zeta/deep.ts", "keys: and stays there, not on a row it deselected");
+    for (const path of ["src/code.ts", "file2.ts"]) {
+      await page.keyboard.press("]");
+      await opened(path, `keys: ] opens ${path} again`);
+    }
+
+    // a file the filter leaves out: ] opens the first one listed after it, [ the last one before it (none here)
+    const search = page.getByRole("searchbox", { name: "Filter files" });
+    await search.fill("file1");
+    await listedUntil(page, "keys: the filter lists file10.ts alone", (shown) => JSON.stringify(shown) === JSON.stringify(["file10.ts"]));
+    // in the filter a key is text
+    await search.press("]");
+    assert.equal(await search.inputValue(), "file1]", "keys: ] in the filter is typed");
+    await stays("file2.ts", "keys: ] in the filter opens no file");
+    await search.fill("file1");
+    await listedUntil(page, "keys: the filter lists file10.ts again", (shown) => JSON.stringify(shown) === JSON.stringify(["file10.ts"]));
+    await focusReview(page);
+    await page.keyboard.press("[");
+    await stays("file2.ts", "keys: [ from a file the filter leaves out, none listed before it, does nothing");
+    await page.keyboard.press("]");
+    await opened("file10.ts", "keys: ] from a file the filter leaves out opens the first one listed after it");
+    await search.fill("");
+    await listedUntil(page, "keys: the filter cleared", (shown) => shown.length === KEYS_ORDER.length);
+
+    // v toggles Viewed as the button does, Shift+v too, and the status line says which
+    const viewed = page.locator(".review-file-head .review-viewed");
+    assert.deepEqual([await viewed.getAttribute("aria-pressed"), await viewed.getAttribute("title"), await viewed.getAttribute("aria-keyshortcuts")], ["false", "Mark as viewed (V)", "v"], "keys: the Viewed button names its key");
+    await focusReview(page);
+    await page.keyboard.press("v");
+    await settled(page, "keys: v marks the file viewed", () => viewed.getAttribute("aria-pressed"), (pressed) => pressed === "true");
+    await said("Marked as viewed", "keys: the status line says the file is viewed");
+    assert.equal(await viewed.getAttribute("title"), "Viewed (V)", "keys: a viewed file's button names its key too");
+    await page.keyboard.press("Shift+KeyV");
+    await settled(page, "keys: Shift+v is v", () => viewed.getAttribute("aria-pressed"), (pressed) => pressed === "false");
+    await said("Not viewed", "keys: the status line says the file is not viewed");
+    // the same words again are said again: the click marks it viewed without a word, v takes it back, "Not viewed" once
+    // more, as new text in the live region
+    const seen = (): Promise<boolean> => status.locator("span").evaluate((node) => (node as HTMLElement & { qaSeen?: boolean }).qaSeen === true);
+    await status.locator("span").evaluate((node) => { (node as HTMLElement & { qaSeen?: boolean }).qaSeen = true; });
+    await viewed.click();
+    await settled(page, "keys: a click marks the file viewed again", () => viewed.getAttribute("aria-pressed"), (pressed) => pressed === "true");
+    await focusReview(page);
+    await page.keyboard.press("v");
+    await settled(page, "keys: v marks it not viewed once more", () => viewed.getAttribute("aria-pressed"), (pressed) => pressed === "false");
+    await said("Not viewed", "keys: the same words again");
+    assert.equal(await seen(), false, "keys: the same words are new text in the live region, said again");
+
+    // View options open: its menu has the keys
+    await (await viewOption(page, "Keyboard shortcuts")).waitFor();
+    for (const key of ["[", "v", "j"]) await page.keyboard.press(key);
+    await stays("file10.ts", "keys: [ under View options opens no file");
+    assert.equal(await viewed.getAttribute("aria-pressed"), "false", "keys: v under View options marks nothing");
+    assert.equal((await cursorDrawn(page)).bar, false, "keys: j under View options draws no cursor");
+    await closeViewOptions(page);
+
+    // switched off: no review key acts, only the browser's (Escape closes the review, an arrow scrolls); off is kept for
+    // the next opening
+    assert.equal(await toggleViewOption(page, "Keyboard shortcuts"), false, "keys: Keyboard shortcuts turns off");
+    assert.equal(await page.evaluate(() => localStorage.getItem("herdr-web-ui:review-keys-off")), "1", "keys: off is kept on this device");
+    await focusReview(page);
+    for (const key of ["[", "v", "j", "ArrowDown"]) await page.keyboard.press(key);
+    await stays("file10.ts", "keys: [ does nothing once switched off");
+    assert.equal(await viewed.getAttribute("aria-pressed"), "false", "keys: v does nothing once switched off");
+    assert.equal((await cursorDrawn(page)).bar, false, "keys: j and the arrows (a line's scroll then) draw no cursor once switched off");
+    assert.deepEqual([await viewed.getAttribute("title"), await viewed.getAttribute("aria-keyshortcuts")], ["Mark as viewed", null], "keys: the Viewed button names no key once switched off");
+    await page.keyboard.press("Escape");
+    await dialog.waitFor({ state: "detached" });
+    await openKeysReview(page);
+    const row = await viewOption(page, "Keyboard shortcuts");
+    assert.equal(await row.getAttribute("aria-checked"), "false", "keys: off holds when the review opens again");
+    await row.click();
+    assert.equal(await row.getAttribute("aria-checked"), "true", "keys: Keyboard shortcuts turns on again");
+    await closeViewOptions(page);
+    assert.equal(await page.evaluate(() => localStorage.getItem("herdr-web-ui:review-keys-off")), null, "keys: on again forgets the choice");
+    assert.deepEqual(errors, [], "keys: no page errors");
+    await context.close();
+  }
+  // Markdown: Source in Changed files, Preview in All files, a choice per list that holds for the list's next file and
+  // after the review is opened again
+  {
+    const { context, page, errors } = await keysPage({ language: "en" });
+    const dialog = await openKeysReview(page);
+    const view = async (want: "Preview" | "Source", what: string): Promise<void> => {
+      await settled(page, what, () => page.evaluate(() => document.querySelector(".review-file-head .review-mode button[aria-pressed='true']")?.textContent ?? null), (shown) => shown === want);
+    };
+    const choose = async (name: "Preview" | "Source"): Promise<void> => page.locator(".review-file-head .review-mode").getByRole("button", { name, exact: true }).click();
+    const stored = async (): Promise<(string | null)[]> => page.evaluate(() => ["changed", "all"].map((list) => localStorage.getItem(`herdr-web-ui:review-markdown-view:${list}`)));
+    await openFromTree(page, "docs/a.md");
+    await view("Source", "markdown: Changed files opens a Markdown file as its source");
+    await page.locator(".review-file[data-mode='diff'] diffs-container").waitFor();
+    await dialog.getByRole("button", { name: "All files", exact: true }).click();
+    await view("Preview", "markdown: in All files the same file is its preview at once");
+    await page.locator(".review-file .review-preview").waitFor();
+    await choose("Source");
+    await view("Source", "markdown: Source is chosen in All files");
+    assert.deepEqual(await stored(), [null, "source"], "markdown: a click keeps its own list's view alone");
+    await dialog.getByRole("button", { name: "Changed files" }).click();
+    await view("Source", "markdown: Changed files keeps its own view");
+    await choose("Preview");
+    await view("Preview", "markdown: Preview is chosen in Changed files");
+    assert.deepEqual(await stored(), ["preview", "source"], "markdown: each list keeps its own view");
+    await focusReview(page);
+    await page.keyboard.press("]");
+    await settled(page, "markdown: ] opens the next file", () => shownFile(page), (shown) => shown === join(keysRepo, "docs/b.md"));
+    await view("Preview", "markdown: the list's next Markdown file shows as chosen");
+    await page.evaluate(() => window.reviewTreeQA.close());
+    await dialog.waitFor({ state: "detached" });
+    await openKeysReview(page);
+    await openFromTree(page, "docs/b.md");
+    await view("Preview", "markdown: Changed files' choice holds when the review opens again");
+    await dialog.getByRole("button", { name: "All files", exact: true }).click();
+    await view("Source", "markdown: All files' choice holds when the review opens again");
+    assert.deepEqual(errors, [], "markdown: no page errors");
+    await context.close();
+  }
+  // the line cursor in the diff, in both themes: the first j lands on the first line in view, each press moves a line
+  // (a removed line before its added one), past folded lines, kept into the split view, where a removed line's cursor
+  // is on the left; its bar stands 3:1 or more against --bg and its selected number on an unchanged, a removed and an
+  // added line
+  const contrasts: string[] = [];
+  for (const theme of ["dark", "light"] as const) {
+    const { context, page, errors } = await keysPage({ language: "en", theme, diffStyle: "unified" }, theme);
+    await openKeysReview(page);
+    await openFromTree(page, CODE_FILE);
+    const first = await settled(page, `${theme}: the diff is drawn`, () => firstRowInView(page), (row) => row !== null);
+    const unified: KeyRow[] = [
+      { line: 7, type: "context", left: false }, { line: 8, type: "context", left: false }, { line: 9, type: "context", left: false },
+      { line: 10, type: "change-deletion", left: false }, { line: 10, type: "change-addition", left: false },
+      { line: 11, type: "context", left: false }, { line: 12, type: "context", left: false }, { line: 13, type: "context", left: false },
+    ];
+    assert.ok(first !== null && sameRow(first, unified[0]!), `${theme}: the diff starts with its first hunk's context: ${JSON.stringify(first)}`);
+    await focusReview(page);
+    assert.equal((await cursorDrawn(page)).selected.length, 0, `${theme}: no cursor before a key`);
+    const measure = async (): Promise<void> => {
+      const contrast = await barContrast(page);
+      assert.ok(contrast.bar !== "", `${theme}: the cursor's bar has a colour: ${JSON.stringify(contrast)}`);
+      assert.ok(contrast.bg >= 3, `${theme}: the cursor's bar on a ${contrast.type} line stands ${contrast.bg.toFixed(2)}:1 against --bg (${contrast.bar})`);
+      assert.ok(contrast.drawn >= 3, `${theme}: the cursor's bar on a ${contrast.type} line stands ${contrast.drawn.toFixed(2)}:1 against its selected number (${contrast.bar})`);
+      contrasts.push(`${theme} ${contrast.type} ${contrast.bg.toFixed(2)}:1 (${contrast.drawn.toFixed(2)}:1 on its selected number)`);
+    };
+    await page.keyboard.press("j");
+    await cursorOn(page, unified[0]!, `${theme}: the first j puts the cursor on the first line in view, without moving on`);
+    await measure();
+    for (const row of unified.slice(1)) {
+      await page.keyboard.press("j");
+      await cursorOn(page, row, `${theme}: j moves the cursor a line, a removed line before its added one: ${JSON.stringify(row)}`);
+      if (row.line === 10) await measure();
+    }
+    if (evidence) await page.locator(".review-file").screenshot({ path: join(evidence, `review-keys-cursor-${theme}.png`) });
+    // past the folded lines: 13, then the next hunk's 17
+    await page.keyboard.press("j");
+    await cursorOn(page, { line: 17, type: "context", left: false }, `${theme}: j skips the folded lines`);
+    await page.keyboard.press("k");
+    await cursorOn(page, unified[7]!, `${theme}: k moves the cursor back a line`);
+    for (let press = 0; press < 10; press++) await page.keyboard.press("k");
+    await cursorOn(page, unified[0]!, `${theme}: at the first line the cursor stays`);
+    // split: the cursor stays on its line; a removed line's is on the left, its added one's on the right
+    for (let press = 0; press < 4; press++) await page.keyboard.press("j");
+    await cursorOn(page, unified[4]!, `${theme}: the cursor on the added line`);
+    await page.locator(".repo-diff-styles").getByRole("button", { name: "Split" }).click();
+    await cursorOn(page, unified[4]!, `${theme}: the cursor stays on its line in the split view, on the right`, false);
+    await page.keyboard.press("k");
+    await cursorOn(page, { line: 10, type: "change-deletion", left: true }, `${theme}: in the split view a removed line's cursor is on the left`, false);
+    await page.keyboard.press("k");
+    await cursorOn(page, unified[2]!, `${theme}: an unchanged line's cursor is on the right`, false);
+    if (evidence) await page.locator(".review-file").screenshot({ path: join(evidence, `review-keys-cursor-split-${theme}.png`) });
+    assert.deepEqual(errors, [], `${theme}: cursor: no page errors`);
+    await context.close();
+  }
+  // a comment by key: Shift+j selects, c opens the field on the lines and turns comment mode on, keys in the field are
+  // its text, Escape gives the focus back; Enter after a click on Viewed comments, Enter on a button reached by Tab
+  // presses it; a mouse selection moves the cursor unseen; Escape drops a selection, then closes the review
+  {
+    const { context, page, errors } = await keysPage({ language: "en", diffStyle: "unified" });
+    const dialog = await openKeysReview(page);
+    const line = (n: number): KeyRow => ({ line: n, type: "context", left: false });
+    const barredLines = async (lines: number[], what: string): Promise<void> => {
+      await settled(page, what, () => cursorDrawn(page), (drawn) => JSON.stringify(drawn.barred.map((row) => row.line)) === JSON.stringify(lines));
+    };
+    // opened from the tree: the keys work with the focus there, and it comes back there
+    await openFromTree(page, CODE_FILE);
+    await settled(page, "comment: the diff is drawn", () => firstRowInView(page), (row) => row !== null);
+    await page.keyboard.press("j");
+    await cursorOn(page, line(7), "comment: j with the focus in the tree puts the cursor");
+    await page.keyboard.press("Shift+KeyJ");
+    await page.keyboard.press("Shift+KeyJ");
+    await barredLines([7, 8, 9], "comment: Shift+j selects down from the cursor");
+    const toggle = page.locator(".review-file-head .review-comments");
+    assert.equal(await toggle.getAttribute("aria-pressed"), "false", "comment: comment mode starts off");
+    await page.keyboard.press("c");
+    const field = page.locator("[data-draft] textarea");
+    await field.waitFor();
+    await settled(page, "comment: the field takes the focus", () => field.evaluate((node) => node === document.activeElement), (focused) => focused);
+    assert.equal(await toggle.getAttribute("aria-pressed"), "true", "comment: c turns comment mode on as the field opens");
+    if (evidence) await page.locator(".review-file").screenshot({ path: join(evidence, "review-keys-comment.png") });
+    // with the field open the keys are its text
+    await page.keyboard.press("]");
+    await page.keyboard.press("v");
+    assert.equal(await field.inputValue(), "]v", "comment: ] and v in the field are typed");
+    assert.equal(await shownFile(page), join(keysRepo, CODE_FILE), "comment: ] in the field opens no file");
+    await field.fill("");
+    await page.keyboard.press("Escape");
+    await field.waitFor({ state: "detached" });
+    assert.ok(await dialog.isVisible(), "comment: Escape closes the field, not the review");
+    await settled(page, "comment: the focus goes back to the tree it was in", () => page.evaluate(() => document.activeElement?.closest(".review-tree") != null), (back) => back);
+    await cursorOn(page, line(9), "comment: the cursor stands on the selection's end, the selection gone");
+
+    // Enter after a click on Viewed comments: a button the mouse focused gives Enter back
+    const viewed = page.locator(".review-file-head .review-viewed");
+    await viewed.click();
+    await settled(page, "comment: a click marks the file viewed", () => viewed.getAttribute("aria-pressed"), (pressed) => pressed === "true");
+    assert.equal(await viewed.evaluate((node) => node.matches(":focus-visible")), false, "comment: a clicked button shows no focus ring");
+    await page.keyboard.press("Enter");
+    await field.waitFor();
+    assert.equal(await viewed.getAttribute("aria-pressed"), "true", "comment: Enter after a click on Viewed comments, it does not press Viewed again");
+    await page.keyboard.press("Escape");
+    await field.waitFor({ state: "detached" });
+    assert.ok(await dialog.isVisible(), "comment: Escape closes the field, not the review");
+    await settled(page, "comment: the focus goes back to Viewed", () => viewed.evaluate((node) => node === document.activeElement), (back) => back);
+    // a button reached by Tab keeps Enter
+    await page.keyboard.press("Shift+Tab");
+    await page.keyboard.press("Tab");
+    assert.ok(await viewed.evaluate((node) => node === document.activeElement && node.matches(":focus-visible")), "comment: Tab brings the focus back to Viewed, its ring shown");
+    await page.keyboard.press("Enter");
+    await settled(page, "comment: Enter on a button reached by Tab presses it", () => viewed.getAttribute("aria-pressed"), (pressed) => pressed === "false");
+    await frames(page, 10);
+    assert.equal(await field.count(), 0, "comment: Enter on a button reached by Tab opens no comment");
+    // and the space bar: it presses the button, it pages nothing
+    await page.keyboard.press("Space");
+    await settled(page, "comment: Space on a button reached by Tab presses it", () => viewed.getAttribute("aria-pressed"), (pressed) => pressed === "true");
+    await page.keyboard.press("Space");
+    await settled(page, "comment: Space presses it again", () => viewed.getAttribute("aria-pressed"), (pressed) => pressed === "false");
+
+    // a mouse selection moves the cursor without drawing it; the next key shows it where the selection ends
+    const from = await rowPoint(page, 11, false), to = await rowPoint(page, 13, false);
+    await page.mouse.move(from.x, from.y);
+    await page.mouse.down();
+    await page.mouse.move(to.x, to.y, { steps: 5 });
+    await page.mouse.up();
+    await frames(page, 4);
+    const byMouse = await cursorDrawn(page);
+    assert.deepEqual([byMouse.bar, byMouse.barred.length], [false, 0], `comment: a mouse selection draws no cursor: ${JSON.stringify(byMouse)}`);
+    // the selection stays on the page: a key's keyup reads it again, and the cursor must not follow it back
+    await page.keyboard.press("j");
+    await cursorOn(page, line(13), "comment: the next key shows the cursor on the selection's last line, without moving it");
+    await page.keyboard.press("k");
+    await cursorOn(page, line(12), "comment: with the selection still there, the next key moves the cursor");
+
+    // Escape drops a selection first, and closes the review only then
+    await page.keyboard.press("k");
+    await cursorOn(page, line(11), "comment: k moves the cursor up");
+    await page.keyboard.press("Shift+KeyJ");
+    await barredLines([11, 12], "comment: Shift+j selects again");
+    await page.keyboard.press("Escape");
+    await cursorOn(page, line(12), "comment: Escape drops the selection, the cursor stays on its end");
+    assert.ok(await dialog.isVisible(), "comment: the first Escape leaves the review open");
+
+    // a whole line's field starts at the line's text, where its card will be, not at the row's far end
+    await page.keyboard.press("c");
+    await field.waitFor();
+    const place = await page.evaluate(() => {
+      const box = document.querySelector("[data-draft]")!.getBoundingClientRect();
+      const body = document.querySelector(".review-file .review-scroll")!.getBoundingClientRect();
+      return { left: box.left - body.left, width: body.width };
+    });
+    assert.ok(place.left < place.width / 3, `comment: a whole line's field starts at its text: ${JSON.stringify(place)}`);
+    await field.fill("First note");
+    await page.keyboard.press("Enter");
+    await field.waitFor({ state: "detached" });
+    // c on the line again opens its comment to edit, not a new one; Escape closes it and the review stays
+    await cursorOn(page, line(12), "comment: the cursor stays on the commented line");
+    await page.keyboard.press("c");
+    const editing = page.locator(".review-file .comment-popover-edit textarea");
+    await editing.waitFor();
+    assert.equal(await editing.inputValue(), "First note", "comment: c on a commented line opens its comment to edit");
+    assert.equal(await field.count(), 0, "comment: and no new field");
+    await settled(page, "comment: the comment's field takes the focus", () => editing.evaluate((node) => node === document.activeElement), (focused) => focused);
+    await page.keyboard.press("Escape");
+    await editing.waitFor({ state: "detached" });
+    assert.ok(await dialog.isVisible(), "comment: Escape closes the comment, not the review");
+    // Space and PageDown page the diff, Shift+Space and PageUp back
+    const scroller = page.locator(".review-file .review-scroll");
+    const scrolled = (): Promise<number> => scroller.evaluate((node) => node.scrollTop);
+    await focusReview(page);
+    const top = await scrolled();
+    const room = await scroller.evaluate((node) => node.scrollHeight - node.clientHeight);
+    if (room > 0) {
+      await page.keyboard.press("Space");
+      await settled(page, "comment: Space pages the diff down", scrolled, (now) => now > top);
+      const down = await scrolled();
+      await page.keyboard.press("Shift+Space");
+      await settled(page, "comment: Shift+Space pages it back", scrolled, (now) => now < down);
+    }
+
+    await page.keyboard.press("Escape");
+    await dialog.waitFor({ state: "detached" });
+    assert.deepEqual(errors, [], "comment: no page errors");
+    await context.close();
+  }
+  // the virtualized whole file: the first j lands where the reader scrolled, the cursor follows past the rows drawn; a
+  // mouse drag over the numbers is drawn as it goes, a cursor shown or not, and draws no cursor until a key comes
+  {
+    const { context, page, errors } = await keysPage({ language: "en" });
+    const dialog = await openKeysReview(page);
+    await dialog.getByRole("button", { name: "All files", exact: true }).click();
+    await listedUntil(page, "virtual: All files lists the large file", (shown) => shown.includes(BIG_FILE));
+    await openFromTree(page, BIG_FILE);
+    await page.locator(".review-file[data-mode='file'] diffs-container").waitFor();
+    await settled(page, "virtual: the file's first rows are drawn", () => firstRowInView(page), (row) => row !== null);
+    await page.locator(".review-file .review-scroll").evaluate((scroller) => { scroller.scrollTop = scroller.scrollHeight / 2; });
+    await settled(page, "virtual: rows halfway down are drawn", () => firstRowInView(page), (row) => row !== null && row.line > 1000);
+    await frames(page, 4);
+    const first = (await firstRowInView(page))!;
+    await focusReview(page);
+    await page.keyboard.press("j");
+    await cursorOn(page, first, "virtual: the first j lands on the first line in view where the reader scrolled");
+    for (let press = 0; press < 60; press++) await page.keyboard.press("j");
+    const far: KeyRow = { ...first, line: first.line + 60 };
+    await cursorOn(page, far, "virtual: sixty j move the cursor sixty lines, past the rows drawn at first");
+    const inView = await page.evaluate(() => {
+      const view = document.querySelector<HTMLElement>(".review-file .review-scroll")!.getBoundingClientRect();
+      const cell = [...document.querySelector(".review-file diffs-container")?.shadowRoot?.querySelectorAll<HTMLElement>("[data-column-number][data-selected-line]") ?? []]
+        .find((one) => getComputedStyle(one).boxShadow !== "none");
+      const box = cell?.getBoundingClientRect();
+      return box !== undefined && box.top >= view.top - 0.5 && box.bottom <= view.bottom + 0.5;
+    });
+    assert.ok(inView, "virtual: the cursor's line is scrolled into view");
+    // a drag over the numbers, the cursor shown: drawn as it is made, as a selection without the cursor's bar
+    const start = far.line - 8, end = far.line - 4;
+    const from = await rowPoint(page, start, true), to = await rowPoint(page, end, true);
+    await page.mouse.move(from.x, from.y);
+    await page.mouse.down();
+    await page.mouse.move(to.x, to.y, { steps: 6 });
+    const live = await settled(page, "virtual: a drag is drawn while it is made", () => cursorDrawn(page), (drawn) => drawn.selected.length === 5);
+    assert.deepEqual([live.bar, live.barred.length], [false, 0], `virtual: a drag shows no cursor bar: ${JSON.stringify(live)}`);
+    if (evidence) await page.locator(".review-file").screenshot({ path: join(evidence, "review-keys-virtual-drag.png") });
+    await page.mouse.up();
+    await frames(page, 4);
+    const dropped = await cursorDrawn(page);
+    assert.deepEqual([dropped.bar, dropped.barred.length, dropped.selected.length], [false, 0, 5], `virtual: the mouse's selection stays drawn and draws no cursor until a key comes: ${JSON.stringify(dropped)}`);
+    await page.keyboard.press("j");
+    await cursorOn(page, { ...first, line: end }, "virtual: the next key shows the cursor on the drag's last line, without moving it");
+    assert.deepEqual(errors, [], "virtual: no page errors");
+    await context.close();
+  }
+  // the Markdown preview: the review takes neither the arrows nor j and k, so they scroll it
+  {
+    const { context, page, errors } = await keysPage({ language: "en" });
+    const dialog = await openKeysReview(page);
+    await dialog.getByRole("button", { name: "All files", exact: true }).click();
+    await page.getByRole("searchbox", { name: "Filter files" }).fill("a.md");
+    await listedUntil(page, "preview: the filter opens docs", (shown) => shown.includes("docs/a.md"));
+    await openFromTree(page, "docs/a.md");
+    const preview = page.locator(".review-file .review-preview");
+    await preview.locator(".file-viewer-markdown").waitFor();
+    type Watched = Window & { reviewKeysPrevented?: boolean[] };
+    await page.evaluate(() => {
+      const seen: boolean[] = [];
+      (window as Watched).reviewKeysPrevented = seen;
+      // added after the review's own listener: whether that one took the key
+      window.addEventListener("keydown", (event) => seen.push(event.defaultPrevented));
+    });
+    // a click in the preview leaves the focus on the dialog, where the browser's arrows find nothing to scroll: the review
+    // scrolls the preview a line for them, and for j and k
+    await preview.click({ position: { x: 40, y: 40 } });
+    for (const key of ["ArrowDown", "ArrowDown", "ArrowDown", "j", "k"]) await page.keyboard.press(key);
+    await settled(page, "preview: the arrows scroll the preview", () => preview.evaluate((node) => node.scrollTop), (top) => top > 0);
+    assert.deepEqual(await page.evaluate(() => (window as Watched).reviewKeysPrevented), [true, true, true, true, true], "preview: the review scrolls for the arrows, j and k");
+    const top = await preview.evaluate((node) => node.scrollTop);
+    await page.keyboard.press("Space");
+    await settled(page, "preview: Space pages the preview", () => preview.evaluate((node) => node.scrollTop), (now) => now > top);
+    assert.equal(await page.locator(".review-file diffs-container").count(), 0, "preview: no code view, so no cursor");
+    assert.deepEqual(errors, [], "preview: no page errors");
+    await context.close();
+  }
+  console.log(`review keys: cursor bar contrast ${contrasts.join(", ")}`);
+  console.log("review tree: browser OK (the review's keys: a Markdown view per list, kept; ] and [ in the tree's order with one row selected and the file announced, v and Shift+v announced; the line cursor in unified, split and the virtualized file, its bar 3:1 against --bg and its selected number in both themes; Shift+j, c with comment mode and focus back, Enter after a click and on a Tab-focused button, mouse selections unseen until a key, Escape a selection then the review; no key in a comment, the filter, View options or once off; the preview's arrows, j, k and Space scroll it; Uncommitted lists every kind of change once and takes a comment on the file on disk; a worktree's uncommitted changes are read there while Show uncommitted changes is on (View options, which also holds Show viewed files and Show ignored files), a moved worktree once, then left out with a note; an older bridge gets its stand-ins and a note; Branches load from the merge base, the comparison's pickers work by keyboard and as a bottom sheet by touch on a phone, and every line of a branch diff takes a comment that names its version, in unified and split; front folders give way first to their first letter, the last folder and file names keep their end, short names whole; a level indents about 14px; Viewed is the file's last tool in every view; folders keep their state as viewed files drop out; every file viewed leaves a note and a way to show them again; a viewed file's check stays in sight, its name faded; rows show their path as a tooltip; the column drags, steps and resets, its limits drawn and never stored)");
 } finally {
   await browser?.close(); server?.stop(true); rmSync(root, { recursive: true, force: true });
 }

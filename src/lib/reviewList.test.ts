@@ -1,6 +1,8 @@
 import { describe, expect, it } from "bun:test";
 
-import { drawnRows, reviewList, type ReviewListInput } from "./reviewList.ts";
+import { prepareFileTreeInput } from "@pierre/trees";
+
+import { drawnRows, reviewList, stepFile, TREE_SORT, treeOrder, type ReviewListInput } from "./reviewList.ts";
 
 const changed = ["src/a.ts", "src/b.ts", "docs/readme.md"];
 const list = (input: Partial<ReviewListInput>): ReturnType<typeof reviewList> =>
@@ -84,6 +86,73 @@ describe("reviewList", () => {
       expect(list({ paths, apart, query: "nope" }).note).toBe("no-match");
       expect(list({ paths: ["notes.md"], apart })).toMatchObject({ paths: [], newPaths: ["notes.md"], note: null });
     });
+  });
+});
+
+describe("treeOrder", () => {
+  const paths = ["b.ts", "src/file10.ts", "README.md", "src/file2.ts", "a.ts", "src/deep/x.ts", "Docs/guide.md"];
+
+  it("orders each group as the tree draws it: folders first, numbers by value, case ignored", () => {
+    const order = treeOrder({ paths, newPaths: ["z.ts", "new/one.ts"] }, null);
+    expect(order.paths).toEqual(prepareFileTreeInput(paths, { sort: TREE_SORT }).paths);
+    expect(order.paths).toEqual(["Docs/guide.md", "src/deep/x.ts", "src/file2.ts", "src/file10.ts", "a.ts", "b.ts", "README.md"]);
+    expect(order.newPaths).toEqual(["new/one.ts", "z.ts"]);
+  });
+
+  it("says a path is new by the set listed apart", () => {
+    const apart = new Set(["z.ts"]);
+    expect(treeOrder({ paths: [], newPaths: [] }, apart).isNew("z.ts")).toBe(true);
+    expect(treeOrder({ paths: [], newPaths: [] }, apart).isNew("a.ts")).toBe(false);
+    expect(treeOrder({ paths: [], newPaths: [] }, null).isNew("z.ts")).toBe(false);
+  });
+});
+
+describe("stepFile", () => {
+  // the last four are new files the list does not show
+  const apart = new Set(["new/one.ts", "new/three.ts", "x.ts", "new/a.ts", "new/pair.ts", "zz.ts", "0.ts"]);
+  // paths: lib/b.ts, lib/d.ts, f.ts; newPaths: new/one.ts, new/three.ts, x.ts
+  const order = treeOrder({ paths: ["f.ts", "lib/d.ts", "lib/b.ts"], newPaths: ["x.ts", "new/three.ts", "new/one.ts"] }, apart);
+
+  it("steps through the files, then the new files, without wrapping", () => {
+    expect(stepFile(order, "lib/b.ts", 1)).toBe("lib/d.ts");
+    expect(stepFile(order, "lib/d.ts", -1)).toBe("lib/b.ts");
+    expect(stepFile(order, "f.ts", 1)).toBe("new/one.ts");
+    expect(stepFile(order, "new/one.ts", -1)).toBe("f.ts");
+    expect(stepFile(order, "x.ts", 1)).toBeNull();
+    expect(stepFile(order, "lib/b.ts", -1)).toBeNull();
+  });
+
+  it("opens the first or the last file when none is open", () => {
+    expect(stepFile(order, null, 1)).toBe("lib/b.ts");
+    expect(stepFile(order, null, -1)).toBe("x.ts");
+    const onlyNew = treeOrder({ paths: [], newPaths: ["x.ts"] }, apart);
+    expect(stepFile(onlyNew, null, 1)).toBe("x.ts");
+    expect(stepFile(onlyNew, null, -1)).toBe("x.ts");
+  });
+
+  it("places a file that is not listed into its group, then steps from there", () => {
+    // in the files: before all, between, after all
+    expect(stepFile(order, "a/a.ts", 1)).toBe("lib/b.ts");
+    expect(stepFile(order, "a/a.ts", -1)).toBeNull();
+    expect(stepFile(order, "lib/c.ts", 1)).toBe("lib/d.ts");
+    expect(stepFile(order, "lib/c.ts", -1)).toBe("lib/b.ts");
+    expect(stepFile(order, "g.ts", 1)).toBe("new/one.ts");
+    expect(stepFile(order, "g.ts", -1)).toBe("f.ts");
+    // in the new files: before all, between, after all
+    expect(stepFile(order, "0.ts", 1)).toBe("x.ts");
+    expect(stepFile(order, "new/a.ts", 1)).toBe("new/one.ts");
+    expect(stepFile(order, "new/a.ts", -1)).toBe("f.ts");
+    expect(stepFile(order, "new/pair.ts", 1)).toBe("new/three.ts");
+    expect(stepFile(order, "new/pair.ts", -1)).toBe("new/one.ts");
+    expect(stepFile(order, "zz.ts", 1)).toBeNull();
+    expect(stepFile(order, "zz.ts", -1)).toBe("x.ts");
+  });
+
+  it("does nothing in an empty list", () => {
+    const empty = treeOrder({ paths: [], newPaths: [] }, null);
+    expect(stepFile(empty, null, 1)).toBeNull();
+    expect(stepFile(empty, null, -1)).toBeNull();
+    expect(stepFile(empty, "a.ts", 1)).toBeNull();
   });
 });
 

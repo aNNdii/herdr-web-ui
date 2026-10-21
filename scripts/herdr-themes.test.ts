@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { normalizeThemeValue, parseThemeBlocks, parseThemeValue, resolveEntry } from "../src/lib/themeCss.ts";
 import { ROLES, SHADOW_GEOMETRY, siblingFor, SUPPORTED_ENTRIES } from "../src/lib/themes.ts";
 import { HERDR_SOURCE, KIND, mapTerminalAnsi, RAW, SOURCE, TOKENS } from "./herdr-themes.ts";
-import { deltaE, mapTheme, minimumContrast, proposeTheme, ROLE_DEFAULTS, waitingCandidate, WAITING_CHROME_MIN_DE, WAITING_STATUS_MIN_DE } from "./herdr-theme-proposal.ts";
+import { contrast, deltaE, mapTheme, minimumContrast, proposeTheme, ROLE_DEFAULTS, waitingCandidate, WAITING_CHROME_MIN_DE, WAITING_STATUS_MIN_DE } from "./herdr-theme-proposal.ts";
 import type { ThemeRoles } from "./herdr-theme-proposal.ts";
 import { OVERRIDES, provenanceFailures } from "./herdr-theme-overrides.ts";
 import type { ThemeOverride } from "./herdr-theme-overrides.ts";
@@ -112,6 +112,25 @@ describe("pinned herdr palettes", () => {
       expect(roles["status-waiting-tint"]).toBe(`rgba(${[1, 3, 5].map((at) => parseInt(waiting.slice(at, at + 2), 16)).join(", ")}, ${mode === "dark" ? 0.14 : 0.12})`);
       for (const role of ["accent", "primary", "status-working", "status-blocked", "status-done", "notice"] as const) {
         expect({ id, mode, role, apart: deltaE(waiting, roles[role]) >= 5 }).toEqual({ id, mode, role, apart: true });
+      }
+    }
+  });
+
+  it("keeps the review's line cursor bar (--text-strong) 3:1 on every diff row, selected or not, in every theme", () => {
+    // the rows as the review draws them (REVIEW_CSS in src/components/ReviewFile.tsx: 12% of git's colour over --bg),
+    // and selected as @pierre/diffs tints them (82% of the row in light, 75% in dark, over its blue). sRGB mixing
+    // stands in for the library's lab: the margin above 3:1 covers the difference
+    const mix = (color: string, ground: string, amount: number): string => `#${[1, 3, 5].map((at) => {
+      const value = parseInt(color.slice(at, at + 2), 16) * amount + parseInt(ground.slice(at, at + 2), 16) * (1 - amount);
+      return Math.round(value).toString(16).padStart(2, "0");
+    }).join("")}`;
+    for (const { id, mode } of SUPPORTED_ENTRIES) {
+      const resolved = resolveEntry(css, id, mode).resolved;
+      const bg = resolved["--bg"]!, bar = resolved["--text-strong"]!;
+      const rows = [bg, mix(resolved["--git-added"]!, bg, 0.12), mix(resolved["--git-deleted"]!, bg, 0.12)];
+      const selection = mode === "light" ? "#009fff" : "#69b1ff";
+      for (const row of [...rows, ...rows.map((one) => mix(one, selection, mode === "light" ? 0.82 : 0.75))]) {
+        expect({ id, mode, row, contrast: contrast(bar, row) >= 3.2 }).toEqual({ id, mode, row, contrast: true });
       }
     }
   });

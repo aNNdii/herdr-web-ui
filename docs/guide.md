@@ -610,6 +610,34 @@ the screen. Shift+PageUp/PageDown alone retains the focused control's own behavi
 
 Enter sends and Shift+Enter adds a line. On a touch screen, Settings → Chat → Composer → Return inserts a new line lets Return add a line instead; use Send to send the message. On a desktop, turning off Enter sends switches sending to Mod+Enter. On a touch screen with a hardware keyboard, Mod+Enter sends while Return inserts a new line is on. This choice is saved per device.
 
+### Review keys
+
+**Review changes** has keys of its own, modelled on Gerrit's. They take no modifier and work only
+while the review is open:
+
+| Key | Action |
+| --- | --- |
+| `]` / `[` | Next / previous file, in the order the tree shows them, then the new files |
+| `v` | Mark the open file as viewed, or not viewed again |
+| `j` / `↓` | Move the line cursor down; the first press puts it on the first line in view |
+| `k` / `↑` | Move the line cursor up |
+| `Shift+j` / `Shift+↓` | Select lines downwards from the cursor |
+| `Shift+k` / `Shift+↑` | Select lines upwards from the cursor |
+| `c` / `Enter` | Comment on the cursor's line or the selected lines, or edit the comment already there; without a cursor, place it first |
+| `Escape` | Drop the selected lines; with none, close the review |
+| `Space` / `PageDown` | Scroll the file a page down |
+| `Shift+Space` / `PageUp` | Scroll the file a page up |
+
+In a text field (the filter, a comment) no review key works, and while a comment is open only
+`Escape` does, for the comment. While the file tree has the focus, the arrows and `Enter` belong to
+the tree; the other keys still work. A button or link focused with the keyboard keeps `Enter` and
+the space bar. Holding a key repeats only the moves and the pages (`j`, `k`, the arrows, `[`, `]`
+and the page keys). A Markdown preview has no line cursor: there `j`, `k` and the arrows scroll
+it a line. In a file the viewer shows (media, a file too large to diff) only `[`, `]` and `v` work.
+The brackets are read by where they sit: on a German keyboard `[` and `]` are Ü and +.
+**View options → Keyboard shortcuts** turns the review keys off on this device; `Escape`, the page
+keys and the arrows, which then scroll the file a line, stay.
+
 ## How it works
 
 ```mermaid

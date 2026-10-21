@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "bun:test";
 
-import { storedHideViewed, storedNewFilesApart, storedShowIgnored, storeHideViewed, storeNewFilesApart, storeShowIgnored, workspacePick } from "./review.ts";
+import { storedHideViewed, storedMarkdownViews, storedNewFilesApart, storedReviewKeysOff, storedShowIgnored, storeHideViewed, storeMarkdownView, storeNewFilesApart, storeReviewKeysOff, storeShowIgnored, workspacePick } from "./review.ts";
 
 const original = Object.getOwnPropertyDescriptor(globalThis, "window");
 
@@ -76,10 +76,71 @@ describe("the review's per-device toggles", () => {
     expect(storage.has("herdr-web-ui:review-new-files-apart")).toBe(false);
   });
 
+  it("keeps the review keys on until turned off, under their own key", () => {
+    const storage = memoryStorage();
+    withStorage(storage);
+    expect(storedReviewKeysOff()).toBe(false);
+    storeReviewKeysOff(true);
+    expect([...storage.entries()]).toEqual([["herdr-web-ui:review-keys-off", "1"]]);
+    expect(storedReviewKeysOff()).toBe(true);
+    expect(storedHideViewed()).toBe(false);
+    storeReviewKeysOff(false);
+    expect(storage.size).toBe(0);
+    expect(storedReviewKeysOff()).toBe(false);
+  });
+
+  it("keeps the review keys on without storage (private mode)", () => {
+    const denied = (): never => { throw new Error("denied"); };
+    withStorage({ getItem: denied, setItem: denied, removeItem: denied });
+    expect(() => storeReviewKeysOff(true)).not.toThrow();
+    expect(storedReviewKeysOff()).toBe(false);
+  });
+
   it("stays off and silent without storage (private mode)", () => {
     const denied = (): never => { throw new Error("denied"); };
     withStorage({ getItem: denied, setItem: denied, removeItem: denied });
     expect(() => storeHideViewed(true)).not.toThrow();
     expect(storedHideViewed()).toBe(false);
+  });
+});
+
+describe("the Markdown view of each list", () => {
+  it("starts as Source in Changed files and as Preview in All files", () => {
+    withStorage(memoryStorage());
+    expect(storedMarkdownViews()).toEqual({ changed: "source", all: "preview" });
+  });
+
+  it("writes only the key of the list the choice was made in, and reads it back at the next opening", () => {
+    const storage = memoryStorage();
+    withStorage(storage);
+    const views = storeMarkdownView(storedMarkdownViews(), "changed", "preview");
+    expect(views).toEqual({ changed: "preview", all: "preview" });
+    expect([...storage.entries()]).toEqual([["herdr-web-ui:review-markdown-view:changed", "preview"]]);
+    expect(storedMarkdownViews()).toEqual({ changed: "preview", all: "preview" });
+    expect(storeMarkdownView(views, "all", "source")).toEqual({ changed: "preview", all: "source" });
+    expect(storage.get("herdr-web-ui:review-markdown-view:all")).toBe("source");
+    expect(storage.get("herdr-web-ui:review-markdown-view:changed")).toBe("preview");
+  });
+
+  it("keeps a choice that is the default, so another default later does not turn it round", () => {
+    const storage = memoryStorage();
+    withStorage(storage);
+    storeMarkdownView(storedMarkdownViews(), "changed", "source");
+    expect(storage.get("herdr-web-ui:review-markdown-view:changed")).toBe("source");
+  });
+
+  it("takes an unknown value for the default", () => {
+    const storage = memoryStorage();
+    withStorage(storage);
+    storage.set("herdr-web-ui:review-markdown-view:changed", "1");
+    storage.set("herdr-web-ui:review-markdown-view:all", "diff");
+    expect(storedMarkdownViews()).toEqual({ changed: "source", all: "preview" });
+  });
+
+  it("gives the defaults without storage, and the choice holds for this opening", () => {
+    const denied = (): never => { throw new Error("denied"); };
+    withStorage({ getItem: denied, setItem: denied, removeItem: denied });
+    expect(storedMarkdownViews()).toEqual({ changed: "source", all: "preview" });
+    expect(storeMarkdownView(storedMarkdownViews(), "all", "source")).toEqual({ changed: "source", all: "source" });
   });
 });

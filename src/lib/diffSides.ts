@@ -1,6 +1,7 @@
 import type { FileDiffMetadata } from "@pierre/diffs";
 
 import type { LineRange } from "./fileComments.ts";
+import type { LineTrack } from "./lineCursor.ts";
 
 /**
  * The two sides of a parsed patch, as a comment on a branch diff needs them: which line of which version a drawn row is,
@@ -33,6 +34,30 @@ function withoutLineEnd(line: string): string {
   return line.replace(/\r?\n$|\r$/, "");
 }
 
+/** One line of a hunk as the patch draws it: an unchanged line has both numbers, a removed one the old, an added one the new. */
+type HunkLine =
+  | { kind: "context"; oldLine: number; newLine: number; text: string | undefined; hunk: number }
+  | { kind: "removed"; oldLine: number; text: string | undefined; hunk: number }
+  | { kind: "added"; newLine: number; text: string | undefined; hunk: number };
+
+/** Every line of every hunk in unified order: each change's removed lines before its added ones. Gaps between hunks are not visited. */
+function eachHunkLine(file: FileDiffMetadata, visit: (line: HunkLine) => void): void {
+  file.hunks.forEach((hunk, index) => {
+    let oldLine = hunk.deletionStart;
+    let newLine = hunk.additionStart;
+    for (const content of hunk.hunkContent) {
+      if (content.type === "context") {
+        for (let at = 0; at < content.lines; at++) {
+          visit({ kind: "context", oldLine: oldLine++, newLine: newLine++, text: file.additionLines[content.additionLineIndex + at], hunk: index });
+        }
+        continue;
+      }
+      for (let at = 0; at < content.deletions; at++) visit({ kind: "removed", oldLine: oldLine++, text: file.deletionLines[content.deletionLineIndex + at], hunk: index });
+      for (let at = 0; at < content.additions; at++) visit({ kind: "added", newLine: newLine++, text: file.additionLines[content.additionLineIndex + at], hunk: index });
+    }
+  });
+}
+
 export function diffSides(file: FileDiffMetadata): DiffSides {
   const head = { text: [] as (string | undefined)[], hunk: [] as (number | undefined)[] };
   const base = { text: [] as (string | undefined)[], hunk: [] as (number | undefined)[] };
@@ -42,24 +67,54 @@ export function diffSides(file: FileDiffMetadata): DiffSides {
     side.text[line - 1] = withoutLineEnd(text);
     side.hunk[line - 1] = hunk;
   };
-  file.hunks.forEach((hunk, index) => {
-    let oldLine = hunk.deletionStart;
-    let newLine = hunk.additionStart;
-    for (const content of hunk.hunkContent) {
-      if (content.type === "context") {
-        for (let at = 0; at < content.lines; at++) {
-          put(head, newLine, file.additionLines[content.additionLineIndex + at], index);
-          unchanged.set(oldLine, newLine);
-          oldLine++;
-          newLine++;
-        }
-        continue;
-      }
-      for (let at = 0; at < content.deletions; at++) put(base, oldLine++, file.deletionLines[content.deletionLineIndex + at], index);
-      for (let at = 0; at < content.additions; at++) put(head, newLine++, file.additionLines[content.additionLineIndex + at], index);
-    }
+  eachHunkLine(file, (line) => {
+    if (line.kind === "context") {
+      put(head, line.newLine, line.text, line.hunk);
+      unchanged.set(line.oldLine, line.newLine);
+    } else if (line.kind === "removed") put(base, line.oldLine, line.text, line.hunk);
+    else put(head, line.newLine, line.text, line.hunk);
   });
   return { head, base, unchanged };
+}
+
+/** a row's key in the track's index: the new numbers as they are, the old ones negated (line numbers start at 1) */
+function rowKey(row: DiffRow): number {
+  return row.old ? -row.line : row.line;
+}
+
+/**
+ * The rows a line cursor walks in a diff, in unified order: an unchanged or added line by its new number (old false),
+ * a removed line by its old number (old true), each change's removed lines before its added ones. Lines between hunks
+ * are not drawn, so they are not on it. An unchanged line a split view's left column draws by its old number is found
+ * too, as the same row.
+ */
+export function diffTrack(file: FileDiffMetadata): LineTrack {
+  const rows: DiffRow[] = [];
+  const index = new Map<number, number>();
+  eachHunkLine(file, (line) => {
+    if (line.kind === "context") {
+      if (line.newLine < 1) return;
+      if (line.oldLine >= 1) index.set(-line.oldLine, rows.length);
+      index.set(line.newLine, rows.length);
+      rows.push({ line: line.newLine, old: false });
+      return;
+    }
+    const row = line.kind === "removed" ? { line: line.oldLine, old: true } : { line: line.newLine, old: false };
+    if (row.line < 1) return;
+    index.set(rowKey(row), rows.length);
+    rows.push(row);
+  });
+  return {
+    length: rows.length,
+    row(at) {
+      const row = rows[at];
+      if (row === undefined) throw new RangeError(`no row at ${at} of ${rows.length}`);
+      return row;
+    },
+    indexOf(row) {
+      return Number.isInteger(row.line) && row.line >= 1 ? index.get(rowKey(row)) ?? -1 : -1;
+    },
+  };
 }
 
 /** A drawn row as a line of one side: an unchanged line is the head's, by its new number; null when the patch lacks it. */
