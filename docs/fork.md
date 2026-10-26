@@ -38,7 +38,8 @@ A remote PC runs a bridge: a copy of the server from a bundle the connection ser
 SSH (`~/.local/share/herdr-web-ui/remote-v<version>`). Upstream names it by `REMOTE_BUNDLE_VERSION`
 in `shared/machines.ts`, raised by hand; the fork names it by
 [`server/bridge-version.ts`](../server/bridge-version.ts): upstream's number and a fingerprint of
-the files of `server/` and `shared/` the bundle carries, e.g. `30-fork.1a2b3c4d5e6f`. The connection
+the files of `server/`, `shared/` and `integrations/` (and `scripts/install-gjc-integration.ts`) the
+bundle carries, e.g. `30-fork.1a2b3c4d5e6f`. The connection
 server reads its checkout and a bridge its bundle, so they agree exactly when they run the same code.
 
 - A release whose server code no release published yet first publishes its bundles for every

@@ -4,7 +4,7 @@
  */
 import { join } from "node:path";
 import type { AgentStatus, HerdrPane, PlanSummary, ServerMessage, SessionSnapshot } from "../../shared/protocol.ts";
-import { alertStatus, paneTitle } from "../../shared/notify-policy.ts";
+import { alertStatus, paneAlertsMuted, paneTitle } from "../../shared/notify-policy.ts";
 import { BackgroundWait } from "../background-wait.ts";
 import { ClaudeSubagentStatus } from "../claude-subagents.ts";
 import { PiSubagentStatus } from "../pi-subagent-status.ts";
@@ -14,15 +14,19 @@ import { startStatusCollector } from "../collector.ts";
 import { CompletionTracker, type OmoRest } from "../completion.ts";
 import { Finishes } from "../finishes.ts";
 import { claudePanePid, claudePaneSession, forgetPaneTranscriptState } from "../conversation.ts";
+import { releaseOpenCodePane, trackVerifiedOpenCodePanes } from "../opencode-native.ts";
 import type { DeviceStore } from "../devices.ts";
 import { createGjcStatus, gjcPanes, readOmoSnapshot, reconcileProviderStatus } from "../gjc-status.ts";
 import type { HerdrMachineProfile } from "../herdr-profiles.ts";
 import { paneGet, sessionSnapshot } from "../herdr/client.ts";
+import { resolveAgent } from "../pane-context.ts";
 import { launchedAgents } from "../launched-agents.ts";
 import { bridgeAgentNews, MachineManager } from "../machines.ts";
 import { omoPanes } from "../omo.ts";
 import { OMO_ALIASES, OmoStatus } from "../omo-status.ts";
+import type { OrderSequence } from "../order-sequence.ts";
 import type { PendingInputs } from "../pending-input.ts";
+import type { PreferenceStore } from "../preferences.ts";
 import { promptWaitEnded, type OpenCodePromptState } from "../prompt.ts";
 import { type AlertTiming, createPushService, defaultStateDir } from "../push.ts";
 import { SessionPlans } from "../session-plan.ts";
@@ -34,7 +38,7 @@ import { type Client, send } from "./connections.ts";
 /** a focus or reconnect re-reads the panes for the daily active message at most this often */
 const VISIT_READ_MS = 10 * 60_000;
 
-export function createStatusHub<Lease>({ options, devices, clients, present, pending, drainPending, holdPendingPane, usage, usageLogin }: {
+export function createStatusHub<Owner, Lease>({ options, devices, preferences, clients, present, pending, drainPending, holdPendingPane, usage, usageLogin }: {
   options: {
     stateDir?: string;
     codexHome?: string;
@@ -46,11 +50,16 @@ export function createStatusHub<Lease>({ options, devices, clients, present, pen
     backgroundWait?: { grace: number; limit: number };
     statusNow?: () => number;
     openCodeState?: OpenCodePromptState;
+    /** this server's workspace-order counter (server/order-sequence.ts); createServer makes the one there is */
+    orderSequence?: OrderSequence;
   };
   devices: DeviceStore;
+  /** the preferences every browser shares (server/preferences.ts): web push reads the muted panes from it */
+  preferences: PreferenceStore;
   clients: Set<Client>;
   present: Set<Client>;
-  pending: PendingInputs<Client, Lease>;
+  /** the pending messages' status and lifetime calls, whoever owns them (a connection, or the bridge for a first message) */
+  pending: PendingInputs<Owner, Lease>;
   drainPending: (paneId: string) => void;
   holdPendingPane: (paneId: string, fault: { code: string; message: string }) => void;
   usage: UsageService;
@@ -63,10 +72,14 @@ export function createStatusHub<Lease>({ options, devices, clients, present, pen
     loopbackHttp: options.pushLoopbackHttp === true,
     canDeliver: (id) => id === null || (id === undefined ? !devices.gated : devices.has(id)),
     inUse: () => present.size > 0,
+    // the persisted list, read as each alert is scheduled and again as it goes out
+    muted: (machineId, paneId) => paneAlertsMuted(preferences.get().muted_panes, machineId, paneId),
     lookupTitle: async (paneId) => {
       return paneTitle(await paneGet(paneId));
     },
   });
+  // a mute made while an alert waits calls it off, so an unmute cannot resurrect an old finish
+  const stopMutes = preferences.subscribe(() => push.mutesChanged());
 
   /** `done` for agents herdr loses track of (server/completion.ts), kept across restarts */
   const completions = new CompletionTracker(join(options.stateDir ?? defaultStateDir(), "completions.json"));
@@ -140,11 +153,14 @@ export function createStatusHub<Lease>({ options, devices, clients, present, pen
   const backgroundOf = (paneId: string): number => omo.backgroundOf(paneId) || claudeAgents.countOf(paneId) || piAgents.countOf(paneId);
   /** the snapshot clients get: finishes settled, OmO panes named, background tasks, waits and plan progress */
   const clientSnapshot = async (): Promise<SessionSnapshot> => {
+    // the order this read can show is the one of the moves confirmed before it starts: taken before any wait,
+    // and again by a read started afresh below
+    const order = options.orderSequence?.read();
     const epoch = finishes.epoch;
     const snapshot = await completions.readSnapshot(rawSnapshot);
     // A read spanning a proven daemon replacement belongs to neither generation. Read afresh.
     if (epoch !== finishes.epoch) return clientSnapshot();
-    return finishes.snapshot({
+    const settled = finishes.snapshot({
       ...snapshot,
       panes: snapshot.panes.map((pane) => {
         const background = backgroundOf(pane.pane_id);
@@ -153,6 +169,7 @@ export function createStatusHub<Lease>({ options, devices, clients, present, pen
         return background > 0 || waiting || plan !== null ? { ...pane, ...(background > 0 ? { background_tasks: background } : {}), ...(waiting ? { background_wait: true as const } : {}), ...(plan !== null ? { plan } : {}) } : pane;
       }),
     }, completions);
+    return order ? { ...settled, ...order } : settled;
   };
   /**
    * A browser visit for the daily active message: the call is made now so the visit's day is the
@@ -167,7 +184,7 @@ export function createStatusHub<Lease>({ options, devices, clients, present, pen
     let agents: Promise<(string | null)[]> | (string | null)[] = [];
     if (snapshot || Date.now() - visitReadAt >= VISIT_READ_MS) {
       visitReadAt = Date.now();
-      agents = (snapshot ?? clientSnapshot()).then((read) => read.panes.map((pane) => pane.agent ?? pane.agent_session?.agent ?? null));
+      agents = (snapshot ?? clientSnapshot()).then((read) => read.panes.map((pane) => resolveAgent(pane).agent));
     }
     void telemetry.active(agents)
       .catch((error) => console.error(`telemetry: the visit was not counted (${error instanceof Error ? error.message : String(error)})`));
@@ -175,7 +192,7 @@ export function createStatusHub<Lease>({ options, devices, clients, present, pen
   /** A pane's status frame: every one says whether the pane waits on its turn's background work. */
   const paneStatus = (paneId: string, status: AgentStatus, about: { background_tasks?: number; plan?: PlanSummary | null } = {}): ServerMessage =>
     ({ type: "pane-status", pane_id: paneId, agent_status: status, ...finishes.status(paneId, status), ...about, ...(waits.waiting(paneId) ? { background_wait: true as const } : {}) });
-  const machines = options.machines === false ? null : new MachineManager(options.stateDir ?? defaultStateDir(), push, completions, clientSnapshot);
+  const machines = options.machines === false ? null : new MachineManager(options.stateDir ?? defaultStateDir(), push, completions, clientSnapshot, { bootId: options.orderSequence?.epoch });
   if (machines && options.herdrProfiles) machines.watchHerdrProfiles(options.herdrProfiles);
 
   function broadcastAll(message: ServerMessage): void {
@@ -257,7 +274,11 @@ export function createStatusHub<Lease>({ options, devices, clients, present, pen
 
   const collector = startStatusCollector({
     onStatus: (paneId, read, agent, replay) => {
-      if (agent !== "opencode") options.openCodeState?.forget(paneId);
+      if (agent !== "opencode") {
+        options.openCodeState?.forget(paneId);
+        // no longer an OpenCode pane: it holds OpenCode's event stream open no more
+        releaseOpenCodePane(paneId);
+      }
       const raw = launchedAgents.settle(paneId, read);
       gjc.poll();
       // read back from a snapshot around a gap between subscriptions. An OmO pane's status there
@@ -303,6 +324,8 @@ export function createStatusHub<Lease>({ options, devices, clients, present, pen
     onFocus: (paneId) => {
       // The split canvas follows herdr's focused pane (also the sole visible pane while zoomed).
       broadcastAll({ type: "session-changed" });
+      // a browser set to follow herdr's focus opens the pane (#311)
+      broadcastAll({ type: "pane-focused", pane_id: paneId });
       if (!completions.seen(paneId)) return;
       pending.status(paneId, "idle"); drainPending(paneId);
       broadcastAll(paneStatus(paneId, "idle"));
@@ -334,6 +357,7 @@ export function createStatusHub<Lease>({ options, devices, clients, present, pen
     },
     onPaneEnded: (paneId) => {
       options.openCodeState?.forget(paneId);
+      releaseOpenCodePane(paneId);
       finishes.ended(paneId);
       if (usageLogin.ended(paneId)) usage.invalidate();
       holdPendingPane(paneId, { code: "pane_not_found", message: "The pane ended; its pending messages were not sent" });
@@ -356,5 +380,9 @@ export function createStatusHub<Lease>({ options, devices, clients, present, pen
   waitTimer.unref?.();
   plans.start();
 
-  return { push, omo, gjc, claudeAgents, piAgents, plans, clientSnapshot, countVisit, machines, broadcastAll, logPushError, collector, waitTimer };
+  // a verified OpenCode pane is tracked like a usage-login pane: closing it reaches onPaneEnded above
+  const untrackOpenCode = trackVerifiedOpenCodePanes((paneId) => collector.trackPane(paneId));
+  const tracked = { ...collector, stop() { untrackOpenCode(); stopMutes(); collector.stop(); } };
+
+  return { push, omo, gjc, claudeAgents, piAgents, plans, clientSnapshot, countVisit, machines, broadcastAll, logPushError, collector: tracked, waitTimer };
 }

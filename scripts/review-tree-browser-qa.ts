@@ -570,7 +570,7 @@ try {
 
   for (const theme of ["dark", "light"] as const) {
     const context = await browser.newContext({ viewport: { width: 1440, height: 900 }, colorScheme: theme });
-    await context.addInitScript((theme) => localStorage.setItem("herdr-web-ui:settings", JSON.stringify({ language: "en", theme })), theme);
+    await context.addInitScript((theme) => localStorage.setItem("ovis:settings", JSON.stringify({ language: "en", theme })), theme);
     const page = await context.newPage();
     page.setDefaultTimeout(15_000);
     const errors: string[] = [];
@@ -667,7 +667,7 @@ try {
   // the Viewed button closes the file's tools in every view the Review draws a file in
   {
     const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
-    await context.addInitScript(() => localStorage.setItem("herdr-web-ui:settings", JSON.stringify({ language: "en" })));
+    await context.addInitScript(() => localStorage.setItem("ovis:settings", JSON.stringify({ language: "en" })));
     const page = await context.newPage();
     page.setDefaultTimeout(15_000);
     const errors: string[] = [];
@@ -713,7 +713,7 @@ try {
   // a viewed file Hide viewed files drops leaves the folders as the reader set them; a filter still opens its matches
   {
     const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
-    await context.addInitScript(() => localStorage.setItem("herdr-web-ui:settings", JSON.stringify({ language: "en" })));
+    await context.addInitScript(() => localStorage.setItem("ovis:settings", JSON.stringify({ language: "en" })));
     const page = await context.newPage();
     page.setDefaultTimeout(15_000);
     const errors: string[] = [];
@@ -760,7 +760,7 @@ try {
   // file still shown listed under it, and Show viewed files turns the toggle off and lists them all again
   {
     const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
-    await context.addInitScript(() => localStorage.setItem("herdr-web-ui:settings", JSON.stringify({ language: "en" })));
+    await context.addInitScript(() => localStorage.setItem("ovis:settings", JSON.stringify({ language: "en" })));
     const page = await context.newPage();
     page.setDefaultTimeout(15_000);
     const errors: string[] = [];
@@ -822,7 +822,7 @@ try {
     assert.equal(await dot.count(), 0, "the dot leaves with the option back at its default");
     await listedUntil(page, "Show viewed files lists every changed file again", (shown) => changed.every((path) => shown.includes(path)));
     assert.equal(await note.count(), 0, "the note leaves with the toggle off");
-    assert.equal(await page.evaluate(() => localStorage.getItem("herdr-web-ui:review-hide-viewed")), null, "Show viewed files is stored on (nothing hidden)");
+    assert.equal(await page.evaluate(() => localStorage.getItem("ovis:review-hide-viewed")), null, "Show viewed files is stored on (nothing hidden)");
     assert.deepEqual(errors, [], "viewed notes: no page errors");
     await context.close();
   }
@@ -830,7 +830,7 @@ try {
   // folder stays as the reader left it; a filter, a new listing, still opens it
   {
     const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
-    await context.addInitScript(() => localStorage.setItem("herdr-web-ui:settings", JSON.stringify({ language: "en" })));
+    await context.addInitScript(() => localStorage.setItem("ovis:settings", JSON.stringify({ language: "en" })));
     const page = await context.newPage();
     page.setDefaultTimeout(15_000);
     const errors: string[] = [];
@@ -871,7 +871,7 @@ try {
   // tooltip is its full path, the deepest folder's for a flattened folder row
   {
     const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
-    await context.addInitScript(() => localStorage.setItem("herdr-web-ui:settings", JSON.stringify({ language: "en" })));
+    await context.addInitScript(() => localStorage.setItem("ovis:settings", JSON.stringify({ language: "en" })));
     const page = await context.newPage();
     page.setDefaultTimeout(15_000);
     const errors: string[] = [];
@@ -945,9 +945,9 @@ try {
   }
   // the tree's column: its default width, a grip that drags, steps and resets, and limits drawn but never stored
   {
-    const KEY = "herdr-web-ui:review-tree-width";
+    const KEY = "ovis:review-tree-width";
     const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
-    await context.addInitScript(() => localStorage.setItem("herdr-web-ui:settings", JSON.stringify({ language: "en" })));
+    await context.addInitScript(() => localStorage.setItem("ovis:settings", JSON.stringify({ language: "en" })));
     const page = await context.newPage();
     page.setDefaultTimeout(15_000);
     const errors: string[] = [];
@@ -1063,7 +1063,7 @@ try {
   // diff takes a comment, in both layouts, whose head names the version it is on
   {
     const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
-    await context.addInitScript(() => localStorage.setItem("herdr-web-ui:settings", JSON.stringify({ language: "en", commentMode: true, mobileCommentGesture: "tap", diffStyle: "unified" })));
+    await context.addInitScript(() => localStorage.setItem("ovis:settings", JSON.stringify({ language: "en", commentMode: true, mobileCommentGesture: "tap", diffStyle: "unified" })));
     const page = await context.newPage();
     page.setDefaultTimeout(15_000);
     const errors: string[] = [];
@@ -1196,7 +1196,7 @@ try {
       const found: BranchComment[] = [];
       for (let index = 0; index < localStorage.length; index++) {
         const key = localStorage.key(index)!;
-        if (!key.startsWith("herdr-web-ui:block-comments:")) continue;
+        if (!key.startsWith("ovis:block-comments:")) continue;
         for (const comment of (JSON.parse(localStorage.getItem(key)!) as { comments: BranchComment[] }).comments) if (comment.kind === "branch") found.push(comment);
       }
       return found.sort((a, b) => a.created - b.created);
@@ -1262,7 +1262,7 @@ try {
   // Branches while the branch list is still on its way: free text loads at once, without waiting for the list
   {
     const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
-    await context.addInitScript(() => localStorage.setItem("herdr-web-ui:settings", JSON.stringify({ language: "en" })));
+    await context.addInitScript(() => localStorage.setItem("ovis:settings", JSON.stringify({ language: "en" })));
     const page = await context.newPage();
     page.setDefaultTimeout(15_000);
     const errors: string[] = [];
@@ -1285,7 +1285,7 @@ try {
   // stays in the visible area as a keyboard takes the bottom, and a tap on a branch chooses and loads it
   {
     const context = await browser.newContext({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true });
-    await context.addInitScript(() => localStorage.setItem("herdr-web-ui:settings", JSON.stringify({ language: "en" })));
+    await context.addInitScript(() => localStorage.setItem("ovis:settings", JSON.stringify({ language: "en" })));
     const page = await context.newPage();
     page.setDefaultTimeout(15_000);
     const errors: string[] = [];
@@ -1366,7 +1366,7 @@ try {
   // the file on disk
   {
     const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
-    await context.addInitScript(() => localStorage.setItem("herdr-web-ui:settings", JSON.stringify({ language: "en", commentMode: true, mobileCommentGesture: "tap", diffStyle: "unified" })));
+    await context.addInitScript(() => localStorage.setItem("ovis:settings", JSON.stringify({ language: "en", commentMode: true, mobileCommentGesture: "tap", diffStyle: "unified" })));
     const page = await context.newPage();
     page.setDefaultTimeout(15_000);
     const errors: string[] = [];
@@ -1404,7 +1404,7 @@ try {
       const found: { kind: string; path?: string; comment: string }[] = [];
       for (let index = 0; index < localStorage.length; index++) {
         const key = localStorage.key(index)!;
-        if (key.startsWith("herdr-web-ui:block-comments:")) found.push(...(JSON.parse(localStorage.getItem(key)!) as { comments: { kind: string; path?: string; comment: string }[] }).comments);
+        if (key.startsWith("ovis:block-comments:")) found.push(...(JSON.parse(localStorage.getItem(key)!) as { comments: { kind: string; path?: string; comment: string }[] }).comments);
       }
       return found.map(({ kind, path, comment }) => ({ kind, path, comment }));
     });
@@ -1416,7 +1416,7 @@ try {
   // alone from the pane's folder. The branch list is the pane's folder's either way
   {
     const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
-    await context.addInitScript(() => localStorage.setItem("herdr-web-ui:settings", JSON.stringify({ language: "en", commentMode: true, mobileCommentGesture: "tap", diffStyle: "unified" })));
+    await context.addInitScript(() => localStorage.setItem("ovis:settings", JSON.stringify({ language: "en", commentMode: true, mobileCommentGesture: "tap", diffStyle: "unified" })));
     const page = await context.newPage();
     page.setDefaultTimeout(15_000);
     const errors: string[] = [];
@@ -1472,7 +1472,7 @@ try {
   // read once more and the switch gone
   {
     const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
-    await context.addInitScript(() => localStorage.setItem("herdr-web-ui:settings", JSON.stringify({ language: "en" })));
+    await context.addInitScript(() => localStorage.setItem("ovis:settings", JSON.stringify({ language: "en" })));
     const page = await context.newPage();
     page.setDefaultTimeout(15_000);
     const errors: string[] = [];
@@ -1521,7 +1521,7 @@ try {
   // asked directly from then on
   {
     const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
-    await context.addInitScript(() => localStorage.setItem("herdr-web-ui:settings", JSON.stringify({ language: "en" })));
+    await context.addInitScript(() => localStorage.setItem("ovis:settings", JSON.stringify({ language: "en" })));
     const page = await context.newPage();
     page.setDefaultTimeout(15_000);
     const errors: string[] = [];
@@ -1562,7 +1562,7 @@ try {
   /** A page of its own for the review's keys, Settings as given (and the system's colours), its errors collected. */
   const keysPage = async (settings: Record<string, unknown>, colorScheme?: "dark" | "light") => {
     const context = await browser!.newContext({ viewport: { width: 1440, height: 900 }, ...(colorScheme === undefined ? {} : { colorScheme }) });
-    await context.addInitScript((settings) => localStorage.setItem("herdr-web-ui:settings", JSON.stringify(settings)), settings);
+    await context.addInitScript((settings) => localStorage.setItem("ovis:settings", JSON.stringify(settings)), settings);
     const page = await context.newPage();
     page.setDefaultTimeout(15_000);
     const errors: string[] = [];
@@ -1669,7 +1669,7 @@ try {
     // switched off: no review key acts, only the browser's (Escape closes the review, an arrow scrolls); off is kept for
     // the next opening
     assert.equal(await toggleViewOption(page, "Keyboard shortcuts"), false, "keys: Keyboard shortcuts turns off");
-    assert.equal(await page.evaluate(() => localStorage.getItem("herdr-web-ui:review-keys-off")), "1", "keys: off is kept on this device");
+    assert.equal(await page.evaluate(() => localStorage.getItem("ovis:review-keys-off")), "1", "keys: off is kept on this device");
     await focusReview(page);
     for (const key of ["[", "v", "j", "ArrowDown"]) await page.keyboard.press(key);
     await stays("file10.ts", "keys: [ does nothing once switched off");
@@ -1684,7 +1684,7 @@ try {
     await row.click();
     assert.equal(await row.getAttribute("aria-checked"), "true", "keys: Keyboard shortcuts turns on again");
     await closeViewOptions(page);
-    assert.equal(await page.evaluate(() => localStorage.getItem("herdr-web-ui:review-keys-off")), null, "keys: on again forgets the choice");
+    assert.equal(await page.evaluate(() => localStorage.getItem("ovis:review-keys-off")), null, "keys: on again forgets the choice");
     assert.deepEqual(errors, [], "keys: no page errors");
     await context.close();
   }
@@ -1697,7 +1697,7 @@ try {
       await settled(page, what, () => page.evaluate(() => document.querySelector(".review-file-head .review-mode button[aria-pressed='true']")?.textContent ?? null), (shown) => shown === want);
     };
     const choose = async (name: "Preview" | "Source"): Promise<void> => page.locator(".review-file-head .review-mode").getByRole("button", { name, exact: true }).click();
-    const stored = async (): Promise<(string | null)[]> => page.evaluate(() => ["changed", "all"].map((list) => localStorage.getItem(`herdr-web-ui:review-markdown-view:${list}`)));
+    const stored = async (): Promise<(string | null)[]> => page.evaluate(() => ["changed", "all"].map((list) => localStorage.getItem(`ovis:review-markdown-view:${list}`)));
     await openFromTree(page, "docs/a.md");
     await view("Source", "markdown: Changed files opens a Markdown file as its source");
     await page.locator(".review-file[data-mode='diff'] diffs-container").waitFor();

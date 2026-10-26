@@ -1,5 +1,5 @@
 import { afterAll, describe, expect, it } from "bun:test";
-import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createServer } from "./index.ts";
@@ -29,7 +29,7 @@ async function until(check: () => boolean, label: string, timeout = 10_000): Pro
 
 async function pane(): Promise<string> {
   const created = await herdrRpc<{ workspace: { workspace_id: string }; root_pane: { pane_id: string } }>(
-    "workspace.create", { label: "herdr-web-ui-test-output", cwd: root, focus: false },
+    "workspace.create", { label: "ovis-test-output", cwd: root, focus: false },
   );
   workspaces.push(created.workspace.workspace_id);
   return created.root_pane.pane_id;
@@ -39,7 +39,7 @@ async function connect(paneId: string, ack = true, observer = false, port = serv
   const ws = new WebSocket(`ws://127.0.0.1:${port}/ws`);
   sockets.push(ws);
   const state = {
-    bytes: 0, frames: 0, ack, code: 0, exits: 0,
+    bytes: 0, frames: 0, ack, code: 0, exits: 0, ready: 0, notReady: 0,
     latest: undefined as Extract<ServerMessage, { type: "pty-data" }> | undefined,
     errors: [] as string[], tail: "",
     /** the first frame's text (a joiner's replay), and whether `find` has arrived since the attach */
@@ -53,6 +53,7 @@ async function connect(paneId: string, ack = true, observer = false, port = serv
     const frame = JSON.parse(String(event.data)) as ServerMessage;
     if (frame.type === "error") state.errors.push(frame.code);
     if (frame.type === "pty-exit" && frame.pane_id === paneId) state.exits++;
+    if (frame.type === "input-ready" && frame.pane_id === paneId) frame.ready === false ? state.notReady++ : state.ready++;
     if (frame.type !== "pty-data" || frame.pane_id !== paneId) return;
     state.bytes += Buffer.byteLength(frame.data);
     state.frames++;
@@ -73,13 +74,13 @@ async function connect(paneId: string, ack = true, observer = false, port = serv
 /** Bun.spawn throws synchronously for the pty sidecar while `node` is not on PATH (herdr itself stays found). */
 function breakPath(): () => void {
   const previous = process.env["PATH"];
-  const previousHerdr = process.env["HERDR_WEB_HERDR_BIN"];
-  process.env["HERDR_WEB_HERDR_BIN"] = Bun.which(previousHerdr || "herdr", { PATH: previous ?? "" }) ?? previousHerdr ?? "herdr";
+  const previousHerdr = process.env["OVIS_HERDR_BIN"];
+  process.env["OVIS_HERDR_BIN"] = Bun.which(previousHerdr || "herdr", { PATH: previous ?? "" }) ?? previousHerdr ?? "herdr";
   process.env["PATH"] = "/nonexistent";
   return () => {
     process.env["PATH"] = previous;
-    if (previousHerdr === undefined) delete process.env["HERDR_WEB_HERDR_BIN"];
-    else process.env["HERDR_WEB_HERDR_BIN"] = previousHerdr;
+    if (previousHerdr === undefined) delete process.env["OVIS_HERDR_BIN"];
+    else process.env["OVIS_HERDR_BIN"] = previousHerdr;
   };
 }
 
@@ -216,6 +217,131 @@ for i in itertools.count(): sys.stdout.write("".join("\\033[%d;1H%s" % (r, str((
   }, 30_000);
 });
 
+type AttachStep = { kind: "eof" | "read-race" | "real"; gate?: string; exitGate?: string; text?: string };
+
+function scriptedAttachHerdr(steps: AttachStep[]): { path: string; attempts: () => number; release: (gate: string) => void; dir: string } {
+  const real = process.env["OVIS_HERDR_BIN"] || Bun.which("herdr") || "herdr";
+  const dir = mkdtempSync(join(root, "reattach-herdr-"));
+  const path = join(dir, "herdr.mjs");
+  copyFileSync(join(import.meta.dir, "../scripts/fixtures/attach-sequence.mjs"), path);
+  chmodSync(path, 0o700);
+  writeFileSync(join(dir, "plan.json"), JSON.stringify({ herdr: real, steps }));
+  return {
+    path,
+    dir,
+    attempts: () => existsSync(join(dir, "count")) ? Number(readFileSync(join(dir, "count"), "utf8").trim() || 0) : 0,
+    release: (gate) => writeFileSync(join(dir, gate), "go"),
+  };
+}
+
+async function withAttachHerdr<T>(herdr: { path: string; dir: string }, run: () => Promise<T>): Promise<T> {
+  const previous = { binary: process.env["OVIS_HERDR_BIN"], dir: process.env["HERDR_ATTACH_TEST_DIR"] };
+  process.env["OVIS_HERDR_BIN"] = herdr.path;
+  process.env["HERDR_ATTACH_TEST_DIR"] = herdr.dir;
+  try { return await run(); } finally {
+    for (const [key, value] of [["OVIS_HERDR_BIN", previous.binary], ["HERDR_ATTACH_TEST_DIR", previous.dir]]) {
+      if (value === undefined) delete process.env[key!]; else process.env[key!] = value;
+    }
+  }
+}
+
+describe("same-terminal attach recovery", () => {
+  it("reattaches after a transient EOF, becomes ready again and accepts input without ending", async () => {
+    const paneId = await pane();
+    const herdr = scriptedAttachHerdr([
+      { kind: "eof", text: "transient attach EOF\r\n", exitGate: "exit-1" },
+      { kind: "real" },
+    ]);
+    const recovering = createServer({
+      port: 0, hostname: "127.0.0.1", token: "", stateDir: mkdtempSync(join(root, "same-terminal-ready-")),
+      attachRelookupForMs: 500,
+    });
+    try {
+      await withAttachHerdr(herdr, async () => {
+        const client = await connect(paneId, true, false, recovering.port);
+        try {
+          expect(client.state.ready).toBe(1);
+          herdr.release("exit-1");
+          await until(() => client.state.ready >= 2, "the same terminal becomes input-ready again", 5_000);
+          expect(client.state.notReady).toBe(1);
+          expect(client.state.exits).toBe(0);
+          expect(herdr.attempts()).toBe(2);
+          // Past the one recovery window, the stable replacement remains the only attach.
+          await Bun.sleep(650); // fixed wait: proves no third attach appears after the recovery settles
+          expect(herdr.attempts()).toBe(2);
+          expect(client.state.ready).toBe(2);
+          client.send({ type: "input", pane_id: paneId, text: "printf 'same_id_input_%s\\n' 42\r" });
+          await until(() => client.state.tail.includes("same_id_input_42"), "input reaches the recovered attach", 5_000);
+          expect(client.state.errors).toEqual([]);
+          expect(client.state.exits).toBe(0);
+        } finally { client.ws.close(); }
+      });
+    } finally { recovering.stop(); }
+  }, 20_000);
+
+  it("bounds repeated ready-then-EOF replacements under one recovery deadline", async () => {
+    const paneId = await pane();
+    const herdr = scriptedAttachHerdr([{ kind: "eof", text: "flapping attach\r\n", exitGate: "exit-{attempt}" }]);
+    const impatient = createServer({
+      port: 0, hostname: "127.0.0.1", token: "", stateDir: mkdtempSync(join(root, "same-terminal-flap-")),
+      attachHoldMs: 20, attachRelookupForMs: 500,
+    });
+    try {
+      await withAttachHerdr(herdr, async () => {
+        const client = await connect(paneId, true, false, impatient.port);
+        try {
+          let released = 0;
+          const ended = () => client.state.exits === 1;
+          while (!ended() && released < 20) {
+            await until(() => ended() || client.state.ready > released, "the next replacement is ready", 4_000);
+            if (ended()) break;
+            released += 1;
+            herdr.release(`exit-${released}`);
+          }
+          await until(() => client.state.exits === 1, "one bounded terminal exit", 4_000);
+          const attempts = herdr.attempts();
+          expect(attempts).toBeGreaterThan(1);
+          expect(attempts).toBeLessThan(10);
+          await Bun.sleep(700); // fixed wait: proves neither another attach nor another exit appears
+          expect(herdr.attempts()).toBe(attempts);
+          expect(client.state.exits).toBe(1);
+          expect(client.state.notReady).toBeGreaterThan(0);
+        } finally { client.ws.close(); }
+      });
+    } finally { impatient.stop(); }
+  }, 15_000);
+
+  it("bounds read-race retries by the EOF recovery deadline", async () => {
+    const paneId = await pane();
+    const herdr = scriptedAttachHerdr([
+      { kind: "eof", text: "initial attach\r\n", exitGate: "initial-eof" },
+      { kind: "read-race" },
+    ]);
+    const impatient = createServer({
+      port: 0, hostname: "127.0.0.1", token: "", stateDir: mkdtempSync(join(root, "same-terminal-read-race-")),
+      attachHoldMs: 20, attachRetryForMs: 5_000, attachRelookupForMs: 500,
+    });
+    try {
+      await withAttachHerdr(herdr, async () => {
+        const client = await connect(paneId, true, false, impatient.port);
+        try {
+          expect(client.state.ready).toBe(1);
+          herdr.release("initial-eof");
+          await until(() => client.state.exits === 1, "read-race recovery reaches its terminal exit", 4_000);
+          const attempts = herdr.attempts();
+          expect(attempts).toBeGreaterThan(1);
+          expect(attempts).toBeLessThan(10);
+          expect(client.state.ready).toBe(1);
+          expect(client.state.notReady).toBe(1);
+          await Bun.sleep(700); // fixed wait: proves no retry runs after the shared recovery deadline
+          expect(herdr.attempts()).toBe(attempts);
+          expect(client.state.exits).toBe(1);
+        } finally { client.ws.close(); }
+      });
+    } finally { impatient.stop(); }
+  }, 15_000);
+});
+
 describe("a terminal attach that cannot spawn (#154)", () => {
   it("reports the failure and leaves the pane attachable, never a record without a pty", async () => {
     const paneId = await pane();
@@ -261,15 +387,15 @@ describe("a herdr the server cannot start (#925)", () => {
     const logged: string[] = [];
     const log = console.error;
     console.error = (...args: unknown[]) => { logged.push(args.map(String).join(" ")); };
-    const previous = process.env["HERDR_WEB_HERDR_BIN"];
-    process.env["HERDR_WEB_HERDR_BIN"] = missing;
+    const previous = process.env["OVIS_HERDR_BIN"];
+    process.env["OVIS_HERDR_BIN"] = missing;
     try {
       ws.send(JSON.stringify({ type: "attach", pane_id: paneId, cols: 100, rows: 30, flow_control: "ack" } satisfies ClientMessage));
       await until(() => errors.includes("attach_failed"), "the missing herdr is reported", 3_000);
     } finally {
       console.error = log;
-      if (previous === undefined) delete process.env["HERDR_WEB_HERDR_BIN"];
-      else process.env["HERDR_WEB_HERDR_BIN"] = previous;
+      if (previous === undefined) delete process.env["OVIS_HERDR_BIN"];
+      else process.env["OVIS_HERDR_BIN"] = previous;
     }
     expect(errors).toEqual(["attach_failed"]);
     // the panes of a PC share one connection: the failure names its pane, so only that terminal ends
@@ -289,7 +415,7 @@ describe("an attach herdr refuses over a read in progress", () => {
    * pane read of the same terminal, then attaches for real.
    */
   function refusingHerdr(refusals: number): { path: string; attempts: () => number } {
-    const real = process.env["HERDR_WEB_HERDR_BIN"] || Bun.which("herdr") || "herdr";
+    const real = process.env["OVIS_HERDR_BIN"] || Bun.which("herdr") || "herdr";
     const dir = mkdtempSync(join(root, "refusing-herdr-"));
     const count = join(dir, "count");
     const path = join(dir, "herdr");
@@ -306,11 +432,11 @@ describe("an attach herdr refuses over a read in progress", () => {
   }
 
   async function withHerdr<T>(path: string, run: () => Promise<T>): Promise<T> {
-    const previous = process.env["HERDR_WEB_HERDR_BIN"];
-    process.env["HERDR_WEB_HERDR_BIN"] = path;
+    const previous = process.env["OVIS_HERDR_BIN"];
+    process.env["OVIS_HERDR_BIN"] = path;
     try { return await run(); } finally {
-      if (previous === undefined) delete process.env["HERDR_WEB_HERDR_BIN"];
-      else process.env["HERDR_WEB_HERDR_BIN"] = previous;
+      if (previous === undefined) delete process.env["OVIS_HERDR_BIN"];
+      else process.env["OVIS_HERDR_BIN"] = previous;
     }
   }
 
@@ -395,7 +521,7 @@ describe("an attach herdr refuses over a read in progress", () => {
 
 describe("herdr's attach-time terminal queries", () => {
   it("answers them in the bridge and keeps them out of every client's terminal", async () => {
-    const real = process.env["HERDR_WEB_HERDR_BIN"] || Bun.which("herdr") || "herdr";
+    const real = process.env["OVIS_HERDR_BIN"] || Bun.which("herdr") || "herdr";
     const dir = mkdtempSync(join(root, "probing-herdr-"));
     const replies = join(dir, "replies");
     const path = join(dir, "herdr");
@@ -412,8 +538,8 @@ describe("herdr's attach-time terminal queries", () => {
       "",
     ].join("\n"));
     chmodSync(path, 0o755);
-    const previous = process.env["HERDR_WEB_HERDR_BIN"];
-    process.env["HERDR_WEB_HERDR_BIN"] = path;
+    const previous = process.env["OVIS_HERDR_BIN"];
+    process.env["OVIS_HERDR_BIN"] = path;
     try {
       const paneId = await pane();
       const first = await connect(paneId);
@@ -432,8 +558,8 @@ describe("herdr's attach-time terminal queries", () => {
         } finally { second.ws.close(); }
       } finally { first.ws.close(); }
     } finally {
-      if (previous === undefined) delete process.env["HERDR_WEB_HERDR_BIN"];
-      else process.env["HERDR_WEB_HERDR_BIN"] = previous;
+      if (previous === undefined) delete process.env["OVIS_HERDR_BIN"];
+      else process.env["OVIS_HERDR_BIN"] = previous;
     }
   }, 30_000);
 });

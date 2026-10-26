@@ -199,9 +199,9 @@ describe("clearing every comment", () => {
   it("removes every comments key and nothing else", () => {
     const { store, data } = fixture();
     store.save("o", at([0], "first"), "one");
-    data.set("herdr-web-ui:settings", "{}");
+    data.set("ovis:settings", "{}");
     store.clearAll();
-    expect([...data.keys()]).toEqual(["herdr-web-ui:settings"]);
+    expect([...data.keys()]).toEqual(["ovis:settings"]);
   });
   it("empties the cache and tells subscribers", () => {
     const { store } = fixture();

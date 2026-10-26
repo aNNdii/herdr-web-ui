@@ -10,7 +10,7 @@ import { RepoChanges } from "./RepoChanges.tsx";
 const FILE: RepoDiffFile = { path: "src/money.ts", old_path: null, status: "modified", additions: 3, deletions: 2, binary: false };
 const listing = (scope: RepoDiffScope): RepoDiffFileList => ({
   repository: { root: "/repo", branch: "main", head: "a".repeat(40), detached: false, unborn: false },
-  scope, base: null, head: null, files: [FILE], total: 1, truncated: false, limits: { max_files: 2000, max_list_bytes: 1 << 20 },
+  scope, base: null, head: null, comparison: null, files: [FILE], total: 1, truncated: false, limits: { max_files: 2000, max_list_bytes: 1 << 20 },
 });
 
 // React, the settings, the component and its API functions stay real; only the network and the DOM globals are stand-ins
@@ -27,10 +27,12 @@ describe("RepoChanges against a bridge", () => {
   let frames: Map<number, ReturnType<typeof setTimeout>>;
 
   beforeEach(() => {
-    for (const key of ["window", "document", "navigator", "IS_REACT_ACT_ENVIRONMENT"]) descriptors.set(key, Object.getOwnPropertyDescriptor(globalThis, key));
+    for (const key of ["window", "document", "navigator", "getComputedStyle", "IS_REACT_ACT_ENVIRONMENT"]) descriptors.set(key, Object.getOwnPropertyDescriptor(globalThis, key));
     renderers = []; asked = []; older = false; refusal = null; frames = new Map();
     let frameId = 0;
     Object.defineProperty(globalThis, "IS_REACT_ACT_ENVIRONMENT", { configurable: true, value: true });
+    // src/lib/settings.ts reads the stylesheet's --bg when it applies the settings
+    Object.defineProperty(globalThis, "getComputedStyle", { configurable: true, value: () => ({ getPropertyValue: () => "#12100e" }) });
     Object.defineProperty(globalThis, "navigator", { configurable: true, value: { languages: ["en-US"] } });
     Object.defineProperty(globalThis, "window", { configurable: true, value: {
       localStorage: { getItem: () => null, setItem() {} },
@@ -103,14 +105,14 @@ describe("RepoChanges against a bridge", () => {
     };
   }
 
-  it("offers Uncommitted, Staged and Commits, reads Uncommitted first, and says nothing about a current bridge", async () => {
+  it("offers Uncommitted, Staged, Commits and Branch, reads Uncommitted first, and says nothing about a current bridge", async () => {
     const view = await open();
-    expect(view.segments()).toEqual([{ name: "Uncommitted", pressed: true }, { name: "Staged", pressed: false }, { name: "Commits", pressed: false }]);
+    expect(view.segments()).toEqual([{ name: "Uncommitted", pressed: true }, { name: "Staged", pressed: false }, { name: "Commits", pressed: false }, { name: "Branch", pressed: false }]);
     expect(asked).toEqual(["uncommitted"]);
     expect(view.listScope()).toBe("uncommitted");
     expect(view.note()).toBeNull();
     await view.openRow();
-    expect(view.opened).toEqual([{ scope: "uncommitted", base: null, head: null }]);
+    expect(view.opened).toEqual([{ scope: "uncommitted", base: null, head: null, comparison: null }]);
   });
 
   it("an older bridge's refusal of uncommitted asks the unstaged list instead, says so, and asks it directly from then on", async () => {
@@ -122,7 +124,7 @@ describe("RepoChanges against a bridge", () => {
     expect(view.note()).toBe("This PC's bridge leaves out staged changes.");
     // the diff opened from it gets the answered stand-in, with no fallback of its own
     await view.openRow();
-    expect(view.opened).toEqual([{ scope: "workspace", base: null, head: null }]);
+    expect(view.opened).toEqual([{ scope: "workspace", base: null, head: null, comparison: null }]);
 
     await view.choose("Staged");
     expect(asked.at(-1)).toBe("staged");

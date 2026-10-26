@@ -12,7 +12,7 @@ import {
   storeReviewTreeWidth,
 } from "./reviewTreeWidth.ts";
 
-const KEY = "herdr-web-ui:review-tree-width";
+const KEY = "ovis:review-tree-width";
 const original = Object.getOwnPropertyDescriptor(globalThis, "window");
 
 function withStorage(storage: Pick<Storage, "getItem" | "setItem" | "removeItem">): void {

@@ -86,7 +86,7 @@ function storeFlag(key: string, on: boolean): void {
 }
 
 /** Whether the review's tree shows the files git ignores (in All files). */
-const SHOW_IGNORED_KEY = "herdr-web-ui:review-show-ignored";
+const SHOW_IGNORED_KEY = "ovis:review-show-ignored";
 
 export function storedShowIgnored(): boolean {
   return storedFlag(SHOW_IGNORED_KEY);
@@ -97,7 +97,7 @@ export function storeShowIgnored(shown: boolean): void {
 }
 
 /** Whether the review's tree leaves out the viewed files (in Changed files). */
-const HIDE_VIEWED_KEY = "herdr-web-ui:review-hide-viewed";
+const HIDE_VIEWED_KEY = "ovis:review-hide-viewed";
 
 export function storedHideViewed(): boolean {
   return storedFlag(HIDE_VIEWED_KEY);
@@ -108,7 +108,7 @@ export function storeHideViewed(hidden: boolean): void {
 }
 
 /** Whether the review's tree lists the new (untracked) files apart, under their own heading (in Changed files). */
-const NEW_FILES_APART_KEY = "herdr-web-ui:review-new-files-apart";
+const NEW_FILES_APART_KEY = "ovis:review-new-files-apart";
 
 export function storedNewFilesApart(): boolean {
   return storedFlag(NEW_FILES_APART_KEY);
@@ -122,7 +122,7 @@ export function storeNewFilesApart(apart: boolean): void {
  * Whether the review's own keys (`[` `]` `v` and the line cursor) are turned off on this device; on by default, off for
  * speech input or a habit they get in the way of (WCAG 2.1.4). Escape works either way.
  */
-const REVIEW_KEYS_OFF_KEY = "herdr-web-ui:review-keys-off";
+const REVIEW_KEYS_OFF_KEY = "ovis:review-keys-off";
 
 export function storedReviewKeysOff(): boolean {
   return storedFlag(REVIEW_KEYS_OFF_KEY);
@@ -138,7 +138,7 @@ export type MarkdownView = "preview" | "source";
 /** The Markdown view of each list, chosen apart: Changed files is read for its changes, All files for the text. */
 export type MarkdownViews = Readonly<Record<"changed" | "all", MarkdownView>>;
 
-const MARKDOWN_VIEW_PREFIX = "herdr-web-ui:review-markdown-view:";
+const MARKDOWN_VIEW_PREFIX = "ovis:review-markdown-view:";
 const MARKDOWN_VIEW_DEFAULTS: MarkdownViews = { changed: "source", all: "preview" };
 
 function storedMarkdownView(scope: keyof MarkdownViews): MarkdownView {
@@ -173,7 +173,7 @@ export function storeMarkdownView(views: MarkdownViews, scope: keyof MarkdownVie
  * with the stamp it had when it was marked (`RepoDiffFile.stamp`). A file whose stamp is another now has changed since,
  * and is not viewed any more.
  */
-const VIEWED_PREFIX = "herdr-web-ui:review-viewed:";
+const VIEWED_PREFIX = "ovis:review-viewed:";
 
 export type ViewedFiles = Readonly<Record<string, string>>;
 

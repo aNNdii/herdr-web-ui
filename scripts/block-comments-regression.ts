@@ -187,7 +187,7 @@ interface StoredComment { id: string; anchor: string; comment: string; quote?: s
 const storedOf = (page: Page): Promise<StoredComment[]> => page.evaluate(() => {
   const found: unknown[] = [];
   for (const key of Object.keys(localStorage)) {
-    if (key.startsWith("herdr-web-ui:block-comments:")) found.push(...(JSON.parse(localStorage.getItem(key)!) as { comments: unknown[] }).comments);
+    if (key.startsWith("ovis:block-comments:")) found.push(...(JSON.parse(localStorage.getItem(key)!) as { comments: unknown[] }).comments);
   }
   return found as StoredComment[];
 });
@@ -963,7 +963,7 @@ const cases: Record<string, Case> = {
     const other = await context.newPage();
     await other.goto(url);
     await other.evaluate(() => {
-      const key = Object.keys(localStorage).find((name) => name.startsWith("herdr-web-ui:block-comments:"))!;
+      const key = Object.keys(localStorage).find((name) => name.startsWith("ovis:block-comments:"))!;
       const data = JSON.parse(localStorage.getItem(key)!) as { comments: { comment: string }[] };
       localStorage.setItem(key, JSON.stringify({ ...data, comments: data.comments.filter((comment) => !comment.comment.startsWith("Is this still true?")) }));
     });
@@ -1136,7 +1136,7 @@ const cases: Record<string, Case> = {
     await page.keyboard.type("Saved by the press");
     await page.evaluate(() => {
       document.addEventListener("click", () => {
-        (window as unknown as { storedAtClick: string[] }).storedAtClick = Object.keys(localStorage).filter((key) => key.startsWith("herdr-web-ui:block-comments:"))
+        (window as unknown as { storedAtClick: string[] }).storedAtClick = Object.keys(localStorage).filter((key) => key.startsWith("ovis:block-comments:"))
           .flatMap((key) => (JSON.parse(localStorage.getItem(key)!) as { comments: { comment: string }[] }).comments.map((entry) => entry.comment));
       }, { capture: true, once: true });
     });
@@ -1277,7 +1277,7 @@ const cases: Record<string, Case> = {
     await commentOn(page, partOf(page, INTRO), "Intro", "Intro", "Setting one.");
     // the store as it holds the intro's comment alone: what another tab writes back below
     const written = await page.evaluate(() => {
-      const key = Object.keys(localStorage).find((name) => name.startsWith("herdr-web-ui:block-comments:"))!;
+      const key = Object.keys(localStorage).find((name) => name.startsWith("ovis:block-comments:"))!;
       return { key, value: localStorage.getItem(key)! };
     });
     await commentOn(page, partOf(page, LONG_PARAGRAPH), "several", "several", "Setting two.");
@@ -1454,9 +1454,9 @@ try {
     await page.addInitScript(({ id, comments, settings }) => {
       // seeded once: a reload keeps what the page has done since. A selection opens the field at once (`commentOnSelect`
       // "field"), the variant the cases test; `chat-button` seeds the default, the Comment button
-      if (localStorage.getItem("herdr-web-ui:settings") === null) localStorage.setItem("herdr-web-ui:settings", JSON.stringify({ language: "en", commentOnSelect: "field", ...settings }));
-      localStorage.setItem(`herdr-web-ui:view:${id}`, "chat");
-      const key = `herdr-web-ui:block-comments:${id}`;
+      if (localStorage.getItem("ovis:settings") === null) localStorage.setItem("ovis:settings", JSON.stringify({ language: "en", commentOnSelect: "field", ...settings }));
+      localStorage.setItem(`ovis:view:${id}`, "chat");
+      const key = `ovis:block-comments:${id}`;
       if (comments.length > 0 && localStorage.getItem(key) === null) localStorage.setItem(key, JSON.stringify({ version: 1, comments }));
     }, { id: pane, comments: seed.comments ?? [], settings: seed.settings ?? {} });
     page.setDefaultTimeout(10_000);

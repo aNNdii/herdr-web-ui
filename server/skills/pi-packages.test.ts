@@ -74,8 +74,8 @@ describe("pi's package sources", () => {
     skill(join(root, "skills"), "lint");
     prompt(join(root, "prompts"), "review");
     const rows = extra(home);
-    expect(rows).toContainEqual({ name: "skill:lint", description: "lint skill", source: "skill", origin: "plugin" });
-    expect(rows).toContainEqual({ name: "review", description: "review prompt", source: "plugin" });
+    expect(rows).toContainEqual(expect.objectContaining({ name: "skill:lint", description: "lint skill", source: "skill", origin: "plugin" }));
+    expect(rows).toContainEqual(expect.objectContaining({ name: "review", description: "review prompt", source: "plugin" }));
   });
 
   it("loads git packages from <agentDir>/git/<host>/<path>, in scp and https form", () => {
@@ -168,9 +168,9 @@ describe("pi's package resources", () => {
       npmPackage(root);
       skill(join(root, "skills"), "same", `from ${name}`);
     }
-    expect(extra(home, cwd)).toEqual([{ name: "skill:same", description: "from first", source: "skill", origin: "plugin" }]);
+    expect(extra(home, cwd)).toMatchObject([{ name: "skill:same", description: "from first", source: "skill", origin: "plugin" }]);
     trust();
-    expect(extra(home, cwd)).toEqual([{ name: "skill:same", description: "from third", source: "skill", origin: "plugin" }]);
+    expect(extra(home, cwd)).toMatchObject([{ name: "skill:same", description: "from third", source: "skill", origin: "plugin" }]);
   });
 
   it("lets a user folder skill win over a package skill of the same name", () => {
@@ -179,7 +179,7 @@ describe("pi's package resources", () => {
     npmPackage(join(agentDir, "npm", "node_modules", "dup"));
     skill(join(agentDir, "npm", "node_modules", "dup", "skills"), "same", "from the package");
     skill(join(agentDir, "skills"), "same", "from the user");
-    expect(extra(home)).toEqual([{ name: "skill:same", description: "from the user", source: "skill", origin: "user" }]);
+    expect(extra(home)).toMatchObject([{ name: "skill:same", description: "from the user", source: "skill", origin: "user" }]);
   });
 });
 

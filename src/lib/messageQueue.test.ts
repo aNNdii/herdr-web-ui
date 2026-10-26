@@ -21,7 +21,7 @@ it("persists multiple independent items, including identical text, and individua
   queue.remove("local:a", first!.id);
   expect(queue.read("local:a").map(m => m.text)).toEqual(["edited"]);
   queue.remove("local:a", second!.id);
-  expect(data.has("herdr-web-ui:queue:local:a")).toBe(false);
+  expect(data.has("ovis:queue:local:a")).toBe(false);
 });
 
 it("an old acknowledgement removes only its captured item and owner", () => {
@@ -38,7 +38,7 @@ it("an old acknowledgement removes only its captured item and owner", () => {
 it("migrates the previous plain-text queue without losing JSON-like messages", () => {
   for (const text of ["legacy", '{"message":"legacy"}']) {
     const { queue, data, storage } = fixture();
-    data.set("herdr-web-ui:queue:a", text);
+    data.set("ovis:queue:a", text);
     expect(queue.read("a")[0]!.text).toBe(text);
     queue.add("a", "next");
     expect(new MessageQueueStore(() => storage).read("a").map(m => m.text)).toEqual([text, "next"]);
@@ -92,12 +92,12 @@ it("reports failed persistence without throwing away the in-memory queue", () =>
 
 it("keeps a stored agent-only flag through edits and a reload, and reads nothing else as one", () => {
   const { queue, data, storage } = fixture();
-  data.set("herdr-web-ui:queue:a", JSON.stringify({ version: 1, messages: [{ id: "l", text: "> quoted\ncomment", agentOnly: true }] }));
+  data.set("ovis:queue:a", JSON.stringify({ version: 1, messages: [{ id: "l", text: "> quoted\ncomment", agentOnly: true }] }));
   queue.add("a", "plain");
   queue.edit("a", "l", "> quoted\nedited");
   expect(new MessageQueueStore(() => storage).read("a").map((m) => [m.text, m.agentOnly === true])).toEqual([["> quoted\nedited", true], ["plain", false]]);
   // a hand-edited flag that is not exactly true reads as a plain message
-  data.set("herdr-web-ui:queue:b", JSON.stringify({ version: 1, messages: [{ id: "x", text: "t", agentOnly: "yes" }] }));
+  data.set("ovis:queue:b", JSON.stringify({ version: 1, messages: [{ id: "x", text: "t", agentOnly: "yes" }] }));
   expect(new MessageQueueStore(() => storage).read("b")).toEqual([{ id: "x", text: "t" }]);
 });
 
@@ -129,13 +129,13 @@ it("stores blank text as empty only when comments go with it", () => {
 
 it("drops stored comments that do not read, and a comments value that is no list", () => {
   const { data, storage } = fixture();
-  data.set("herdr-web-ui:queue:a", JSON.stringify({ version: 1, messages: [{ id: "x", text: "t", comments: [c1, { id: 1 }] }, { id: "y", text: "u", comments: "x" }] }));
+  data.set("ovis:queue:a", JSON.stringify({ version: 1, messages: [{ id: "x", text: "t", comments: [c1, { id: 1 }] }, { id: "y", text: "u", comments: "x" }] }));
   expect(new MessageQueueStore(() => storage).read("a")).toEqual([{ id: "x", text: "t", comments: [c1] }, { id: "y", text: "u" }]);
 });
 
 it("loads a legacy composed message unchanged and still treats it as agent-only", () => {
   const { data, storage } = fixture();
-  data.set("herdr-web-ui:queue:a", JSON.stringify({ version: 1, messages: [{ id: "a", text: "> q\nc\n\nhi", agentOnly: true }] }));
+  data.set("ovis:queue:a", JSON.stringify({ version: 1, messages: [{ id: "a", text: "> q\nc\n\nhi", agentOnly: true }] }));
   const [held] = new MessageQueueStore(() => storage).read("a");
   expect(held).toEqual({ id: "a", text: "> q\nc\n\nhi", agentOnly: true });
   expect(heldAgentOnly(held!)).toBe(true);
@@ -179,7 +179,7 @@ it("keeps a selection comment through a held snapshot round trip and composes it
 it("drops a held comment whose quote or range is malformed and keeps the rest", () => {
   const { data, storage } = fixture();
   const bad = [{ ...c1, id: "b1", quote: "" }, { ...c1, id: "b2", quote: "q", range: [3, 1] }];
-  data.set("herdr-web-ui:queue:a", JSON.stringify({ version: 1, messages: [{ id: "x", text: "t", comments: [...bad, { ...c1, id: "g", quote: "q", range: [0, 1] }] }] }));
+  data.set("ovis:queue:a", JSON.stringify({ version: 1, messages: [{ id: "x", text: "t", comments: [...bad, { ...c1, id: "g", quote: "q", range: [0, 1] }] }] }));
   expect(new MessageQueueStore(() => storage).read("a")[0]!.comments!.map((c) => c.id)).toEqual(["g"]);
 });
 

@@ -33,8 +33,8 @@ describe("saved theme migration", () => {
     if (originalDocument) Object.defineProperty(globalThis, "document", originalDocument);
     else Reflect.deleteProperty(globalThis, "document");
   });
-  const main = "herdr-web-ui:settings";
-  const protectedThemes = "herdr-web-ui:themes";
+  const main = "ovis:settings";
+  const protectedThemes = "ovis:themes";
   const putOld = (record: object) => records.set(main, JSON.stringify(record));
   const readOld = () => oldSanitizeSettings(JSON.parse(records.get(main) ?? "{}"));
 
@@ -72,6 +72,29 @@ describe("saved theme migration", () => {
     oldSaveSettings({ ...old, terminalFontSize: 18 });
     expect(loadSettings().darkTheme).toBe("tokyo-night");
     expect(loadSettings().terminalFontSize).toBe(18);
+  });
+
+  it("keeps the interface font in its own key, out of an old tab's whole-record save", () => {
+    saveSettings(sanitizeSettings({ uiFontFamily: "system-ui" }));
+    expect(JSON.parse(records.get(main) ?? "{}")).not.toHaveProperty("uiFontFamily");
+    oldSaveSettings({ ...readOld(), terminalFontSize: 18 });
+    expect(loadSettings().uiFontFamily).toBe("system-ui");
+    expect(loadSettings().terminalFontSize).toBe(18);
+    saveSettings(sanitizeSettings({ uiFontFamily: "" }));
+    expect(loadSettings().uiFontFamily).toBe("");
+  });
+
+  it("keeps Wrap to screen / Original width in its own key, out of an old tab's whole-record save", () => {
+    saveSettings(sanitizeSettings({ terminalMirrorWrap: false }));
+    expect(JSON.parse(records.get(main) ?? "{}")).not.toHaveProperty("terminalMirrorWrap");
+    oldSaveSettings({ ...readOld(), terminalFontSize: 18 });
+    expect(loadSettings().terminalMirrorWrap).toBe(false);
+    expect(loadSettings().terminalFontSize).toBe(18);
+    saveSettings({ ...loadSettings(), terminalMirrorWrap: true });
+    expect(loadSettings().terminalMirrorWrap).toBe(true);
+    saveSettings({ ...loadSettings(), terminalMirrorWrap: null });
+    expect(loadSettings().terminalMirrorWrap).toBeNull();
+    expect(sanitizeSettings({ terminalMirrorWrap: "yes" }).terminalMirrorWrap).toBeNull();
   });
 
   it("survives repeated stale saves from an already-open old tab (f1)", () => {
@@ -112,12 +135,41 @@ describe("saved theme migration", () => {
     } });
     const settings = sanitizeSettings({ theme: "light", lightTheme: "dracula" });
     const entry = themeFor(settings, "light");
-    applyToDocument(settings, entry, "en");
+    withComputedBg("#282a36", () => applyToDocument(settings, entry, "en"));
     expect(root.dataset).toMatchObject({ theme: "dark", palette: "dracula" });
     expect(root.style.colorScheme).toBe("dark");
     expect(meta).toBe(entry.bgPanel);
     expect(terminalTheme(entry.mode, entry.id)).toEqual(entry.terminal);
   });
+
+  it("keeps the row's surface on the root until a stylesheet owns it, following later themes", () => {
+    const style = {
+      colorScheme: "", backgroundColor: "#fffaf3", setProperty() {}, removeProperty(name: string) { if (name === "background-color") style.backgroundColor = ""; },
+    };
+    const root = { lang: "", dataset: {}, style };
+    Object.defineProperty(globalThis, "document", { configurable: true, value: { documentElement: root, querySelector: () => null } });
+    const light = sanitizeSettings({ theme: "light", lightTheme: "rose-pine-dawn", darkTheme: "kanagawa" });
+    // the stylesheet failed: nothing defines --bg, so the boot surface stays, on whichever row is drawn
+    withComputedBg("", () => applyToDocument(light, themeFor(light, "light"), "en"));
+    expect(style.backgroundColor).toBe(themeFor(light, "light").bg);
+    const dark = { ...light, theme: "dark" as const };
+    withComputedBg("", () => applyToDocument(dark, themeFor(dark, "dark"), "en"));
+    expect(style.backgroundColor).toBe(themeFor(dark, "dark").bg);
+    // a stylesheet that owns the surface takes it back
+    withComputedBg(" #1f1f28", () => applyToDocument(dark, themeFor(dark, "dark"), "en"));
+    expect(style.backgroundColor).toBe("");
+  });
+
+  function withComputedBg(value: string, run: () => void): void {
+    const saved = Object.getOwnPropertyDescriptor(globalThis, "getComputedStyle");
+    Object.defineProperty(globalThis, "getComputedStyle", { configurable: true, value: () => ({ getPropertyValue: (name: string) => (name === "--bg" ? value : "") }) });
+    try {
+      run();
+    } finally {
+      if (saved) Object.defineProperty(globalThis, "getComputedStyle", saved);
+      else Reflect.deleteProperty(globalThis, "getComputedStyle");
+    }
+  }
 });
 
 it("keeps a tab's pane while out of use until this device turns the pause on", () => {
@@ -133,6 +185,22 @@ it("offers Install app in the sidebar until this device hides it", () => {
   expect(sanitizeSettings({}).showInstallApp).toBe(true);
   expect(sanitizeSettings({ showInstallApp: false }).showInstallApp).toBe(false);
   expect(sanitizeSettings({ showInstallApp: "false" }).showInstallApp).toBe(true);
+});
+
+it("leaves herdr's focus alone until this device asks to follow it, and keeps that choice its own", () => {
+  expect(DEFAULT_SETTINGS.followHerdrFocus).toBe(false);
+  expect(sanitizeSettings({}).followHerdrFocus).toBe(false);
+  expect(sanitizeSettings({ followHerdrFocus: true }).followHerdrFocus).toBe(true);
+  expect(sanitizeSettings({ followHerdrFocus: "true" }).followHerdrFocus).toBe(false);
+  expect(SETTING_SCOPE.followHerdrFocus).toBe("device");
+  expect(SHARED_SETTING_KEYS as readonly string[]).not.toContain("followHerdrFocus");
+});
+
+it("keeps the composer's New tab button off until this device turns it on, and keeps that choice its own", () => {
+  expect(sanitizeSettings({}).composerNewTabButton).toBe(false);
+  expect(sanitizeSettings({ composerNewTabButton: true }).composerNewTabButton).toBe(true);
+  expect(sanitizeSettings({ composerNewTabButton: "true" }).composerNewTabButton).toBe(false);
+  expect(SHARED_SETTING_KEYS as readonly string[]).not.toContain("composerNewTabButton");
 });
 
 it("keeps the screen wake lock off until this device explicitly enables it", () => {
@@ -270,6 +338,7 @@ describe("telemetry settings snapshot", () => {
     const settings = sanitizeSettings({
       terminalFontFamily: "private-terminal-font",
       chatFontFamily: "private-chat-font",
+      uiFontFamily: "private-ui-font",
       shortcutOverrides: { palette: "x" },
       keyBarItems: [{ type: "key", key: "x" }],
       keyBarExtras: ["alt", "shift-tab"],
@@ -290,10 +359,10 @@ describe("telemetry settings snapshot", () => {
       usageHiddenCount: 1,
       usageOrderCustom: true,
     });
-    for (const key of ["keyBarExtras", "keyBarItems", "shortcutOverrides", "terminalFontFamily", "chatFontFamily", "quickReplies", "usageOrder", "usageHidden"]) {
+    for (const key of ["keyBarExtras", "keyBarItems", "shortcutOverrides", "terminalFontFamily", "chatFontFamily", "uiFontFamily", "quickReplies", "usageOrder", "usageHidden"]) {
       expect(snapshot).not.toHaveProperty(key);
     }
-    for (const raw of ["private-terminal-font", "private-chat-font", "private quick reply", "private-order-account-id", "private-hidden-account-id"]) {
+    for (const raw of ["private-terminal-font", "private-chat-font", "private-ui-font", "private quick reply", "private-order-account-id", "private-hidden-account-id"]) {
       expect(serialized).not.toContain(raw);
     }
   });
@@ -959,10 +1028,10 @@ describe("default lens", () => {
     expect(sanitizeSettings({ defaultView: "split" }).defaultView).toBe("auto");
   });
   it("forgets every pane's own lens and nothing else", () => {
-    const data = new Map<string, string>([["herdr-web-ui:view:local:w1:p1", "terminal"], ["herdr-web-ui:view:remote:pc:w2:p1", "chat"], ["herdr-web-ui:settings", "{}"]]);
+    const data = new Map<string, string>([["ovis:view:local:w1:p1", "terminal"], ["ovis:view:remote:pc:w2:p1", "chat"], ["ovis:settings", "{}"]]);
     const storage = { get length() { return data.size; }, key: (i: number) => [...data.keys()][i] ?? null, removeItem: (k: string) => { data.delete(k); } };
     expect(forgetPaneViews(storage)).toBe(2);
-    expect([...data.keys()]).toEqual(["herdr-web-ui:settings"]);
+    expect([...data.keys()]).toEqual(["ovis:settings"]);
   });
 });
 

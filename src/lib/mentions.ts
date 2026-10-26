@@ -27,8 +27,10 @@ const SKILL_CHAR = /[\p{L}\p{N}_-]/u;
 /**
  * Finds the completion token at the caret. `/` begins a word; the caller limits later tokens
  * to skills its agent honours there. With `skills`, `$skill` also completes (Codex's syntax).
+ * With `atSkills` the pane's `@` skills (OpenCode v2) are listed with the files, so a bare `@`
+ * opens the menu too; otherwise a file needs at least one query character.
  */
-export function activeTrigger(text: string, caret: number, options: { skills?: boolean; namespaced?: boolean } = {}): ActiveTrigger | null {
+export function activeTrigger(text: string, caret: number, options: { skills?: boolean; namespaced?: boolean; atSkills?: boolean } = {}): ActiveTrigger | null {
   if (!Number.isInteger(caret) || caret < 0 || caret > text.length) return null;
 
   const queryPattern = options.namespaced ? /^[\p{L}\p{N}_:-]*$/u : SLASH_QUERY;
@@ -53,7 +55,10 @@ export function activeTrigger(text: string, caret: number, options: { skills?: b
   if (at < lineStart) return null;
   const query = text.slice(at + 1, caret);
   if (at === 0 && HANDLE_QUERY.test(query)) return { kind: "file", query, leading: true, start: 0, end: tokenEnd(text, caret) };
-  if (query.length === 0 || !FILE_QUERY.test(query)) return null;
+  if (query.length === 0) {
+    // a mention starts a word: an address keeps its @
+    if (!options.atSkills || !(at === 0 || /\s/u.test(text[at - 1] ?? ""))) return null;
+  } else if (!FILE_QUERY.test(query)) return null;
   return { kind: "file", query, start: at, end: tokenEnd(text, caret) };
 }
 

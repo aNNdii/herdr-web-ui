@@ -4,14 +4,15 @@
  * Upstream raises REMOTE_BUNDLE_VERSION (shared/machines.ts) by hand whenever the bundle's inputs
  * change; the fork changes server/ and shared/ without touching it, so a PC would keep a bridge of
  * the same number but older code. The fork's version is upstream's number and a fingerprint of what
- * the bundle runs: every file of server/ and shared/ that scripts/build-remote-bundle.ts copies
- * (all but `*.test.ts`), path and bytes. The connection server reads them from its checkout, a bridge
+ * the bundle runs: every file of server/, shared/ and integrations/ that
+ * scripts/build-remote-bundle.ts copies (all but `*.test.ts`), and scripts/install-gjc-integration.ts,
+ * path and bytes. The connection server reads them from its checkout, a bridge
  * from its bundle, so both name the same version exactly when they run the same code, and a fork
  * release with other server code installs its own bridge on every PC (`.github/workflows/
  * fork-bridge-bundles.yml` publishes it as `remote-v<version>` in this fork).
  */
 import { createHash } from "node:crypto";
-import { readdirSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { REMOTE_BUNDLE_VERSION as UPSTREAM_BUNDLE_VERSION } from "../shared/machines.ts";
 
@@ -26,10 +27,14 @@ function bundled(root: string, directory: string): string[] {
   return found;
 }
 
-/** 12 hex digits of the sha256 over the bundled server/ and shared/ files under `root`. */
+/** The code files the bundle carries besides its directories. */
+const BUNDLED_FILES = ["scripts/install-gjc-integration.ts"];
+
+/** 12 hex digits of the sha256 over the bundled server/, shared/ and integrations/ files under `root`. */
 export function bridgeFingerprint(root: string): string {
   const hash = createHash("sha256");
-  for (const path of [...bundled(root, "server"), ...bundled(root, "shared")].sort()) {
+  const files = BUNDLED_FILES.filter((path) => existsSync(join(root, path)));
+  for (const path of [...bundled(root, "server"), ...bundled(root, "shared"), ...bundled(root, "integrations"), ...files].sort()) {
     hash.update(path).update("\0").update(readFileSync(join(root, path))).update("\0");
   }
   return hash.digest("hex").slice(0, 12);

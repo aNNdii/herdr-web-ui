@@ -15,7 +15,7 @@ const JSON_ROUTES = [
   "/api/workspace/directories", "/api/workspace/create", "/api/tab/create",
   "/api/worktree/remove", "/api/worktree/create", "/api/worktree/open",
   "/api/workspace/rename", "/api/workspace/move", "/api/workspace/close",
-  "/api/tab/rename", "/api/tab/close", "/api/tab/move", "/api/plugin/action",
+  "/api/tab/rename", "/api/tab/close", "/api/tab/move", "/api/tab/move-to-workspace", "/api/plugin/action",
   "/api/pane/rename", "/api/agent/rename", "/api/pane/find", "/api/pane/scroll",
   "/api/pane/input", "/api/pane/keys", "/api/pane/close", "/api/layout/ratio",
   "/api/pane/split", "/api/pane/zoom", "/api/pane/swap", "/api/pane/resize",
@@ -29,7 +29,7 @@ const OWN_GET: Partial<Record<(typeof JSON_ROUTES)[number], [number, string | nu
   "/api/pane/scroll": [400, "missing_pane_id"],
 };
 
-const root = mkdtempSync(join(tmpdir(), "herdr-web-ui-route-envelope-"));
+const root = mkdtempSync(join(tmpdir(), "ovis-route-envelope-"));
 let owner: ReturnType<typeof createServer>;
 let watched: ReturnType<typeof createServer>;
 let ownBase = "";
@@ -44,7 +44,7 @@ beforeAll(() => {
   const paired = devices.pair(devices.startPairing().code, "Watch", "watch")!;
   // a first pairing is dropped unless the device is seen once
   expect(devices.match(paired.token)).not.toBeNull();
-  watchCookie = `herdr_web_device=${encodeURIComponent(paired.token)}`;
+  watchCookie = `ovis_device=${encodeURIComponent(paired.token)}`;
   watched = createServer({ port: 0, stateDir: watchState });
   watchBase = `http://127.0.0.1:${watched.port}`;
 });

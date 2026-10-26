@@ -1,9 +1,10 @@
-import { useEffect, useId, useLayoutEffect, useRef, useState, type ComponentType, type RefObject } from "react";
+import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type ComponentType, type RefObject } from "react";
 import { ChevronDown, ChevronRight, Circle, CircleAlert, CircleCheck, CircleDot, CircleSlash, CircleX, Layers, ListChecks, Workflow, type LucideProps } from "lucide-react";
 
 import "./BackgroundTasks.css";
 
-import { useMachineApi } from "../lib/machineContext.tsx";
+import { BackgroundAgentDetail } from "./BackgroundAgentDetail.tsx";
+import { useMachineApi, useMachineId } from "../lib/machineContext.tsx";
 import { clockOffsetMs, endedSummary, formatElapsed, runGoing, runProgress, spanMs, taskElapsedMs } from "../lib/omoTasks.ts";
 import { formatTokens } from "../lib/compose.ts";
 import { planWaves } from "../lib/plan.ts";
@@ -45,9 +46,19 @@ export function BackgroundTasks({ paneId, count, agent, plan = null, placement =
   const omo = agent === "omo";
   const subagents = agent === "claude" || agent === "pi";
   const { fetchPaneOmoActivity, fetchPanePlan } = useMachineApi();
+  const machineId = useMachineId();
   const [open, setOpen] = useState(false);
+  // the running task whose detail is open over the list (BackgroundAgentDetail): its sheet takes
+  // the list's Back, Escape and outside-press while it is up, and the list stays under it
+  const [detail, setDetail] = useState<OmoTask | null>(null);
+  const detailUp = useRef(false);
+  detailUp.current = detail !== null;
+  const closeDetail = useCallback(() => setDetail(null), []);
   // a phone's Back closes the list, as it closes the other dialogs there (the plan used to be a sheet)
-  usePhoneSheetBack(() => setOpen(false), open);
+  usePhoneSheetBack(() => setOpen(false), open && detail === null);
+  // the list closed, or the pane or PC changed under it: a detail left open would be another task's
+  useEffect(() => { if (!open) setDetail(null); }, [open]);
+  useEffect(() => { setDetail(null); }, [paneId, machineId]);
   const [seen, setSeen] = useState(count > 0);
   useEffect(() => { if (count > 0) setSeen(true); }, [count]);
   useEffect(() => {
@@ -129,9 +140,10 @@ export function BackgroundTasks({ paneId, count, agent, plan = null, placement =
 
   useEffect(() => {
     if (!open) return;
-    const outside = (event: PointerEvent): void => { if (!root.current?.contains(event.target as Node)) setOpen(false); };
+    // a press or a key while a task's detail is up is the detail's (it is drawn outside the list)
+    const outside = (event: PointerEvent): void => { if (!detailUp.current && !root.current?.contains(event.target as Node)) setOpen(false); };
     const escape = (event: KeyboardEvent): void => {
-      if (event.key !== "Escape") return;
+      if (event.key !== "Escape" || detailUp.current) return;
       // the list unmounts with whatever inside it held the focus: hand it back to the toggle
       if (root.current?.contains(document.activeElement)) toggle.current?.focus();
       setOpen(false);
@@ -140,7 +152,7 @@ export function BackgroundTasks({ paneId, count, agent, plan = null, placement =
     // somewhere else (Shift+Tab back to the message box), it closes, or it would cover them.
     // No relatedTarget is a press on a row of the list, or a browser that does not focus a pressed
     // button: that is not leaving, and a press outside is `outside`'s
-    const left = (event: FocusEvent): void => { if (event.relatedTarget instanceof Node && !node?.contains(event.relatedTarget)) setOpen(false); };
+    const left = (event: FocusEvent): void => { if (!detailUp.current && event.relatedTarget instanceof Node && !node?.contains(event.relatedTarget)) setOpen(false); };
     const node = root.current;
     window.addEventListener("pointerdown", outside);
     window.addEventListener("keydown", escape);
@@ -194,12 +206,23 @@ export function BackgroundTasks({ paneId, count, agent, plan = null, placement =
       task.tool_calls === null ? null : t(task.tool_calls === 1 ? "{n} tool call" : "{n} tool calls", { n: task.tool_calls }),
       task.tokens === null ? null : t("{n} tokens", { n: formatTokens(task.tokens) }),
     ].filter((item) => item !== null).join(" · ");
+    const main = <span className="bg-task-main">
+      <span className="bg-task-title">{task.title}<span className="sr-only"> ({words[task.status]})</span></span>
+      {(meta.length > 0 || (task.status !== "running" && task.status !== "completed")) && <span className="bg-task-meta">{[task.status !== "running" && task.status !== "completed" ? words[task.status] : null, meta || null].filter((item) => item !== null).join(" · ")}</span>}
+    </span>;
+    // a running task opens its detail: what a Claude subagent is doing, or why this PC cannot say
+    if (task.status === "running") {
+      return <li key={task.id} className={`bg-task is-${task.status} is-openable`}>
+        <button type="button" className="bg-task-open" aria-haspopup="dialog" aria-expanded={detail?.id === task.id} onClick={(event) => { event.currentTarget.focus(); setDetail(task); }}>
+          <Icon className="bg-task-icon" aria-hidden="true" />
+          {main}
+          <ChevronRight className="bg-task-caret" aria-hidden="true" />
+        </button>
+      </li>;
+    }
     return <li key={task.id} className={`bg-task is-${task.status}`}>
       <Icon className="bg-task-icon" aria-hidden="true" />
-      <span className="bg-task-main">
-        <span className="bg-task-title">{task.title}<span className="sr-only"> ({words[task.status]})</span></span>
-        {(meta.length > 0 || (task.status !== "running" && task.status !== "completed")) && <span className="bg-task-meta">{[task.status !== "running" && task.status !== "completed" ? words[task.status] : null, meta || null].filter((item) => item !== null).join(" · ")}</span>}
-      </span>
+      {main}
     </li>;
   };
 
@@ -240,8 +263,11 @@ export function BackgroundTasks({ paneId, count, agent, plan = null, placement =
   if (!planShown && !tasksShown) return null;
   const tasksLabel = count === 0 ? t("Background tasks") : t(count === 1 ? "{n} background task" : "{n} background tasks", { n: count });
   const planLabel = plan ? t("Plan: {done} of {total} done", { done: plan.done, total: plan.total }) : null;
-  const label = [planLabel, tasksShown ? tasksLabel : null].filter((part) => part !== null).join(" · ");
-  const title = plan?.current ? `${label} · ${plan.current}` : label;
+  // the step in progress is drawn after the figures, cut to the room the chip gives it (BackgroundTasks.css),
+  // and whole in the button's name and title, before the tasks. No step in progress (between steps, or all
+  // done): the figures alone
+  const current = plan?.current ? plan.current : null;
+  const name = [planLabel, current, tasksShown ? tasksLabel : null].filter((part) => part !== null).join(" · ");
   const stepWords: Record<PlanStep["status"], string> = { pending: t("waiting"), in_progress: t("running"), completed: t("done") };
   const stepRow = (step: PlanStep) => {
     const Icon = STEP_ICONS[step.status];
@@ -256,10 +282,11 @@ export function BackgroundTasks({ paneId, count, agent, plan = null, placement =
       </span>
     </li>;
   };
-  // in the card's row the toggle draws icons and numbers only (its words are its name and title); in the strip its words too
+  // in the card's row the toggle draws icons and numbers only (its words are its name and title); in the strip its words too.
+  // The step in progress is drawn in both
   return <span className={`bg-tasks${placement === "strip" ? " is-strip" : ""}`} ref={root}>
-    <button type="button" ref={toggle} className={`bg-tasks-toggle${count > 0 ? " is-running" : ""}`} aria-label={label} title={title} aria-expanded={open} aria-controls={id} onClick={() => setOpen(!open)}>
-      {plan && <><ListChecks aria-hidden="true" /><span className="bg-tasks-label">{t("Plan")}</span><span className="bg-tasks-plan" aria-hidden="true">{plan.done}/{plan.total}</span></>}
+    <button type="button" ref={toggle} className={`bg-tasks-toggle${count > 0 ? " is-running" : ""}`} aria-label={name} title={name} aria-expanded={open} aria-controls={id} onClick={() => setOpen(!open)}>
+      {plan && <><ListChecks aria-hidden="true" /><span className="bg-tasks-label">{t("Plan")}</span><span className="bg-tasks-plan" aria-hidden="true">{plan.done}/{plan.total}</span>{current && <span className="bg-tasks-current" aria-hidden="true">{current}</span>}</>}
       {plan && tasksShown && count > 0 && <span className="bg-tasks-sep" aria-hidden="true" />}
       {(!plan || count > 0) && tasksShown && <><Layers aria-hidden="true" /><span className="bg-tasks-label">{tasksLabel}</span>{count > 0 && <span className="bg-tasks-count" aria-hidden="true">{count}</span>}</>}
     </button>
@@ -291,5 +318,6 @@ export function BackgroundTasks({ paneId, count, agent, plan = null, placement =
       </>}
       </>}
     </div>}
+    {detail !== null && <BackgroundAgentDetail key={`${machineId}\0${paneId}\0${detail.id}`} paneId={paneId} task={detail} onClose={closeDetail} />}
   </span>;
 }

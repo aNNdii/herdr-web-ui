@@ -1,4 +1,4 @@
-import type { RepoDiffFilePatch, RepoDiffScope, RepoDiffStatus } from "../../shared/protocol.ts";
+import type { RepoBranchComparison, RepoDiffFilePatch, RepoDiffScope, RepoDiffStatus } from "../../shared/protocol.ts";
 import { ApiError, routeMissing } from "./api.ts";
 import { formatBytes } from "./bridgeProgress.ts";
 import { canHighlight, countLines, languageForPath } from "./highlight.ts";
@@ -10,11 +10,13 @@ import { VIRTUAL_HIGHLIGHT_CHARS, VIRTUAL_HIGHLIGHT_LINES } from "./sourcePrevie
 export interface RepoComparison {
   scope: RepoDiffScope;
   /**
-   * `commit`: full hashes once a list answered, the names typed before. `uncommitted`: with a base,
-   * a worktree's changes since its branch forked off it; `head` then names that branch.
+   * `commit`: full hashes once a list answered, the names typed before; `branch`: the base as the reader named it.
+   * `uncommitted`: with a base, a worktree's changes since its branch forked off it; `head` then names that branch.
    */
   base: string | null;
   head: string | null;
+  /** `branch` only, once a list answered: the identity it was compared on, carried into each patch read */
+  comparison: RepoBranchComparison | null;
   /** `commit` and `uncommitted` only: compare from where head forked off base (`merge_base=1`) */
   mergeBase?: boolean;
 }
@@ -29,8 +31,19 @@ export interface RepoDiffTarget extends RepoComparison {
   oldPath: string | null;
 }
 
-const SCOPES: Record<RepoDiffScope, true> = { workspace: true, staged: true, commit: true, uncommitted: true };
+const SCOPES: Record<RepoDiffScope, true> = { workspace: true, staged: true, commit: true, branch: true, uncommitted: true };
 export const REPO_DIFF_SCOPES: readonly RepoDiffScope[] = Object.keys(SCOPES) as RepoDiffScope[];
+
+/** A ref as a reader names it: `refs/heads/main` is `main`, `refs/remotes/origin/main` is `origin/main`; anything else as it is. */
+export function refName(ref: string): string {
+  return ref.replace(/^refs\/(?:heads|remotes)\//, "");
+}
+
+/** Whether two branch identities name the same comparison: the same repository, HEAD, base and merge base. */
+export function sameComparison(left: RepoBranchComparison | null, right: RepoBranchComparison | null): boolean {
+  if (left === null || right === null) return left === right;
+  return left.repository_root === right.repository_root && left.head_oid === right.head_oid && left.base_oid === right.base_oid && left.merge_base_oid === right.merge_base_oid;
+}
 
 /** git's own letter for a status, as `git status --short` prints it. */
 export const STATUS_MARK: Record<RepoDiffStatus, string> = {
@@ -61,6 +74,7 @@ export function comparisonWord(t: Translate, comparison: RepoComparison): string
     case "workspace": return t("Unstaged");
     case "staged": return t("Staged");
     case "commit": return `${shortHash(comparison.base ?? "")}..${shortHash(comparison.head ?? "HEAD")}`;
+    case "branch": return t("Since {base}", { base: comparison.base ?? "" });
   }
 }
 
@@ -71,6 +85,7 @@ export function nothingChangedWord(t: Translate, scope: RepoDiffScope): string {
     case "workspace": return t("No unstaged changes");
     case "staged": return t("Nothing staged");
     case "commit": return t("These commits are the same");
+    case "branch": return t("Nothing changed since the base");
   }
 }
 
@@ -80,7 +95,8 @@ export function nothingChangedSentence(t: Translate, scope: RepoDiffScope): stri
     case "uncommitted": return t("No uncommitted changes.");
     case "workspace": return t("No unstaged changes.");
     case "staged": return t("Nothing staged.");
-    case "commit": return t("Nothing changed here.");
+    case "commit":
+    case "branch": return t("Nothing changed here.");
   }
 }
 
@@ -93,7 +109,7 @@ export type StandIn = "unstaged" | "commits";
  */
 export function bridgeAsk(wanted: RepoComparison, olderBridge: boolean): { asked: RepoComparison; standIn: StandIn | null } {
   if (!olderBridge || wanted.scope !== "uncommitted") return { asked: wanted, standIn: null };
-  if (wanted.base === null) return { asked: { scope: "workspace", base: null, head: null }, standIn: "unstaged" };
+  if (wanted.base === null) return { asked: { scope: "workspace", base: null, head: null, comparison: null }, standIn: "unstaged" };
   return { asked: { ...wanted, scope: "commit" }, standIn: "commits" };
 }
 
@@ -124,6 +140,12 @@ export function diffErrorMessage(t: Translate, error: unknown): string {
     case "invalid_revision": return t("Name a commit, branch or tag.");
     case "no_merge_base": return t("Base and head share no history.");
     case "worktree_moved": return t("The branch is no longer checked out in its worktree. Turn off “Show uncommitted changes” in View options or choose the branch again.");
+    // a bridge from before the branch scope refuses it as a scope it does not know
+    case "invalid_scope": return t("This PC's bridge cannot compare branches yet.");
+    case "unborn_head": return t("The repository has no commits yet, so there is no branch to compare.");
+    case "no_common_ancestor": return t("That base shares no history with HEAD.");
+    case "comparison_changed": return comparisonChangedWord(t);
+    case "invalid_comparison": return t("This comparison is not one the list answered; refresh the list.");
     case "git_unavailable": return t("git is not installed on that PC.");
     case "git_timeout": return t("git took too long to answer.");
     case "git_failed": return t("git could not compare these.");
@@ -132,6 +154,11 @@ export function diffErrorMessage(t: Translate, error: unknown): string {
     case "machine_offline": case "machine_unavailable": case "machine_timeout": return t("That PC is not reachable right now.");
     default: return t("Changes could not be loaded.");
   }
+}
+
+/** A branch patch whose identity is not the list's any more: the server's 409, or an answer for another identity. */
+export function comparisonChangedWord(t: Translate): string {
+  return t("HEAD or the repository changed since the list was read; refresh the list.");
 }
 
 /** Why a file has no patch to draw (`unavailable`), or null when it has one. */
@@ -163,7 +190,7 @@ export function repositoryFilePath(root: string, path: string): string {
   return `${root.replace(/[\\/]+$/, "")}/${path}`;
 }
 
-const HISTORY_KEY = "herdr-web-ui:repo-diff";
+const HISTORY_KEY = "ovis:repo-diff";
 
 /** The viewer's target in a history entry, when the entry holds one of a known shape. */
 export function diffTargetFromState(state: unknown): RepoDiffTarget | null {
@@ -176,7 +203,20 @@ export function diffTargetFromState(state: unknown): RepoDiffTarget | null {
   const machineId = text("machineId"), path = text("path"), scope = text("scope");
   if (machineId === null || path === null || scope === null || !REPO_DIFF_SCOPES.includes(scope as RepoDiffScope)) return null;
   if (!optional("paneId") || !optional("directory") || !optional("base") || !optional("head") || !optional("oldPath")) return null;
-  return { machineId, paneId: text("paneId"), directory: text("directory"), scope: scope as RepoDiffScope, base: text("base"), head: text("head"), path, oldPath: text("oldPath") };
+  const comparison = branchComparisonOf(value["comparison"]);
+  if (comparison === undefined) return null;
+  return { machineId, paneId: text("paneId"), directory: text("directory"), scope: scope as RepoDiffScope, base: text("base"), head: text("head"), comparison, path, oldPath: text("oldPath") };
+}
+
+/** A branch identity of the known shape, null when absent, undefined when of another shape. */
+function branchComparisonOf(value: unknown): RepoBranchComparison | null | undefined {
+  if (value === null || value === undefined) return null;
+  if (typeof value !== "object") return undefined;
+  const record = value as Record<string, unknown>;
+  const field = (key: string): string | undefined => (typeof record[key] === "string" ? record[key] as string : undefined);
+  const repositoryRoot = field("repository_root"), headOid = field("head_oid"), baseOid = field("base_oid"), mergeBaseOid = field("merge_base_oid");
+  if (repositoryRoot === undefined || headOid === undefined || baseOid === undefined || mergeBaseOid === undefined) return undefined;
+  return { repository_root: repositoryRoot, head_oid: headOid, base_oid: baseOid, merge_base_oid: mergeBaseOid };
 }
 
 export function diffTargetState(state: unknown, target: RepoDiffTarget | null): Record<string, unknown> {
