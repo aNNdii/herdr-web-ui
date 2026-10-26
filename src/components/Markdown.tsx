@@ -339,7 +339,7 @@ function CodeBlock({ language, value, firstLine }: { language: string; value: st
   // quoted: the whole block, without header, copy or fold
   if (quoted) return <div className="markdown-code" data-language={language}><pre><code>{value}</code></pre></div>;
   return (
-    <div className="markdown-code" ref={block} data-language={language}>
+    <div className="markdown-code" ref={block}>
       <div className="markdown-code-header">
         <span>{language || "text"}</span>
         <button type="button" className="icon-button markdown-code-copy" onClick={() => void copy()} aria-label={t(copied ? "Code copied" : "Copy code")}>

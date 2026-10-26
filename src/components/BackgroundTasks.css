@@ -3,10 +3,12 @@
    the icon buttons there are: an icon and a number, no words and no fill, so it never outweighs
    them. Running background work colours the icon and the number; the words are the button's name
    and title. The list opens above the card, as the slash menu does, so it never covers what is
-   being typed. */
+   being typed. The toggle can shrink, and only the plan's step inside it does (below): the buttons
+   beside it never give way to it. */
 .bg-tasks {
   display: inline-flex;
-  flex: none;
+  flex: 0 1 auto;
+  min-width: 0;
 }
 
 .bg-tasks-toggle {
@@ -54,8 +56,32 @@
   display: none;
 }
 
+/* the step in progress, after the figures, in the agent's own words (#1040): one line, cut with
+   an ellipsis past the room the chip gives it, whole in the button's name and title. A one-line
+   clamp over text that may break anywhere, not nowrap with an ellipsis: its narrowest size is one
+   glyph, so on a card narrower than the row's controls the step gives its room back before the
+   add button, the figures or the round button do (nowrap would hold the whole step and push the
+   round button out of the card). The model beside the chip steps out as it does for the chip's
+   other words (Composer.css) */
+.bg-tasks-current {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 1;
+  min-width: 0;
+  max-width: 16em;
+  overflow: hidden;
+  text-align: start;
+  word-break: break-all;
+}
+
+.bg-tasks-current::before {
+  content: "\00b7";
+  margin-right: var(--space-1);
+}
+
 /* a plan and running tasks share the toggle: a hairline between them */
 .bg-tasks-sep {
+  flex: none;
   align-self: center;
   width: var(--hairline);
   height: var(--icon-size);
@@ -115,6 +141,11 @@
 
 .composer-surface[data-compact] ~ .composer-strip .bg-tasks.is-strip .bg-tasks-count {
   display: inline;
+}
+
+/* the step takes the word Plan's place there, and less room: a phone's row keeps the model's name beside it */
+.composer-surface[data-compact] .bg-tasks-current {
+  max-width: 8em;
 }
 
 /* a finger gets the target's size through an invisible expander: the toggle itself stays as tall
@@ -208,6 +239,58 @@
   align-items: flex-start;
   gap: var(--space-2);
   padding: var(--space-1) var(--space-2);
+}
+
+/* a running task is a disclosure: the whole row is the button that opens its detail
+   (BackgroundAgentDetail), with the caret of the ended fold at its end; the row's padding is the
+   button's, so the hit area and the hover tint are the row */
+.bg-task.is-openable {
+  padding: 0;
+}
+
+.bg-task-open {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  width: 100%;
+  min-height: var(--control-h);
+  padding: var(--space-1) var(--space-2);
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius-md);
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+@media (hover: hover) {
+  .bg-task-open:hover {
+    background: var(--bg-hover);
+  }
+}
+
+.bg-task-open[aria-expanded="true"] {
+  background: var(--bg-hover);
+}
+
+/* a finger's row: the target's height, the text still at the row's top */
+@media (pointer: coarse) {
+  .bg-task-open {
+    min-height: var(--touch-target);
+  }
+}
+
+.bg-task-open .bg-task-main {
+  flex: 1 1 auto;
+}
+
+.bg-task-caret {
+  width: 14px;
+  height: 14px;
+  flex: none;
+  align-self: center;
+  color: var(--text-dim);
 }
 
 .bg-task-icon {

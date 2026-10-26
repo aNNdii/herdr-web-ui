@@ -8,7 +8,7 @@ import { chromium } from "playwright-core";
 import { createServer } from "../server/index.ts";
 import { herdrRpc, sessionSnapshot, workspaceCreate, workspaceClose } from "../server/herdr/client.ts";
 
-if (process.platform !== "linux") { console.log("SKIP Grok process binding is Linux-only"); process.exit(0); }
+if (process.platform !== "linux") { console.log("SKIP Grok browser QA stand-in uses Linux /proc"); process.exit(0); }
 const root = mkdtempSync(join(tmpdir(), "herdr-grok-browser-"));
 const session = "00000000-0000-4000-8000-000000000021";
 const dir = join(root, "sessions", "fiction", session);
@@ -26,7 +26,7 @@ let workspace: string | undefined;
 let server: ReturnType<typeof createServer> | undefined;
 let browser: Awaited<ReturnType<typeof chromium.launch>> | undefined;
 try {
-  const created = await workspaceCreate({ cwd: root, label: "herdr-web-ui-test-grok-browser" });
+  const created = await workspaceCreate({ cwd: root, label: "ovis-test-grok-browser" });
   workspace = created.workspace.workspace_id;
   const pane = created.root_pane.pane_id;
   await herdrRpc("pane.send_text", { pane_id: pane, text: `${executable} 600 3<${events}\n` });
@@ -42,7 +42,7 @@ try {
   page.setDefaultTimeout(12_000);
   const errors: string[] = [];
   page.on("pageerror", (error) => errors.push(error.message));
-  await page.addInitScript((id) => localStorage.setItem(`herdr-web-ui:view:${id}`, "chat"), pane);
+  await page.addInitScript((id) => localStorage.setItem(`ovis:view:${id}`, "chat"), pane);
   await page.goto(`http://127.0.0.1:${server.port}/?pane=${encodeURIComponent(pane)}`);
   const log = page.locator(`.pane-frame[data-layout-pane="${pane}"]`).getByRole("log");
   await log.getByText("Fictional Grok answer.", { exact: true }).waitFor();

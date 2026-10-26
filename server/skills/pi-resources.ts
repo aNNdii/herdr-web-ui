@@ -16,7 +16,7 @@ import { description, plainObject, readFrontmatter, readSkillText } from "./walk
 export type BundledExtension = "llama" | "mcp";
 const BUNDLED_PATHS: ReadonlyArray<readonly [BundledExtension, string]> = [["llama", "builtin:llama.cpp"], ["mcp", "builtin:mcp"]];
 
-export interface PiCommandFile { readonly name: string; readonly description: string; readonly origin: "user" | "project" | "package" }
+export interface PiCommandFile { readonly name: string; readonly description: string; readonly origin: "user" | "project" | "package"; readonly id?: string }
 export interface PiLoaded {
   readonly skills: readonly PiCommandFile[];
   readonly prompts: readonly PiCommandFile[];
@@ -460,7 +460,7 @@ function loadSkills(paths: ReturnType<typeof winners>): PiCommandFile[] {
     const name = typeof fields?.["name"] === "string" && fields["name"] ? fields["name"] : basename(dirname(path));
     const real = canonical(path);
     if (reals.has(real) || byName.has(name)) continue;
-    byName.set(name, { name, description: text, origin });
+    byName.set(name, { name, description: text, origin, id: real });
     reals.add(real);
   }
   return [...byName.values()];

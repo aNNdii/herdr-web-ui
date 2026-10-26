@@ -11,11 +11,12 @@ import { CHAT_WIDTHS, DICTATION_LANGUAGES, DIFF_STYLES, MARKDOWN_WIDTHS, VOICE_B
   type Settings as CurrentSettings, type ChatWidth, type DictationLanguage, type VoiceButton } from "./settings.ts";
 // this fork's comment, suggestion-menu and sidebar Install app settings came after the pinned version, so its tabs never stored them
 type Settings = Omit<CurrentSettings, "darkTheme" | "lightTheme" | "fileOpen" | "webLinks" | "claudeLaunchMode" | "codexLaunchMode"
+  | "followHerdrFocus" | "composerNewTabButton" | "uiFontFamily" | "terminalMirrorWrap"
   | "comments" | "commentMode" | "commentLayout" | "commentOnSelect"
   | "codeCommentLineClick" | "mobileCommentGesture" | "mobileCommentInput" | "suggestAgents" | "suggestSkills" | "suggestBuiltins" | "showInstallApp">;
 type Palette = "amber" | "charcoal" | "catppuccin";
 const PALETTES: readonly Palette[] = ["amber", "charcoal", "catppuccin"];
-const STORAGE_KEY = "herdr-web-ui:settings";
+const STORAGE_KEY = "ovis:settings";
 export const DEFAULT_SETTINGS: Settings = {
   terminalInputMode: "auto",
   keyBarExtras: ["alt"],

@@ -1,5 +1,5 @@
 /** The review's file tree column when the user has dragged its edge: per device, like the file panel's. */
-const KEY = "herdr-web-ui:review-tree-width";
+const KEY = "ovis:review-tree-width";
 
 export const REVIEW_TREE_MIN_WIDTH = 200;
 const REVIEW_TREE_MAX_WIDTH = 640;

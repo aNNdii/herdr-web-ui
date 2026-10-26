@@ -35,8 +35,9 @@ jobs:
             echo '::error::Set the FORK_SYNC_TOKEN repository secret (docs/fork.md).'
             exit 1
           fi
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          persist-credentials: false
           ref: next
           fetch-depth: 0
           token: ${{ secrets.FORK_SYNC_TOKEN }}
@@ -53,7 +54,9 @@ jobs:
           if [ "$(jq -r '.main.fastForward' "$status")" != true ]; then
             echo '::warning::main has commits upstream does not; it is left as it is.'
           elif [ "$(jq -r '.main.behind' "$status")" -gt 0 ]; then
-            git push origin refs/remotes/upstream/main:refs/heads/main
+            # the checkout keeps no credential (persist-credentials: false): this push alone gets the token
+            git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)" \
+              push origin refs/remotes/upstream/main:refs/heads/main
           fi
       - name: Merge upstream's main into next
         run: |
@@ -69,7 +72,8 @@ jobs:
             tree=$(jq -r '.merge.tree' "$status")
             commit=$(git -c user.name='herdr-web-ui fork sync' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' \
               commit-tree "$tree" -p origin/next -p upstream/main -m "$message")
-            git push --force origin "$commit:refs/heads/sync/upstream-auto"
+            git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)" \
+              push --force origin "$commit:refs/heads/sync/upstream-auto"
             {
               echo "Merges upstream's main ($(jq -r '.upstream.sha' "$status" | cut -c1-12)) into next. Git merged it without a conflict;"
               echo 'CI still has to pass. Opened by the Fork upstream sync workflow (docs/fork.md).'

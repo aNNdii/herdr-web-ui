@@ -1,6 +1,43 @@
 import { type InteractivePrompt } from "../../shared/protocol.ts";
 import { type OpenCodeFormFieldOption, type OpenCodeFormInfo } from "../opencode-service.ts";
 import { createHash } from "node:crypto";
+import type { ReaderContext } from "./registry.ts";
+import type { InteractionPlan } from "./interaction-plan.ts";
+
+/**
+ * A parser that several readers call on the same screen, run once per read: the readers of one
+ * parsePrompt pass are given the same screen and the same context object in turn.
+ */
+export function onePerPass<T>(parse: (screen: string, ctx: ReaderContext) => T): (screen: string, ctx: ReaderContext) => T {
+  let last: { screen: string; ctx: ReaderContext; value: T } | null = null;
+  return (screen, ctx) => {
+    if (last?.screen === screen && last.ctx === ctx) return last.value;
+    const value = parse(screen, ctx);
+    last = { screen, ctx, value };
+    return value;
+  };
+}
+
+export interface DialogReader {
+  id: string;
+  agents: readonly string[];
+  priority: number;
+  /** Result readers must return resultText: a complete, fixture-recorded block. */
+  kind?: "result";
+  /** Recognize this agent's echoed command line; omitted readers use the standard prompt prefix. */
+  echoOf?(line: string, command: string): boolean;
+  /** First persistent bottom-chrome line; -1 (or lines.length) means none. Invalid indexes or hidden command echoes reject correlation; parsing keeps valid chrome. */
+  chromeStart?(lines: string[]): number;
+  /** A result reader's text may end with the next echo line as a completion boundary, never its following output. */
+  parse(screen: string, ctx: ReaderContext): ParsedPrompt | null;
+  /**
+   * When the answer looks at the screen again: before its commit, or also before every move after
+   * the first, for a picker that closes onto an input box where the remaining arrows would land
+   */
+  reread: "each-move" | "before-commit" | "none";
+  list: "none" | "letter-window" | "slider";
+  interaction?(parsed: ParsedPrompt): InteractionPlan;
+}
 
 export const ANSI_RE = /\u001b\[[0-?]*[ -/]*[@-~]/g;
 
@@ -43,6 +80,7 @@ type Responder =
   | "claude-plan"
   | "claude-confirm"
   | "claude-held"
+  | "claude-goal"
   | "claude-model"
   | "claude-effort"
   | "codex-model"
@@ -54,16 +92,32 @@ type Responder =
   | "pi-confirm"
   | "pi-input"
   | "pi-model"
+  | "pi-thinking"
+  | "pi-ask-question"
+  | "pi-ask-submit"
   | "omo-model"
+  | "omp-model"
   | "hermes-question"
   | "hermes-input"
+  | "hermes-help"
+  | "hermes-status"
+  | "hermes-version"
+  | "hermes-profile"
+  | "hermes-reload-skills"
   | "omp-submit"
+  | "omp-handoff"
   | "opencode-question"
+  | "opencode-v1-question"
   | "fallback-menu"
   | "fallback-gjc-menu"
-  | "fallback-keys";
+  | "fallback-keys"
+  | "cmd-question";
 
 export type ParsedPrompt = InteractivePrompt & {
+  /** Exact contiguous result block, including its identifying header and completion footer. */
+  resultText?: string;
+  /** Only a recognized successful catalog reload sets this; never a generic screen delta. */
+  catalogChanged?: true;
   responder: Responder;
   /** Stable question identity across the folded widget and the expanded form. */
   omoQuestion?: { call: string; index: number };
@@ -78,6 +132,10 @@ export type ParsedPrompt = InteractivePrompt & {
     revision: number;
     available: boolean;
   };
+  /** Pi's active tab, from colors verified against the live detection screen by the caller. */
+  piAskForm?: { identity: string; index: number };
+  /** Pi's custom row owns the inline editor, rather than only a selected menu row. */
+  piAskTyping?: true;
   menuLabels: string[];
   selectedIndex: number;
   checkedOptionIndices: number[];
@@ -194,7 +252,7 @@ export function finishPrompt(
   input: Omit<InteractivePrompt, "id" | "agent">,
   internal: Omit<ParsedPrompt, keyof InteractivePrompt>,
   /** fields as the id reads them, where that is not as the card shows them (a fallback card's ticking working line) */
-  hashed: Partial<Pick<InteractivePrompt, "question" | "body">> & { call?: string } = {},
+  hashed: Partial<Pick<InteractivePrompt, "title" | "question" | "body" | "steps" | "can_step_back" | "default_custom_text">> & { call?: string } = {},
 ): ParsedPrompt {
   const id = createHash("sha256")
     .update(JSON.stringify({ agent, ...input, ...hashed }))

@@ -26,11 +26,13 @@ describe("ComparePicker", () => {
   let focused: string[];
 
   beforeEach(() => {
-    for (const key of ["window", "document", "navigator", "IS_REACT_ACT_ENVIRONMENT"]) descriptors.set(key, Object.getOwnPropertyDescriptor(globalThis, key));
+    for (const key of ["window", "document", "navigator", "getComputedStyle", "IS_REACT_ACT_ENVIRONMENT"]) descriptors.set(key, Object.getOwnPropertyDescriptor(globalThis, key));
     renderers = []; listeners = new Map(); focused = [];
     const on = (type: string, listener: (event: unknown) => void): void => { if (!listeners.has(type)) listeners.set(type, new Set()); listeners.get(type)!.add(listener); };
     const off = (type: string, listener: (event: unknown) => void): void => { listeners.get(type)?.delete(listener); };
     Object.defineProperty(globalThis, "IS_REACT_ACT_ENVIRONMENT", { configurable: true, value: true });
+    // src/lib/settings.ts reads the stylesheet's --bg when it applies the settings
+    Object.defineProperty(globalThis, "getComputedStyle", { configurable: true, value: () => ({ getPropertyValue: () => "#12100e" }) });
     Object.defineProperty(globalThis, "navigator", { configurable: true, value: { languages: ["en-US"] } });
     Object.defineProperty(globalThis, "window", { configurable: true, value: {
       localStorage: { getItem: () => null, setItem() {} },

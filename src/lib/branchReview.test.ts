@@ -33,7 +33,7 @@ const list = (over: Partial<RepoBranchList> = {}): RepoBranchList => ({
 
 const answer = (over: Partial<RepoDiffFileList> = {}): RepoDiffFileList => ({
   repository: repository("feat/x"),
-  scope: "commit", base: BASE, head: HEAD, merge_base: FORK,
+  scope: "commit", base: BASE, head: HEAD, merge_base: FORK, comparison: null,
   files: [], total: 0, truncated: false,
   limits: { max_files: 1000, max_list_bytes: 1024 },
   ...over,
@@ -130,19 +130,19 @@ describe("worktree of the compared branch", () => {
 
 describe("review ask", () => {
   it("asks the pane's folder for its uncommitted and its staged changes", () => {
-    expect(reviewAsk({ scope: "uncommitted" }, false)).toEqual({ folder: null, list: { scope: "uncommitted", base: null, head: null }, standIn: null });
-    expect(reviewAsk({ scope: "staged" }, false)).toEqual({ folder: null, list: { scope: "staged", base: null, head: null }, standIn: null });
+    expect(reviewAsk({ scope: "uncommitted" }, false)).toEqual({ folder: null, list: { scope: "uncommitted", base: null, head: null, comparison: null }, standIn: null });
+    expect(reviewAsk({ scope: "staged" }, false)).toEqual({ folder: null, list: { scope: "staged", base: null, head: null, comparison: null }, standIn: null });
   });
 
   it("asks for the names from the merge base while uncommitted changes are left out", () => {
     expect(reviewAsk(branches(" feat/x ", " origin/next "), false))
-      .toEqual({ folder: null, list: { scope: "commit", base: "origin/next", head: "feat/x", mergeBase: true }, standIn: null });
+      .toEqual({ folder: null, list: { scope: "commit", base: "origin/next", head: "feat/x", comparison: null, mergeBase: true }, standIn: null });
   });
 
   it("asks another worktree's folder for its changes since its branch forked", () => {
     expect(reviewAsk(branches(" fix/pin ", "origin/next", WORKTREE), false)).toEqual({
       folder: "/home/dev/wt/fix-pin",
-      list: { scope: "uncommitted", base: "origin/next", head: "fix/pin", mergeBase: true },
+      list: { scope: "uncommitted", base: "origin/next", head: "fix/pin", comparison: null, mergeBase: true },
       standIn: null,
     });
   });
@@ -150,15 +150,15 @@ describe("review ask", () => {
   it("stays in the pane's folder for the pane's own worktree", () => {
     expect(reviewAsk(branches("feat/x", "origin/next", { path: ROOT, here: true }), false)).toEqual({
       folder: null,
-      list: { scope: "uncommitted", base: "origin/next", head: "feat/x", mergeBase: true },
+      list: { scope: "uncommitted", base: "origin/next", head: "feat/x", comparison: null, mergeBase: true },
       standIn: null,
     });
   });
 
   it("asks an older bridge its stand-ins, from the pane's folder", () => {
-    expect(reviewAsk({ scope: "uncommitted" }, true)).toEqual({ folder: null, list: { scope: "workspace", base: null, head: null }, standIn: "unstaged" });
+    expect(reviewAsk({ scope: "uncommitted" }, true)).toEqual({ folder: null, list: { scope: "workspace", base: null, head: null, comparison: null }, standIn: "unstaged" });
     expect(reviewAsk(branches("fix/pin", "origin/next", WORKTREE), true))
-      .toEqual({ folder: null, list: { scope: "commit", base: "origin/next", head: "fix/pin", mergeBase: true }, standIn: "commits" });
+      .toEqual({ folder: null, list: { scope: "commit", base: "origin/next", head: "fix/pin", comparison: null, mergeBase: true }, standIn: "commits" });
   });
 
   it("asks an older bridge what it knows as it is", () => {
@@ -176,9 +176,9 @@ describe("review ask", () => {
 
 describe("review comparison", () => {
   const choices = branchChoices(list());
-  const commits: RepoComparison = { scope: "commit", base: "origin/next", head: "feat/x", mergeBase: true };
-  const pane: RepoComparison = { scope: "uncommitted", base: null, head: null };
-  const worktree: RepoComparison = { scope: "uncommitted", base: "origin/next", head: "fix/pin", mergeBase: true };
+  const commits: RepoComparison = { scope: "commit", base: "origin/next", head: "feat/x", mergeBase: true, comparison: null };
+  const pane: RepoComparison = { scope: "uncommitted", base: null, head: null, comparison: null };
+  const worktree: RepoComparison = { scope: "uncommitted", base: "origin/next", head: "fix/pin", mergeBase: true, comparison: null };
   const uncommitted = (over: Partial<RepoDiffFileList> = {}) => answer({ scope: "uncommitted", base: null, head: null, merge_base: undefined, ...over });
 
   it("freezes the answered hashes under the asked names, with the head's worktree", () => {
@@ -228,7 +228,7 @@ describe("review comparison", () => {
   });
 
   it("passes the staged changes through", () => {
-    expect(reviewComparison({ scope: "staged", base: null, head: null }, answer({ scope: "staged", base: null, head: null }), choices)).toEqual({ scope: "staged" });
+    expect(reviewComparison({ scope: "staged", base: null, head: null, comparison: null }, answer({ scope: "staged", base: null, head: null }), choices)).toEqual({ scope: "staged" });
   });
 
   it("is null until an answer for what was asked arrives", () => {
@@ -241,8 +241,8 @@ describe("review comparison", () => {
     expect(reviewComparison(worktree, uncommitted(), choices)).toBeNull();
     expect(reviewComparison(worktree, uncommitted({ base: BASE }), choices)).toBeNull();
     expect(reviewComparison(worktree, answer(), choices)).toBeNull();
-    expect(reviewComparison({ scope: "workspace", base: null, head: null }, uncommitted(), choices)).toBeNull();
-    expect(reviewComparison({ scope: "staged", base: null, head: null }, answer({ scope: "workspace", base: null, head: null }), choices)).toBeNull();
+    expect(reviewComparison({ scope: "workspace", base: null, head: null, comparison: null }, uncommitted(), choices)).toBeNull();
+    expect(reviewComparison({ scope: "staged", base: null, head: null, comparison: null }, answer({ scope: "workspace", base: null, head: null }), choices)).toBeNull();
   });
 });
 
@@ -253,22 +253,22 @@ describe("diff query", () => {
   });
 
   it("asks two-dot from the merge base's hash", () => {
-    expect(diffQueryOf(comparison(FORK))).toEqual({ scope: "commit", base: FORK, head: HEAD });
+    expect(diffQueryOf(comparison(FORK))).toEqual({ scope: "commit", base: FORK, head: HEAD, comparison: null });
   });
 
   it("asks from tip to tip without a merge base", () => {
-    expect(diffQueryOf(comparison(null))).toEqual({ scope: "commit", base: BASE, head: HEAD });
+    expect(diffQueryOf(comparison(null))).toEqual({ scope: "commit", base: BASE, head: HEAD, comparison: null });
   });
 
   it("asks a worktree's patches from the fork the list resolved, for the branch it must still have checked out", () => {
     expect(diffQueryOf({ scope: "uncommitted", worktree: { branch: "fix/pin", mergeBase: FORK } }))
-      .toEqual({ scope: "uncommitted", base: FORK, head: "fix/pin" });
+      .toEqual({ scope: "uncommitted", base: FORK, head: "fix/pin", comparison: null });
   });
 
   it("asks for the uncommitted, unstaged and staged changes as they are", () => {
-    expect(diffQueryOf({ scope: "uncommitted", worktree: null })).toEqual({ scope: "uncommitted", base: null, head: null });
-    expect(diffQueryOf({ scope: "workspace" })).toEqual({ scope: "workspace", base: null, head: null });
-    expect(diffQueryOf({ scope: "staged" })).toEqual({ scope: "staged", base: null, head: null });
+    expect(diffQueryOf({ scope: "uncommitted", worktree: null })).toEqual({ scope: "uncommitted", base: null, head: null, comparison: null });
+    expect(diffQueryOf({ scope: "workspace" })).toEqual({ scope: "workspace", base: null, head: null, comparison: null });
+    expect(diffQueryOf({ scope: "staged" })).toEqual({ scope: "staged", base: null, head: null, comparison: null });
   });
 });
 

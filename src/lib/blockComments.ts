@@ -440,7 +440,7 @@ export function isMarkdownBlock(value: unknown): value is MarkdownBlock {
   return typeof type === "string" && Object.hasOwn(BLOCK_TYPES, type);
 }
 
-export const BLOCK_COMMENTS_PREFIX = "herdr-web-ui:block-comments:";
+export const BLOCK_COMMENTS_PREFIX = "ovis:block-comments:";
 type CommentStorage = Pick<Storage, "getItem" | "setItem" | "removeItem" | "key" | "length">;
 /** A fresh comment id; a time-and-random fallback where `crypto.randomUUID` is missing (an insecure origin). */
 const newId = () => globalThis.crypto?.randomUUID?.() ?? `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;

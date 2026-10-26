@@ -47,11 +47,11 @@ describe("the review's per-device toggles", () => {
     withStorage(storage);
     expect(storedHideViewed()).toBe(false);
     storeHideViewed(true);
-    expect(storage.get("herdr-web-ui:review-hide-viewed")).toBe("1");
+    expect(storage.get("ovis:review-hide-viewed")).toBe("1");
     expect(storedHideViewed()).toBe(true);
     expect(storedShowIgnored()).toBe(false);
     storeHideViewed(false);
-    expect(storage.has("herdr-web-ui:review-hide-viewed")).toBe(false);
+    expect(storage.has("ovis:review-hide-viewed")).toBe(false);
     expect(storedHideViewed()).toBe(false);
   });
 
@@ -59,7 +59,7 @@ describe("the review's per-device toggles", () => {
     const storage = memoryStorage();
     withStorage(storage);
     storeShowIgnored(true);
-    expect(storage.get("herdr-web-ui:review-show-ignored")).toBe("1");
+    expect(storage.get("ovis:review-show-ignored")).toBe("1");
     expect(storedShowIgnored()).toBe(true);
     expect(storedHideViewed()).toBe(false);
   });
@@ -69,11 +69,11 @@ describe("the review's per-device toggles", () => {
     withStorage(storage);
     expect(storedNewFilesApart()).toBe(false);
     storeNewFilesApart(true);
-    expect(storage.get("herdr-web-ui:review-new-files-apart")).toBe("1");
+    expect(storage.get("ovis:review-new-files-apart")).toBe("1");
     expect(storedNewFilesApart()).toBe(true);
     expect(storedHideViewed()).toBe(false);
     storeNewFilesApart(false);
-    expect(storage.has("herdr-web-ui:review-new-files-apart")).toBe(false);
+    expect(storage.has("ovis:review-new-files-apart")).toBe(false);
   });
 
   it("keeps the review keys on until turned off, under their own key", () => {
@@ -81,7 +81,7 @@ describe("the review's per-device toggles", () => {
     withStorage(storage);
     expect(storedReviewKeysOff()).toBe(false);
     storeReviewKeysOff(true);
-    expect([...storage.entries()]).toEqual([["herdr-web-ui:review-keys-off", "1"]]);
+    expect([...storage.entries()]).toEqual([["ovis:review-keys-off", "1"]]);
     expect(storedReviewKeysOff()).toBe(true);
     expect(storedHideViewed()).toBe(false);
     storeReviewKeysOff(false);
@@ -115,25 +115,25 @@ describe("the Markdown view of each list", () => {
     withStorage(storage);
     const views = storeMarkdownView(storedMarkdownViews(), "changed", "preview");
     expect(views).toEqual({ changed: "preview", all: "preview" });
-    expect([...storage.entries()]).toEqual([["herdr-web-ui:review-markdown-view:changed", "preview"]]);
+    expect([...storage.entries()]).toEqual([["ovis:review-markdown-view:changed", "preview"]]);
     expect(storedMarkdownViews()).toEqual({ changed: "preview", all: "preview" });
     expect(storeMarkdownView(views, "all", "source")).toEqual({ changed: "preview", all: "source" });
-    expect(storage.get("herdr-web-ui:review-markdown-view:all")).toBe("source");
-    expect(storage.get("herdr-web-ui:review-markdown-view:changed")).toBe("preview");
+    expect(storage.get("ovis:review-markdown-view:all")).toBe("source");
+    expect(storage.get("ovis:review-markdown-view:changed")).toBe("preview");
   });
 
   it("keeps a choice that is the default, so another default later does not turn it round", () => {
     const storage = memoryStorage();
     withStorage(storage);
     storeMarkdownView(storedMarkdownViews(), "changed", "source");
-    expect(storage.get("herdr-web-ui:review-markdown-view:changed")).toBe("source");
+    expect(storage.get("ovis:review-markdown-view:changed")).toBe("source");
   });
 
   it("takes an unknown value for the default", () => {
     const storage = memoryStorage();
     withStorage(storage);
-    storage.set("herdr-web-ui:review-markdown-view:changed", "1");
-    storage.set("herdr-web-ui:review-markdown-view:all", "diff");
+    storage.set("ovis:review-markdown-view:changed", "1");
+    storage.set("ovis:review-markdown-view:all", "diff");
     expect(storedMarkdownViews()).toEqual({ changed: "source", all: "preview" });
   });
 

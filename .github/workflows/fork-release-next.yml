@@ -28,8 +28,9 @@ jobs:
     outputs:
       tag: ${{ steps.plan.outputs.tag }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          persist-credentials: false
           fetch-depth: 0
       - uses: ./.github/actions/setup-ci
       - name: Choose the tag
@@ -55,8 +56,9 @@ jobs:
       CHECK_DIR: ${{ github.workspace }}/.ci
       UNIT_TEST_WORKERS: 4
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          persist-credentials: false
           ref: ${{ github.sha }}
       - uses: ./.github/actions/setup-ci
         with:
@@ -78,8 +80,9 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          persist-credentials: false
           fetch-depth: 0
       - uses: ./.github/actions/setup-ci
       - name: Publish the validated commit

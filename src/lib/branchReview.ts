@@ -116,10 +116,10 @@ function listQuery(choice: ReviewChoice): RepoComparison {
   switch (choice.scope) {
     case "uncommitted":
     case "staged":
-      return { scope: choice.scope, base: null, head: null };
+      return { scope: choice.scope, base: null, head: null, comparison: null };
     case "branches": {
       const scope = choice.worktree === null ? "commit" : "uncommitted";
-      return { scope, base: choice.pick.base.trim(), head: choice.pick.compare.trim(), mergeBase: true };
+      return { scope, base: choice.pick.base.trim(), head: choice.pick.compare.trim(), comparison: null, mergeBase: true };
     }
   }
 }
@@ -152,6 +152,9 @@ export function reviewComparison(asked: RepoComparison, answer: RepoDiffFileList
         },
       };
     }
+    // upstream's Branch scope (Files → Changes) is never what the review asks
+    case "branch":
+      return null;
   }
 }
 
@@ -164,15 +167,15 @@ export function diffQueryOf(comparison: ReviewComparison): RepoComparison {
     case "uncommitted": {
       const { worktree } = comparison;
       return worktree === null
-        ? { scope: "uncommitted", base: null, head: null }
-        : { scope: "uncommitted", base: worktree.mergeBase, head: worktree.branch };
+        ? { scope: "uncommitted", base: null, head: null, comparison: null }
+        : { scope: "uncommitted", base: worktree.mergeBase, head: worktree.branch, comparison: null };
     }
     case "workspace":
     case "staged":
-      return { scope: comparison.scope, base: null, head: null };
+      return { scope: comparison.scope, base: null, head: null, comparison: null };
     case "branches": {
       const { head, base, mergeBase } = comparison.branches;
-      return { scope: "commit", base: mergeBase ?? base.hash, head: head.hash };
+      return { scope: "commit", base: mergeBase ?? base.hash, head: head.hash, comparison: null };
     }
   }
 }

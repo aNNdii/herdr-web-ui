@@ -358,7 +358,7 @@ const storedFileComments = (page: Page): Promise<{ lines: number[]; quoteLines: 
   const found: { lines: number[]; quoteLines: string[]; view: string; selected: boolean }[] = [];
   for (let i = 0; i < localStorage.length; i++) {
     const key = localStorage.key(i)!;
-    if (!key.startsWith("herdr-web-ui:block-comments:")) continue;
+    if (!key.startsWith("ovis:block-comments:")) continue;
     for (const comment of (JSON.parse(localStorage.getItem(key)!) as { comments: { kind?: string; lines: number[]; quoteLines: string[]; view: string; selection?: unknown }[] }).comments) {
       if (comment.kind === "file") found.push({ lines: comment.lines, quoteLines: comment.quoteLines, view: comment.view, selected: comment.selection !== undefined });
     }
@@ -370,7 +370,7 @@ const storedFileTexts = (page: Page): Promise<{ lines: number[]; comment: string
   const found: { lines: number[]; comment: string }[] = [];
   for (let i = 0; i < localStorage.length; i++) {
     const key = localStorage.key(i)!;
-    if (!key.startsWith("herdr-web-ui:block-comments:")) continue;
+    if (!key.startsWith("ovis:block-comments:")) continue;
     for (const comment of (JSON.parse(localStorage.getItem(key)!) as { comments: { kind?: string; lines: number[]; comment: string }[] }).comments) {
       if (comment.kind === "file") found.push({ lines: comment.lines, comment: comment.comment });
     }
@@ -610,7 +610,7 @@ const storedPreview = (page: Page): Promise<{ lines: number[]; comment: string; 
   const found: { lines: number[]; comment: string; text: string | null }[] = [];
   for (let i = 0; i < localStorage.length; i++) {
     const key = localStorage.key(i)!;
-    if (!key.startsWith("herdr-web-ui:block-comments:")) continue;
+    if (!key.startsWith("ovis:block-comments:")) continue;
     for (const comment of (JSON.parse(localStorage.getItem(key)!) as { comments: { kind?: string; view?: string; lines: number[]; comment: string; selection?: { text: string } }[] }).comments) {
       if (comment.kind === "file" && comment.view === "preview") found.push({ lines: comment.lines, comment: comment.comment, text: comment.selection?.text ?? null });
     }
@@ -817,8 +817,8 @@ const cases: Record<string, Case> = {
       if (wrap) {
         // Settings → Wrap long lines is the setting `wrapCode`: the page's init script resets the settings on a load, so one more follows it
         await page.addInitScript(() => {
-          const settings = JSON.parse(localStorage.getItem("herdr-web-ui:settings") ?? "{}") as Record<string, unknown>;
-          localStorage.setItem("herdr-web-ui:settings", JSON.stringify({ ...settings, wrapCode: true }));
+          const settings = JSON.parse(localStorage.getItem("ovis:settings") ?? "{}") as Record<string, unknown>;
+          localStorage.setItem("ovis:settings", JSON.stringify({ ...settings, wrapCode: true }));
         });
         await page.reload();
         await page.locator(".conn-live").waitFor();
@@ -2126,7 +2126,7 @@ const cases: Record<string, Case> = {
         // a viewer without a pane (as the app opens a file with no pane selected, App.tsx `viewFile`) takes no comments:
         // no toggle, and a tap on a line opens nothing, whatever the mode
         await toggle.tap();
-        await page.evaluate((path) => history.replaceState({ ...history.state, "herdr-web-ui:file-preview": { path, paneId: null, machineId: "local" } }, ""), join(root, "src", "sync.ts"));
+        await page.evaluate((path) => history.replaceState({ ...history.state, "ovis:file-preview": { path, paneId: null, machineId: "local" } }, ""), join(root, "src", "sync.ts"));
         await page.reload();
         const paneless = page.getByRole("dialog", { name: "sync.ts", exact: true });
         await paneless.locator(`.file-viewer-text .hl-line:nth-of-type(${SYNC_LINES.length})`).waitFor();
@@ -2146,7 +2146,7 @@ const cases: Record<string, Case> = {
     const { page, errors, close } = await open(IPHONE_14_PRO, [
       seededComment("seed-walk-8", realpathSync(join(root, "src", "sync.ts")), "src/sync.ts", "code", SYNC_LINES, 8, 8, "Compare with <=.", 1),
     ]);
-    await page.evaluate(() => localStorage.setItem("herdr-web-ui:settings", JSON.stringify({ language: "en", commentOnSelect: "field", commentMode: true })));
+    await page.evaluate(() => localStorage.setItem("ovis:settings", JSON.stringify({ language: "en", commentOnSelect: "field", commentMode: true })));
     await page.reload();
     await page.locator(".conn-live").waitFor();
     const walk = walkOf(page);
@@ -3009,7 +3009,7 @@ const cases: Record<string, Case> = {
       const other = await page.context().newPage();
       await other.goto(page.url());
       await other.evaluate((wanted) => {
-        for (const key of Object.keys(localStorage).filter((name) => name.startsWith("herdr-web-ui:block-comments:"))) {
+        for (const key of Object.keys(localStorage).filter((name) => name.startsWith("ovis:block-comments:"))) {
           const data = JSON.parse(localStorage.getItem(key)!) as { comments: { comment: string }[] };
           localStorage.setItem(key, JSON.stringify({ ...data, comments: data.comments.filter((comment) => !comment.comment.startsWith(wanted)) }));
         }
@@ -3103,8 +3103,8 @@ const cases: Record<string, Case> = {
     ({ page, errors, close } = await open({ viewport: { width: 1180, height: 800 } }, [selectedComment("seed-moved", 4, 0, 8, "Moves along.", 1)]));
     // the page's init script sets the settings on a load: one more after it, then a load
     await page.addInitScript(() => {
-      const settings = JSON.parse(localStorage.getItem("herdr-web-ui:settings") ?? "{}") as Record<string, unknown>;
-      localStorage.setItem("herdr-web-ui:settings", JSON.stringify({ ...settings, chatWidth: "narrow", commentLayout: "counts" }));
+      const settings = JSON.parse(localStorage.getItem("ovis:settings") ?? "{}") as Record<string, unknown>;
+      localStorage.setItem("ovis:settings", JSON.stringify({ ...settings, chatWidth: "narrow", commentLayout: "counts" }));
     });
     await page.reload();
     await page.locator(".conn-live").waitFor();
@@ -3895,7 +3895,7 @@ const cases: Record<string, Case> = {
       const storedLines = (id: string): Promise<number[] | null> => page.evaluate((wanted) => {
         for (let i = 0; i < localStorage.length; i++) {
           const key = localStorage.key(i)!;
-          if (!key.startsWith("herdr-web-ui:block-comments:")) continue;
+          if (!key.startsWith("ovis:block-comments:")) continue;
           const found = (JSON.parse(localStorage.getItem(key)!) as { comments: { id: string; lines: number[] }[] }).comments.find((c) => c.id === wanted);
           if (found !== undefined) return found.lines;
         }
@@ -4058,7 +4058,7 @@ const cases: Record<string, Case> = {
       await fieldOf(page).fill("Say why a write is skipped, exactly.");
       await page.keyboard.press("Escape");
       await dialog.waitFor({ state: "detached" });
-      await eventually("the edit to be stored", async () => (await page.evaluate(() => Object.keys(localStorage).filter((key) => key.startsWith("herdr-web-ui:block-comments:")).map((key) => localStorage.getItem(key)).join(""))).includes("Say why a write is skipped, exactly."));
+      await eventually("the edit to be stored", async () => (await page.evaluate(() => Object.keys(localStorage).filter((key) => key.startsWith("ovis:block-comments:")).map((key) => localStorage.getItem(key)).join(""))).includes("Say why a write is skipped, exactly."));
       assert.ok(await sync.isVisible(), "the viewer stays");
       await sync.getByRole("button", { name: "Close file", exact: true }).click();
       await sync.waitFor({ state: "detached" });
@@ -4114,7 +4114,7 @@ const cases: Record<string, Case> = {
       const other = await page.context().newPage();
       await other.goto(page.url());
       await other.evaluate(() => {
-        for (const key of Object.keys(localStorage).filter((name) => name.startsWith("herdr-web-ui:block-comments:"))) {
+        for (const key of Object.keys(localStorage).filter((name) => name.startsWith("ovis:block-comments:"))) {
           const data = JSON.parse(localStorage.getItem(key)!) as { comments: { comment: string }[] };
           localStorage.setItem(key, JSON.stringify({ ...data, comments: data.comments.filter((comment) => !comment.comment.startsWith("Say why a write is skipped")) }));
         }
@@ -4144,7 +4144,7 @@ const cases: Record<string, Case> = {
         let count = 0;
         for (let i = 0; i < localStorage.length; i++) {
           const key = localStorage.key(i)!;
-          if (key.startsWith("herdr-web-ui:block-comments:")) count += (JSON.parse(localStorage.getItem(key)!) as { comments: unknown[] }).comments.length;
+          if (key.startsWith("ovis:block-comments:")) count += (JSON.parse(localStorage.getItem(key)!) as { comments: unknown[] }).comments.length;
         }
         return count;
       });
@@ -4349,10 +4349,10 @@ try {
     const page = await context.newPage();
     await page.addInitScript((id) => {
       // a fresh context's settings; a reload keeps what the page changed since (comment mode)
-      if (localStorage.getItem("herdr-web-ui:settings") === null) localStorage.setItem("herdr-web-ui:settings", JSON.stringify({ language: "en", commentOnSelect: "field", ...id.settings }));
-      localStorage.setItem(`herdr-web-ui:view:${id.pane}`, "chat");
+      if (localStorage.getItem("ovis:settings") === null) localStorage.setItem("ovis:settings", JSON.stringify({ language: "en", commentOnSelect: "field", ...id.settings }));
+      localStorage.setItem(`ovis:view:${id.pane}`, "chat");
       // seeded once: a reload keeps what the page has done to them since
-      const key = `herdr-web-ui:block-comments:${id.pane}`;
+      const key = `ovis:block-comments:${id.pane}`;
       if (id.seed.length > 0 && localStorage.getItem(key) === null) localStorage.setItem(key, JSON.stringify({ version: 1, comments: id.seed }));
     }, { pane, seed, settings });
     page.setDefaultTimeout(10_000);

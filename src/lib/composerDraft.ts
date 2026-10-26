@@ -8,7 +8,7 @@ interface InFlight { sent: string; at: number }
  * is still legitimately on its way is never seconded by a second tab.
  */
 export const SEND_LEASE_MS = 120_000;
-const SENDING_PREFIX = "herdr-web-ui:composer-sending:";
+const SENDING_PREFIX = "ovis:composer-sending:";
 export class ComposerDraftStore {
   private drafts = new Map<string, Draft>();
   private saved = new Map<string, string | null>();
@@ -110,6 +110,17 @@ export class ComposerDraftStore {
     this.drafts.set(key, { ...this.read(key), sending: false });
     this.notify();
   }
+  /**
+   * herdr gave the draft's pane a new ID (lib/paneMove.ts): the text goes to the new key. A send of
+   * it on its way, from this tab or another, stays with the ID it went under, and a new key that
+   * holds a draft already keeps its own.
+   */
+  move(from: string, to: string): void {
+    const text = this.read(from).text;
+    if (text === "" || this.own.has(from) || this.inFlight(from) !== null || this.read(to).text !== "") return;
+    this.set(to, text);
+    this.set(from, "");
+  }
   /** Remove only the acknowledged prefix; edits within the sent text stay unsent. */
   settle(key: string, sent: string): { text: string; edited: boolean } {
     this.refresh(key);
@@ -131,7 +142,7 @@ export const composerDrafts = new ComposerDraftStore();
 export function storageEventDraft(key: string | null): string | null {
   if (key === null) return null;
   if (key.startsWith(SENDING_PREFIX)) return key.slice(SENDING_PREFIX.length);
-  return key.startsWith("herdr-web-ui:composer-draft:") ? key : null;
+  return key.startsWith("ovis:composer-draft:") ? key : null;
 }
 if (typeof window !== "undefined") window.addEventListener("storage", (event) => {
   const key = storageEventDraft(event.key);

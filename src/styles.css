@@ -1,5 +1,5 @@
 /*
- * Shell layout + shared primitives for herdr web ui.
+ * Shell layout + shared primitives for Ovis.
  *
  * Every color, size and space is a :root token; DESIGN.md is the human-readable
  * mirror of this block and the two must not drift. Dark is the default theme and
@@ -1882,11 +1882,6 @@ button {
   height: var(--mark-size);
 }
 
-.brand-sub {
-  color: var(--text-dim);
-  font-weight: var(--fw-medium);
-}
-
 /* The selected pane on one line: mark and title, then PC › workspace › folder. The title may
    shorten; the crumb may not: when it does not fit whole beside a whole title it wraps to a second
    line that the height clips, so it is all there or gone, and the title has the row. The full
@@ -2266,11 +2261,12 @@ button {
 }
 
 /* hovered, a danger button keeps its tint and border: the neutral hover fill above would read as
-   the risk going away */
+   the risk going away. Its border draws twice as thick instead, so the pointer still shows */
 @media (hover: hover) {
   .btn-danger:hover:not(:disabled) {
     background: var(--danger-tint);
     border-color: var(--status-blocked);
+    box-shadow: inset 0 0 0 var(--hairline) var(--status-blocked);
   }
 }
 
@@ -2666,6 +2662,12 @@ button {
   opacity: 1;
 }
 
+/* the sidebar's filter offers the rows' names as it is typed in (a datalist, MachineSidebar.tsx): the
+   browser draws its picker arrow beside the field's own clear with an inline style, which only an
+   important rule hides. Two rules: a browser drops a whole list for a pseudo-element it does not know */
+.sidebar-filter-input::-webkit-calendar-picker-indicator { display: none !important; }
+.sidebar-filter-input::-webkit-list-button { display: none !important; }
+
 /* a bordered field shows focus on its own border; the offset ring is for controls without one */
 .input:focus,
 .select:focus,
@@ -2864,6 +2866,7 @@ button {
 
   .pill-version,
   .pill-offline,
+  .pill-stale,
   .brand-name,
   .palette-button,
   .header-desktop-only {
@@ -2887,14 +2890,18 @@ button {
 
   .app-header .view-switch > button {
     position: relative;
+    /* the drawn height: the density's segmented option (--control-h less the track's inset), so
+       the track keeps clear of the bar in the compact density's 46px header as in the 52px one;
+       the expander below grows it to the tap height */
+    --lens-h: calc(var(--control-h) - var(--segmented-inset));
     min-width: var(--touch-target-header);
-    height: 34px;
+    height: var(--lens-h);
   }
 
   .app-header .view-switch > button::before {
     content: "";
     position: absolute;
-    inset: calc((34px - var(--touch-target-header)) / 2) 0;
+    inset: calc((var(--lens-h) - var(--touch-target-header)) / 2) 0;
   }
 }
 

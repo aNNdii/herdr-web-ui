@@ -9,17 +9,18 @@ import type { TelemetrySettings } from "../../shared/telemetry.ts";
 import { mirrorPalette, SHARED_SETTING_KEYS, type SharedSettingKey } from "../../shared/preferences.ts";
 import { createContext, createElement, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useState, type ReactNode } from "react";
 import { blockComments } from "./blockComments.ts";
-import { DEFAULT_THEME, isThemeId, terminalColors, themeColor as themeTableColor, type ThemeId, type ThemeEntry } from "./themes.ts";
+import { DEFAULT_THEME, terminalColors, themeColor as themeTableColor, type ThemeId, type ThemeEntry } from "./themes.ts";
 import { LANGUAGE_SETTINGS, LOCALE_TAGS, resolveLanguage, setCurrentLanguage, type Language, type LanguageSetting } from "./i18n.ts";
 import type { AlertPrefs, DoneAlerts } from "../../shared/notify-policy.ts";
 import { chatFontStack, sanitizeFontFamily } from "./fontFamily.ts";
-import { fontScale, sanitizeUiFontSize } from "./typography.ts";
+import { fontScale, sanitizeUiFontSize, uiFontStack } from "./typography.ts";
 import { sanitizeKeyBarExtras, type KeyBarExtra } from "./keys.ts";
 import { themeFor } from "./themeFor.ts";
 import { DEFAULT_KEY_BAR_ITEMS, migrateKeyBarItems, sanitizeKeyBarItems, type KeyBarItem } from "./keyBar.ts";
+import { applyThemeEntry, DARK_QUERY, readStoredAppearance, resolveTheme, sanitizeAppearance, SETTINGS_STORAGE_KEY, THEMES_STORAGE_KEY, type ResolvedTheme, type ThemeSetting } from "./themeBoot.ts";
 
-export type ThemeSetting = "dark" | "light" | "system";
-export type ResolvedTheme = "dark" | "light";
+export { resolveTheme };
+export type { ResolvedTheme, ThemeSetting };
 export type Density = "compact" | "comfortable";
 /** One line names the workspace; two lines say what its pane is doing, with the workspace under it. */
 export type SidebarRows = "one" | "two";
@@ -97,9 +98,17 @@ export interface Settings {
    *  Stored under this key, not 0.4.1's `terminalOsc52`: settings are saved whole, so a `false` there
    *  was written by any change at all, not chosen, and is ignored. */
   paneClipboard: boolean;
+  /** a mirrored pane (a Windows PC: no terminal attach) whose grid is wider than this screen is drawn
+   *  folded to the screen's width (lib/terminalFold.ts); false draws the grid at its original width, panned
+   *  sideways. Chosen from the pane menu, for this device; null until then: folded on a narrow screen
+   *  (MIRROR_WRAP_QUERY), the original width elsewhere. */
+  terminalMirrorWrap: boolean | null;
   /** a desktop tab out of use for a moment detaches its pane (PaneTerminal's release) and only watches it, so herdr's own
    *  window keeps the pane at its size; paused where the server cannot watch. Off: the tab keeps the pane and its size. */
   releasePaneAway: boolean;
+  /** this device opens the pane herdr's own focus moves to (a `pane-focused` frame from the selected PC), as
+   *  herdr's window does after `herdr tab focus` or a click there; off: only this device's own picks move it */
+  followHerdrFocus: boolean;
   /** chat text size in px (its body text; the rest scales with it); null follows the interface size */
   chatFontSize: number | null;
   /** fonts tried before the UI font in the chat's prose (code stays mono), as a CSS font-family list; "" keeps the UI font */
@@ -107,6 +116,9 @@ export interface Settings {
   /** the interface's body size in px (--fs-md; every other --fs-* scales with it as --ui-scale); null follows the density.
    *  The chat follows it until it has a size of its own; the terminal keeps terminalFontSize */
   uiFontSize: number | null;
+  /** fonts tried before the built-in interface stack (--font-ui, lib/typography.ts), as a CSS font-family list; "" keeps
+   *  the built-in one. Everything set in --font-ui follows, the chat's prose included until it has a font of its own */
+  uiFontFamily: string;
   /** how wide the chat lane may run on a large screen, keyed as data-chat-width in src/styles.css; default follows the pane
    *  (chatLaneWidth, written by lib/chatLane.ts); a narrower pane is never affected */
   chatWidth: ChatWidth;
@@ -114,6 +126,9 @@ export interface Settings {
   enterSends: boolean;
   /** true: a message sent while the agent works goes by itself when the turn ends; false: it waits for Send now */
   autoSendQueued: boolean;
+  /** a New tab with an agent… button in the chat's composer, in a mouse-driven window; off until chosen, so the
+   *  composer's row stays minimal: the tab menu opens the same dialog either way */
+  composerNewTabButton: boolean;
   /** on a touch screen, a chip above the message box offers the prompt the agent suggests next.
    * Not `showSuggestionChip`: that key was on by default until 0.4.9 and is still stored on phones */
   suggestionChip: boolean;
@@ -206,10 +221,12 @@ export type DiffStyle = (typeof DIFF_STYLES)[number];
 
 /** Raw custom text, key combinations and account keys are never copied. Requiring every other
  * Settings field in the projection makes a new field require an explicit collection decision.
- * fileOpen, webLinks and the launch modes are not collected: the telemetry schema (shared/telemetry.ts) does not carry them. */
+ * fileOpen, webLinks, the launch modes, followHerdrFocus, composerNewTabButton, terminalMirrorWrap and the interface font are
+ * not collected: the telemetry schema (shared/telemetry.ts) does not carry them. */
 type TelemetrySourceSettings = Omit<Settings,
-  "keyBarExtras" | "keyBarItems" | "shortcutOverrides" | "terminalFontFamily" | "chatFontFamily"
+  "keyBarExtras" | "keyBarItems" | "shortcutOverrides" | "terminalFontFamily" | "chatFontFamily" | "uiFontFamily"
   | "quickReplies" | "usageOrder" | "usageHidden" | "fileOpen" | "webLinks" | "claudeLaunchMode" | "codexLaunchMode"
+  | "followHerdrFocus" | "composerNewTabButton" | "terminalMirrorWrap"
   // not collected: the composer's suggestion menus have no field in the report's schema
   | "suggestAgents" | "suggestSkills" | "suggestBuiltins"
   // not collected: the fork's comment settings have no field in the report's schema
@@ -293,7 +310,13 @@ export const SETTING_SCOPE = {
   terminalInputMode: "device", keyBarExtras: "device", keyBarItems: "device", shortcutOverrides: "device", density: "device",
   terminalFontSize: "device",
   terminalWheelSpeed: "device", terminalFontFamily: "device", paneClipboard: "device", releasePaneAway: "device",
-  chatFontSize: "device", chatFontFamily: "device", uiFontSize: "device", chatWidth: "device", enterSends: "device",
+  // a phone folds a wide mirror, a desk's window may draw it whole
+  terminalMirrorWrap: "device",
+  // a desk that follows herdr's focus must not move a phone open on another pane
+  followHerdrFocus: "device",
+  chatFontSize: "device", chatFontFamily: "device", uiFontSize: "device", uiFontFamily: "device", chatWidth: "device", enterSends: "device",
+  // a desk's composer button: a phone never shows it
+  composerNewTabButton: "device",
   keepScreenOn: "device", showInstallApp: "device", alertsOn: "device", alertInput: "device", alertDone: "device", alertInApp: "device", alertSound: "device",
   paletteLight: "device", paletteDark: "device", statusIndicators: "device",
   voiceInput: "device", voiceLanguage: "device", voicePolishChat: "device", voicePolishTerminal: "device",
@@ -336,13 +359,17 @@ export const DEFAULT_SETTINGS: Settings = {
   terminalWheelSpeed: 1,
   terminalFontFamily: "",
   paneClipboard: true,
+  terminalMirrorWrap: null,
   releasePaneAway: false,
+  followHerdrFocus: false,
   chatFontSize: null,
   chatFontFamily: "",
   uiFontSize: null,
+  uiFontFamily: "",
   chatWidth: "default",
   enterSends: true,
   autoSendQueued: true,
+  composerNewTabButton: false,
   suggestionChip: false,
   suggestAgents: true,
   suggestSkills: true,
@@ -419,8 +446,6 @@ export function alertPrefs(settings: Settings): AlertPrefs {
   return { input: settings.alertInput, done: settings.alertDone };
 }
 
-const STORAGE_KEY = "herdr-web-ui:settings";
-const THEMES_STORAGE_KEY = "herdr-web-ui:themes";
 export const TERMINAL_FONT_MIN = 10;
 export const TERMINAL_FONT_MAX = 22;
 export const TERMINAL_WHEEL_SPEED_MIN = 1;
@@ -489,16 +514,8 @@ export function chatLaneWidth(paneWidth: number, rootFontPx: number = ROOT_FONT_
 /** Only known keys with the right type survive: a stale or hand-edited record never breaks the UI. */
 export function sanitizeSettings(raw: unknown): Settings {
   const record = typeof raw === "object" && raw !== null ? (raw as Record<string, unknown>) : {};
-  const theme = record["theme"] === "dark" || record["theme"] === "light" || record["theme"] === "system" ? record["theme"] : DEFAULT_SETTINGS.theme;
-  const palette = isThemeId(record["palette"]) ? record["palette"] : "amber";
-  // Absence migrates (a record from before themes wore amber, so it keeps amber); an explicitly
-  // unknown id falls back to the default, not a stale pair.
-  const darkTheme = "darkTheme" in record
-    ? (isThemeId(record["darkTheme"]) ? record["darkTheme"] : DEFAULT_THEME)
-    : theme === "dark" ? palette : isThemeId(record["paletteDark"]) ? record["paletteDark"] : theme === "system" && record["paletteDark"] !== undefined ? "amber" : palette;
-  const lightTheme = "lightTheme" in record
-    ? (isThemeId(record["lightTheme"]) ? record["lightTheme"] : DEFAULT_THEME)
-    : theme === "light" ? palette : isThemeId(record["paletteLight"]) ? record["paletteLight"] : theme === "system" && record["paletteLight"] !== undefined ? "amber" : palette;
+  // the same reading the page's boot script draws its first frame with (themeBoot.ts)
+  const { theme, darkTheme, lightTheme } = sanitizeAppearance(record);
   const density = record["density"];
   const font = record["terminalFontSize"];
   const chatFont = record["chatFontSize"];
@@ -511,7 +528,7 @@ export function sanitizeSettings(raw: unknown): Settings {
     keyBarExtras,
     keyBarItems: sanitizeKeyBarItems(record["keyBarItems"], keyBarFallback),
     shortcutOverrides: sanitizeShortcutOverrides(record["shortcutOverrides"]),
-    theme: theme === "dark" || theme === "light" || theme === "system" ? theme : DEFAULT_SETTINGS.theme,
+    theme,
     density: density === "compact" || density === "comfortable" ? density : DEFAULT_SETTINGS.density,
     sidebarRows: record["sidebarRows"] === "one" || record["sidebarRows"] === "two" ? record["sidebarRows"] : DEFAULT_SETTINGS.sidebarRows,
     agentOrder: record["agentOrder"] === "workspace" || record["agentOrder"] === "activity" ? record["agentOrder"] : DEFAULT_SETTINGS.agentOrder,
@@ -531,12 +548,16 @@ export function sanitizeSettings(raw: unknown): Settings {
       : DEFAULT_SETTINGS.chatFontSize,
     terminalFontFamily: sanitizeFontFamily(record["terminalFontFamily"]),
     uiFontSize: sanitizeUiFontSize(record["uiFontSize"]),
+    uiFontFamily: sanitizeFontFamily(record["uiFontFamily"]),
     paneClipboard: typeof record["paneClipboard"] === "boolean" ? record["paneClipboard"] : DEFAULT_SETTINGS.paneClipboard,
+    terminalMirrorWrap: typeof record["terminalMirrorWrap"] === "boolean" ? record["terminalMirrorWrap"] : null,
     releasePaneAway: typeof record["releasePaneAway"] === "boolean" ? record["releasePaneAway"] : DEFAULT_SETTINGS.releasePaneAway,
+    followHerdrFocus: typeof record["followHerdrFocus"] === "boolean" ? record["followHerdrFocus"] : DEFAULT_SETTINGS.followHerdrFocus,
     chatFontFamily: sanitizeFontFamily(record["chatFontFamily"]),
     chatWidth: CHAT_WIDTHS.includes(record["chatWidth"] as ChatWidth) ? record["chatWidth"] as ChatWidth : DEFAULT_SETTINGS.chatWidth,
     enterSends: typeof record["enterSends"] === "boolean" ? record["enterSends"] : DEFAULT_SETTINGS.enterSends,
     autoSendQueued: typeof record["autoSendQueued"] === "boolean" ? record["autoSendQueued"] : DEFAULT_SETTINGS.autoSendQueued,
+    composerNewTabButton: typeof record["composerNewTabButton"] === "boolean" ? record["composerNewTabButton"] : DEFAULT_SETTINGS.composerNewTabButton,
     suggestionChip: typeof record["suggestionChip"] === "boolean" ? record["suggestionChip"] : DEFAULT_SETTINGS.suggestionChip,
     suggestAgents: typeof record["suggestAgents"] === "boolean" ? record["suggestAgents"] : DEFAULT_SETTINGS.suggestAgents,
     suggestSkills: typeof record["suggestSkills"] === "boolean" ? record["suggestSkills"] : DEFAULT_SETTINGS.suggestSkills,
@@ -584,22 +605,41 @@ export function sanitizeSettings(raw: unknown): Settings {
   };
 }
 
-export function loadSettings(): Settings {
-  let settings = DEFAULT_SETTINGS;
+/**
+ * Settings → Appearance → Interface font is kept in a key of its own, not in ovis:settings: a tab
+ * still on an older version rewrites that record whole on its next save and would erase a field it
+ * does not know (docs/development.md, Stored-format changes).
+ */
+export const UI_FONT_STORAGE_KEY = "ovis:ui-font";
+
+function readUiFontFamily(): string {
   try {
-    const raw = window.localStorage.getItem(STORAGE_KEY);
-    settings = raw === null ? DEFAULT_SETTINGS : sanitizeSettings(JSON.parse(raw));
+    const raw = window.localStorage.getItem(UI_FONT_STORAGE_KEY);
+    return raw === null ? "" : sanitizeFontFamily(JSON.parse(raw));
   } catch {
-    /* a damaged main record does not hide the protected theme choice */
+    return "";
   }
+}
+
+/** The pane menu's Wrap to screen / Original width, kept in a key of its own for the same reason: null until chosen. */
+export const MIRROR_WRAP_STORAGE_KEY = "ovis:mirror-wrap";
+
+function readMirrorWrap(): boolean | null {
   try {
-    const raw = window.localStorage.getItem(THEMES_STORAGE_KEY);
-    const themes: unknown = raw === null ? null : JSON.parse(raw);
-    if (typeof themes === "object" && themes !== null && "darkTheme" in themes && "lightTheme" in themes) {
-      return sanitizeSettings({ ...settings, darkTheme: themes.darkTheme, lightTheme: themes.lightTheme });
-    }
-  } catch { /* denied or damaged storage: keep the main record */ }
-  return settings;
+    const raw = window.localStorage.getItem(MIRROR_WRAP_STORAGE_KEY);
+    const value: unknown = raw === null ? null : JSON.parse(raw);
+    return typeof value === "boolean" ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+export function loadSettings(): Settings {
+  // read as the page's boot script reads them (themeBoot.ts), so React starts on the row the first frame showed
+  const stored = readStoredAppearance(() => window.localStorage);
+  const settings = stored.main === null ? DEFAULT_SETTINGS : sanitizeSettings(stored.main.value);
+  const merged = stored.themes === null ? settings : sanitizeSettings({ ...settings, ...stored.themes });
+  return { ...merged, uiFontFamily: readUiFontFamily(), terminalMirrorWrap: readMirrorWrap() };
 }
 
 export function saveSettings(settings: Settings): void {
@@ -609,17 +649,13 @@ export function saveSettings(settings: Settings): void {
       darkTheme: mirrored.darkTheme, lightTheme: mirrored.lightTheme,
       mirror: { palette: mirrored.palette, paletteDark: mirrored.paletteDark, paletteLight: mirrored.paletteLight },
     }));
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(mirrored));
+    const { uiFontFamily, terminalMirrorWrap, ...main } = mirrored;
+    window.localStorage.setItem(UI_FONT_STORAGE_KEY, JSON.stringify(uiFontFamily));
+    window.localStorage.setItem(MIRROR_WRAP_STORAGE_KEY, JSON.stringify(terminalMirrorWrap));
+    window.localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(main));
   } catch {
     /* private mode: preferences last for the session */
   }
-}
-
-const DARK_QUERY = "(prefers-color-scheme: dark)";
-
-export function resolveTheme(setting: ThemeSetting): ResolvedTheme {
-  if (setting !== "system") return setting;
-  return typeof window !== "undefined" && window.matchMedia?.(DARK_QUERY).matches === false ? "light" : "dark";
 }
 
 type TerminalColors = { background: string; foreground: string; cursor: string; selectionBackground: string };
@@ -638,9 +674,12 @@ export function applyToDocument(settings: Settings, entry: ThemeEntry, language:
   // only when it changes: Chromium restyles the whole document on any write of `lang`, the same value too (about 0.3 s
   // with a 20 000-line file open), and this runs on every settings change (the code view's comment mode is one)
   if (root.lang !== LOCALE_TAGS[language]) root.lang = LOCALE_TAGS[language];
-  root.dataset["theme"] = entry.mode;
+  applyThemeEntry(root, entry);
+  // the boot script's background (src/theme-bootstrap.ts) holds the row's surface until the stylesheet's theme
+  // blocks own it; a stylesheet that never loaded leaves the page to it, kept on the row drawn now
+  if (getComputedStyle(root).getPropertyValue("--bg").trim() !== "") root.style.removeProperty("background-color");
+  else root.style.backgroundColor = entry.bg;
   root.dataset["density"] = settings.density;
-  root.dataset["palette"] = entry.id;
   root.dataset["chatWidth"] = settings.chatWidth;
   // src/components/AgentMark.css keys the mono logos on it
   root.dataset["marks"] = settings.agentMarks;
@@ -650,12 +689,14 @@ export function applyToDocument(settings: Settings, entry: ThemeEntry, language:
   // ChatView.css scales its type tokens by this (the chat's and a Markdown preview's): the chat's size over the
   // interface's, so a chosen chat size is drawn as itself whatever the interface size, and an unchosen one follows it
   root.style.setProperty("--chat-scale", String(fontScale(chatFontSize(settings), uiPx)));
+  // Settings → Appearance → Interface font, written as the token itself: the chosen list in front of the built-in stack
+  const uiFont = uiFontStack(settings.uiFontFamily, language);
+  if (uiFont === null) root.style.removeProperty("--font-ui");
+  else root.style.setProperty("--font-ui", uiFont);
   // ChatView.css sets the transcript's and a Markdown preview's prose in this, and falls back to --font-ui without it
   const chatFont = chatFontStack(settings.chatFontFamily);
   if (chatFont === null) root.style.removeProperty("--font-chat");
   else root.style.setProperty("--font-chat", chatFont);
-  root.style.colorScheme = entry.mode;
-  document.querySelector('meta[name="theme-color"]')?.setAttribute("content", themeColor(entry.mode, entry.id));
 }
 
 interface SettingsContextValue {
@@ -681,6 +722,16 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
   });
   useLayoutEffect(() => blockComments.setEnabled(settings.comments), [settings.comments]);
   const [systemDark, setSystemDark] = useState(() => resolveTheme("system") === "dark");
+
+  useEffect(() => {
+    const onStorage = (event: StorageEvent): void => {
+      if (event.storageArea !== window.localStorage || (event.key !== SETTINGS_STORAGE_KEY && event.key !== null)) return;
+      const { shortcutOverrides } = loadSettings();
+      setSettings((current) => ({ ...current, shortcutOverrides }));
+    };
+    window.addEventListener("storage", onStorage);
+    return () => window.removeEventListener("storage", onStorage);
+  }, []);
 
   useEffect(() => {
     const query = window.matchMedia?.(DARK_QUERY);
@@ -726,7 +777,7 @@ export function useSettings(): SettingsContextValue {
   return value;
 }
 
-export const PANE_VIEW_KEY_PREFIX = "herdr-web-ui:view:";
+export const PANE_VIEW_KEY_PREFIX = "ovis:view:";
 
 /** Forgets every pane's own lens on this device, so each opens in the default one again. */
 export function forgetPaneViews(given?: Pick<Storage, "length" | "key" | "removeItem">): number {
