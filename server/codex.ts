@@ -8,13 +8,14 @@ import nodePath, { isAbsolute, join, type PlatformPath } from "node:path";
 import type { ConversationPart, ConversationTurn, HerdrPane } from "../shared/protocol.ts";
 import { patchFiles, patchText } from "../shared/patch.ts";
 import { processStartedAt, processStartLowerBound } from "./process-start.ts";
-import { codexImageParts } from "./codex-images.ts";
+import { CODEX_TOOL_IMAGE_REF, codexImageParts, codexOutputPictures } from "./codex-images.ts";
 import { codexReadCall, codexReadSkills, selectedSkill } from "./skill-activity.ts";
 import { trimOutput } from "./tool-output.ts";
 import type { TranscriptParser } from "./transcript-records.ts";
 import type { AgentInfo } from "../shared/herdr-api.generated.ts";
 import { agentGet, paneProcessInfo, paneRead, sessionSnapshot } from "./herdr/client.ts";
 import { resolveAgent } from "./pane-context.ts";
+import { codexStartScreenUnused } from "./start-screen.ts";
 
 type RecordValue = Record<string, unknown>;
 const record = (value: unknown): RecordValue => value !== null && typeof value === "object" && !Array.isArray(value) ? value as RecordValue : {};
@@ -323,6 +324,11 @@ export function createCodexTranscriptParser(state: CodexParseState = { turns: []
         const output = contentText(payload.output);
         trimOutput(tool, output, string(payload.call_id));
         if (codexCallFailed(output)) tool.error = true;
+        // the pictures it returned (view_image, an image generation, a screenshot a command read), named by
+        // the call this output answers and fetched only when shown; the generation event's copy is not read
+        const pictures = codexOutputPictures(payload.output).map(({ mediaType }, index) => ({ media_type: mediaType, ref: `codex-tool:${string(payload.call_id)}:${index}` }))
+          .filter(({ ref }) => CODEX_TOOL_IMAGE_REF.test(ref));
+        if (pictures.length > 0) tool.images = pictures;
         if (tool.skill) tool.skill.status = tool.error ? "failed" : "loaded";
         // done, outcome unknown: Codex records no failure flag, and the output text is no verdict
         delete tool.state;
@@ -387,20 +393,56 @@ async function readProcessCodexHome(pid: number): Promise<string | null> {
     if (process.platform === "linux") {
       home = (await readFile(`/proc/${pid}/environ`, "utf8")).split("\0").find((entry) => entry.startsWith("CODEX_HOME="))?.slice(11) || null;
     } else if (process.platform === "darwin") {
-      const child = Bun.spawn(["/bin/ps", "-E", "-ww", "-p", String(pid), "-o", "command="], { stdout: "pipe", stderr: "ignore" });
-      const timer = setTimeout(() => child.kill(), 3000);
-      try {
-        // the environment follows the arguments, space-separated: the last match is the
-        // environment's, and its value runs to the next `NAME=` (a path may hold spaces).
-        // ponytail: a value holding ` NAME=` is cut there, and with none in the environment an
-        // argument spelled CODEX_HOME=/path would be taken. /proc on Linux has neither problem
-        const text = await new Response(child.stdout).text();
-        await child.exited;
-        home = codexHomeInPsLine(text);
-      } finally { clearTimeout(timer); }
+      // the environment follows the arguments, space-separated: the last match is the
+      // environment's, and its value runs to the next `NAME=` (a path may hold spaces).
+      // ponytail: a value holding ` NAME=` is cut there, and with none in the environment an
+      // argument spelled CODEX_HOME=/path would be taken. /proc on Linux has neither problem
+      home = codexHomeInPsLine((await psEnvironmentLine(pid)) ?? "");
     }
   } catch { home = null; }
   return home !== null && (await isCodexHomeDir(home)) ? home : null;
+}
+
+/** A process's `ps -E` line on macOS: its arguments, then its environment when it is this user's. Null when ps fails. */
+async function psEnvironmentLine(pid: number): Promise<string | null> {
+  const child = Bun.spawn(["/bin/ps", "-E", "-ww", "-p", String(pid), "-o", "command="], { stdout: "pipe", stderr: "ignore" });
+  const timer = setTimeout(() => child.kill(), 3000);
+  try {
+    const text = await new Response(child.stdout).text();
+    return (await child.exited) === 0 ? text : null;
+  } finally { clearTimeout(timer); }
+}
+
+/**
+ * The store a process's Codex writes to, only as far as its environment tells it for certain
+ * (#1191): the CODEX_HOME directory it names, else .codex in the HOME it names, or null. Null
+ * covers an environment that cannot be read (another user's process, a gone one, Windows), a
+ * CODEX_HOME that is relative or no directory (Codex places one itself, while paneCodexHome falls
+ * back to the default store for it), no HOME or a relative one, and on macOS a command line that
+ * spells CODEX_HOME= or HOME= itself, which `ps -E` cannot tell from the environment. Never this
+ * server's own home: the pane's Codex may run with another HOME.
+ */
+async function certainProcessCodexHome(pid: number, argv: readonly string[]): Promise<string | null> {
+  let named: string | null = null;
+  let home: string | null = null;
+  try {
+    if (process.platform === "linux") {
+      const environment = (await readFile(`/proc/${pid}/environ`, "utf8")).split("\0");
+      named = environment.find((entry) => entry.startsWith("CODEX_HOME="))?.slice(11) ?? "";
+      home = environment.find((entry) => entry.startsWith("HOME="))?.slice(5) ?? null;
+    } else if (process.platform === "darwin" && !argv.some((word) => word.includes("HOME="))) {
+      // ps draws another user's process without its environment, and then names no HOME either
+      const line = await psEnvironmentLine(pid);
+      if (line !== null) {
+        named = codexHomeInPsLine(line) ?? "";
+        home = [...line.matchAll(/(?:^|\s)HOME=(.*?)(?=\s+[A-Za-z_][A-Za-z0-9_]*=|\s*$)/g)].at(-1)?.[1] ?? null;
+      }
+    }
+  } catch { return null; }
+  if (named === null) return null;
+  // Codex reads an empty CODEX_HOME as none, and then keeps its store in the HOME it runs with
+  if (named === "") return home !== null && isAbsolute(home) ? join(home, ".codex") : null;
+  return (await isCodexHomeDir(named)) ? named : null;
 }
 
 /** An absolute path to a directory that is there: `ps` cannot tell an argument from the environment, a store can be checked. */
@@ -1331,6 +1373,66 @@ function titledCandidate(agent: Pick<AgentInfo, "terminal_title" | "terminal_tit
   return rows.length === 1 ? codexRolloutPath(rows[0]!.rollout_path, home) : null;
 }
 
+/**
+ * The history id of the conversation a Codex started in a terminal has not begun, or null unless
+ * every fact says it has begun none (#1191). This server did not start it (launched-agents.ts),
+ * herdr reports no session for it, and nothing was matched to it; what tells instead:
+ *
+ * - its screen is its start screen with nothing said yet (codexStartScreenUnused);
+ * - its processes were started on no conversation: no `resume` or `fork` on their command lines,
+ *   since the picker either opens shows a conversation that exists;
+ * - its store holds no interactive thread of its folder with a first message, begun or written
+ *   since it started (no later than its start: processStartLowerBound), so no first message of
+ *   its own and no conversation it resumed and wrote to. One another pane began there since
+ *   counts too: which pane's it is cannot be told here. A thread with no message yet holds no
+ *   conversation, whoever made it. That store is an explicit one (`configured`), else the one
+ *   its own environment names for certain (certainProcessCodexHome), on every platform.
+ *
+ * A start time, a home or a store that cannot be read says nothing, and then neither does this. The id
+ * names the pane and its processes, never a time: a start read on macOS moves between reads.
+ */
+export async function codexFreshSession(paneId: string, cwds: readonly string[], configured: string | undefined, screen: string): Promise<string | null> {
+  if (!codexStartScreenUnused(screen)) return null;
+  const { list, key } = await codexProcessesOf(paneId).catch(() => ({ list: [], key: "" }));
+  if (list.length === 0 || list.some((codex) => (codex.argv ?? []).some((word) => word === "resume" || word === "fork"))) return null;
+  // an explicit store wins, as in paneCodexHome. Else every Codex's home must be placed for
+  // certain, and the first decides: one paneCodexHome cannot place (a relative CODEX_HOME) falls
+  // back to the default store, where this pane's conversation is not
+  let home = configured;
+  if (home === undefined) {
+    const homes = await Promise.all(list.map((codex) => certainProcessCodexHome(codex.pid, codex.argv ?? [])));
+    const [first] = homes;
+    if (first == null || homes.some((known) => known === null)) return null;
+    home = first;
+  }
+  const starts = list.map((codex) => processStartLowerBound(codex.pid));
+  if (starts.some((started) => started === null)) return null;
+  // whole seconds, and one more: a start read anew may land in the second before
+  const since = Math.floor(Math.min(...(starts as number[])) / 1000) - 1;
+  const store = join(home, "state_5.sqlite");
+  let db: Database | undefined;
+  try {
+    // a store Codex has not made yet holds no thread
+    if (statSync(store, { throwIfNoEntry: false }) !== undefined) {
+      db = new Database(store, { readonly: true, create: false });
+      // each folder the pane names (its shell's, its foreground process's), as given and as it
+      // resolves: Codex may have stored any of them
+      const named = cwds.filter((cwd) => cwd.length > 0);
+      if (named.length === 0) return null;
+      const folders = [...new Set(named.flatMap((cwd) => {
+        try { return [cwd, realpathSync(cwd)]; } catch { return [cwd]; }
+      }))].map((folder) => storedCwdCondition(folder));
+      const said = db.query("SELECT 1 FROM pragma_table_info('threads') WHERE name = 'first_user_message'").get() !== null ? " AND COALESCE(first_user_message, '') <> ''" : "";
+      const begun = db.query<unknown, (string | number)[]>(
+        `SELECT 1 FROM threads WHERE (${folders.map((folder) => folder.where).join(" OR ")}) AND archived = 0 AND agent_role IS NULL${interactive(db)}${said} AND max(COALESCE(created_at, 0), COALESCE(updated_at, 0)) >= ? LIMIT 1`,
+      ).get(...folders.flatMap((folder) => folder.params), since);
+      if (begun !== null) return null;
+    }
+  } catch { return null; }
+  finally { db?.close(); }
+  return `unwritten:codex:${paneId}:${key}`;
+}
+
 /** `codex resume <thread>`: the thread a TUI was started on, straight from its command line. */
 export function resumedThread(argvs: readonly (readonly string[])[]): string | null {
   for (const argv of argvs) {
@@ -1399,33 +1501,40 @@ async function heldThreadIds(home: string): Promise<Map<string, { loadedAt: numb
     } catch { /* unlocked and removed meanwhile */ }
   }
   if (named.size === 0) return held;
-  let table: string;
-  try { table = readFileSync("/proc/locks", "utf8"); } catch { return null; }
-  // the lock files each holder has open: inode numbers are only unique within a file system
-  const openBy = new Map<string, Set<string>>();
-  for (const line of table.split("\n")) {
-    // a held write flock: one a process waits for reads "N: -> FLOCK ..."
-    const lock = /^\d+:\s+FLOCK\s+\S+\s+WRITE\s+(\d+)\s+[0-9a-f]+:[0-9a-f]+:(\d+)\s/.exec(line);
-    const name = lock ? named.get(lock[2]!) : undefined;
-    if (lock === null || name === undefined) continue;
-    let names = openBy.get(lock[1]!);
-    if (names === undefined) {
-      names = new Set();
-      openBy.set(lock[1]!, names);
-      try {
-        for (const descriptor of readdirSync(`/proc/${lock[1]}/fd`)) {
-          try {
-            const target = readlinkSync(`/proc/${lock[1]}/fd/${descriptor}`);
-            if (nodePath.dirname(target) === folder) names.add(nodePath.basename(target));
-          } catch { /* closed while listing */ }
+  // the kernel hands /proc/locks out a page at a time, and a lock any process takes or drops between
+  // two pages moves the lines after it: one read may leave a held lock out (or show one twice). So a
+  // lock file no read has shown held is looked for in two more reads before it counts as nobody's
+  const unseen = () => [...named.values()].some((name) => !held.has(name.slice(0, -".lock".length).toLowerCase()));
+  for (let read = 0; read < 3 && unseen(); read++) {
+    let table: string;
+    try { table = readFileSync("/proc/locks", "utf8"); } catch { return null; }
+    // the lock files each holder has open, listed again for each read: a holder may have opened
+    // another since the last one. Inode numbers are only unique within a file system
+    const openBy = new Map<string, Set<string>>();
+    for (const line of table.split("\n")) {
+      // a held write flock: one a process waits for reads "N: -> FLOCK ..."
+      const lock = /^\d+:\s+FLOCK\s+\S+\s+WRITE\s+(\d+)\s+[0-9a-f]+:[0-9a-f]+:(\d+)\s/.exec(line);
+      const name = lock ? named.get(lock[2]!) : undefined;
+      if (lock === null || name === undefined) continue;
+      let names = openBy.get(lock[1]!);
+      if (names === undefined) {
+        names = new Set();
+        openBy.set(lock[1]!, names);
+        try {
+          for (const descriptor of readdirSync(`/proc/${lock[1]}/fd`)) {
+            try {
+              const target = readlinkSync(`/proc/${lock[1]}/fd/${descriptor}`);
+              if (nodePath.dirname(target) === folder) names.add(nodePath.basename(target));
+            } catch { /* closed while listing */ }
+          }
+        } catch (error) {
+          // gone, and its lock with it; another user's process: what it holds cannot be told, and a
+          // thread left out could be the one a pane shows
+          if ((error as NodeJS.ErrnoException).code !== "ENOENT") return null;
         }
-      } catch (error) {
-        // gone, and its lock with it; another user's process: what it holds cannot be told, and a
-        // thread left out could be the one a pane shows
-        if ((error as NodeJS.ErrnoException).code !== "ENOENT") return null;
       }
+      if (names.has(name)) hold(name.slice(0, -".lock".length).toLowerCase(), born.get(name) ?? 0, execRun(readArgv(lock[1]!)));
     }
-    if (names.has(name)) hold(name.slice(0, -".lock".length).toLowerCase(), born.get(name) ?? 0, execRun(readArgv(lock[1]!)));
   }
   return held;
 }

@@ -12,8 +12,10 @@
 import type { AgentStatus, CommandForm, SlashCommand } from "../../shared/protocol.ts";
 import { skillSyntax } from "../../shared/skill-syntax.ts";
 import { knownStatus, STATUS_WORD } from "./status.ts";
-import { t } from "./i18n.ts";
+import { t, type Vars } from "./i18n.ts";
 import type { ActiveTrigger } from "./mentions.ts";
+// fork: submitNotTyped below also reads a result's `typed: false`
+import { submitNotTyped as untypedCode } from "../../shared/submit-outcome.ts";
 
 /** This cap keeps one composer message inside a single WS frame. */
 export const MAX_COMPOSER_CHARS = 20_000;
@@ -65,32 +67,14 @@ export function insertNote(code: string, message: string): string {
 }
 
 /**
- * Refusal codes a bridge that does not send `typed` uses only before anything reached the pane: a
- * remote PC's bridge comes from upstream's release bundle (server/remote-bundle.ts), which has no
- * `typed`, so this is upstream's own submitNotTyped list. Every refusal of this bridge's own, and of
- * the socket's (src/lib/ws.ts), says `typed: false` instead of joining it.
- */
-const UNTYPED_REFUSAL_CODES: readonly string[] = Object.freeze(["agent_blocked", "read_only", "submit_timeout",
-  "agent_not_ready", "pending_input_unsupported", "invalid_delivery", "invalid_submit_text",
-  "invalid_submit_id", "pending_limit", "pending_not_found", "pending_busy", "invalid_pending_action", "pending_target_changed", "pending_lease_lost", "not_attached",
-  "input_not_ready", "attach_held", "pane_not_found", "retired_submit_id", "input_draft",
-  // Claude Code's rewind dialog was on screen: nothing went into it
-  "rewind_dialog_open",
-  // refused by this view while the terminal holds input (PaneTerminal), before anything was sent
-  "held_input",
-  // the connection dropped before the request's frame left the browser (HerdrSocket)
-  "not_transmitted",
-  // the wait for the bridge's snapshot ended before it said what the bridge takes: nothing left (HerdrSocket)
-  "capabilities_unknown"]);
-
-/**
  * Nothing of a refused message reached the pane: the result says so (`typed: false`), or, from a
- * bridge that does not say, its code is one such a bridge used only before typing. A bare code is
- * judged by the code alone.
+ * bridge that does not say, its code is one such a bridge used only before typing
+ * (shared/submit-outcome.ts). A bare code is judged by the code alone. Every refusal of this
+ * bridge's own, and of the socket's (src/lib/ws.ts), says `typed: false`.
  */
 export function submitNotTyped(result: string | { code: string; typed?: false }): boolean {
-  if (typeof result === "string") return UNTYPED_REFUSAL_CODES.includes(result);
-  return result.typed === false || UNTYPED_REFUSAL_CODES.includes(result.code);
+  if (typeof result === "string") return untypedCode(result);
+  return result.typed === false || untypedCode(result.code);
 }
 
 /**
@@ -129,6 +113,28 @@ export function sameMessage(a: string, b: string): boolean {
   return bare(a) !== "" && bare(a) === bare(b);
 }
 
+/** Agent names in this server refusal are JSON strings, so custom names cannot confuse the fields. */
+export function openCodeAgentChange(message: string): { from: string; to: string } | null {
+  const match = /^Tab switched OpenCode's agent from ("(?:[^"\\]|\\.)*") to ("(?:[^"\\]|\\.)*")\. Nothing more was typed\.$/u.exec(message);
+  if (!match) return null;
+  try {
+    const from: unknown = JSON.parse(match[1]!);
+    const to: unknown = JSON.parse(match[2]!);
+    return typeof from === "string" && typeof to === "string" ? { from, to } : null;
+  } catch {
+    return null;
+  }
+}
+
+/** The note for OpenCode's two Tab refusals (server/opencode-skill-attach.ts), on a composer or an uncertain queued row; null for any other refusal. */
+export function openCodeRefusalNote(code: string, message: string, tt: (text: string, vars?: Vars) => string = t): string | null {
+  if (code !== "submit_changed") return null;
+  const changed = openCodeAgentChange(message);
+  if (changed) return tt("Tab switched OpenCode's agent from {from} to {to}. Nothing more was typed. Check the terminal before sending again.", changed);
+  if (message === "OpenCode attached another skill. Your chat text stayed here. Check the terminal before sending again.") return tt("OpenCode attached another skill. Your chat text stayed here. Check the terminal before sending again.");
+  return null;
+}
+
 /**
  * Why a composer message did not go (SubmitResult's code): the composer keeps the text and says this.
  * `agent`: the pane's agent, which names the input an input_draft refusal is about (Claude Code's when unknown).
@@ -136,6 +142,8 @@ export function sameMessage(a: string, b: string): boolean {
  * agent is why it did not go; without it, those codes read as the bridge's own message.
  */
 export function submitNote(code: string, message: string, agent?: string | null, agentOnly = false): string {
+  const opencode = openCodeRefusalNote(code, message);
+  if (opencode !== null) return opencode;
   if (code === "submit_partial") return t("Not confirmed: the terminal draft was cleared or may have changed. Your message stayed here. Check the terminal before sending again.");
   if (code === "agent_blocked") return t("Not sent: the agent is waiting for an answer in the terminal. Answer it first.");
   if (code === "read_only") return t("Not sent: this view only watches the pane.");
@@ -153,6 +161,8 @@ export function submitNote(code: string, message: string, agent?: string | null,
   if (code === "not_transmitted") return t("Not sent: the connection dropped before this message left. Send it again.");
   if (code === "capabilities_unknown") return t("Not sent: this PC has not said yet what it supports. Send it again.");
   if (code === "first_message_unattended") return t("Not sent: the page that started this agent left before it was ready. Send it now or discard it.");
+  if (code === "first_message_launch_ended") return t("Not sent: the agent started for this message has ended. Review the message before sending it.");
+  if (code === "pending_target_changed") return t("Not sent: the pane's terminal or agent session changed. Review the message before sending it again.");
   if (code === "disconnected" || code === "timeout") return t("Not confirmed: the pane did not confirm this message. Check the terminal before sending it again.");
   return t("Not sent: {message}", { message });
 }
@@ -320,6 +330,34 @@ export function composerSendShown(state: { working: boolean; text: string }): bo
 /** While an agent works, Send accepts a follow-up for its next turn. A shell sends immediately. */
 export function composerDelivery(agent: string | null, status?: AgentStatus): "queue" | "immediate" {
   return agent !== null && status === "working" ? "queue" : "immediate";
+}
+
+/**
+ * Whether Claude can take a message now, whatever herdr reports. herdr's Claude manifest reads a
+ * braille spinner in the window title (osc_title_working, 1100) and "Waiting for N background agents
+ * to finish" (background_agents_working, 965) as working, both above the idle prompt box
+ * (live_prompt_box, 950): a main agent that ended its turn while a subagent it started still runs is
+ * reported as working, and the composer holds the message. Override only on positive evidence:
+ * an empty input box and the waiting line, with no running-turn marker anywhere above the box.
+ * `lines` must be logical screen lines (lib/inputRow.ts readScreenLines), not physical rows.
+ */
+export function claudeMainAtRest(row: string | null, lines: readonly string[]): boolean {
+  if (row !== "ready") return false;
+  const rule = (line: string): boolean => /^[─━]{8,}$|^─{2,}\s.*─$/u.test(line.trim());
+  let lower = lines.length - 1;
+  while (lower >= 0 && !rule(lines[lower]!)) lower--;
+  if (lower < 0) return false;
+  let upper = lower - 1;
+  while (upper >= 0 && !rule(lines[upper]!)) upper--;
+  if (upper < 0) return false;
+  const above = lines.slice(0, upper);
+  if (!above.some((line) => /^\s*Waiting for [1-9]\d* background agents? to finish\s*$/u.test(line))) return false;
+  for (const line of above) {
+    if (/esc to (?:interrupt|cancel)/i.test(line)) return false;
+    if (/^\s*(?:[*·✢✳✶✻✽●◐◓◑◒]\s+)?Compacting\b/iu.test(line)) return false;
+    if (/^\s*[*·✢✳✶✻✽●◐◓◑◒]\s+\S.*(?:…|\.{3}|\(\d+(?:\.\d+)?[smh](?:\s|[)·]))/u.test(line)) return false;
+  }
+  return true;
 }
 
 /**

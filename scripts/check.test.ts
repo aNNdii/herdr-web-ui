@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "bun:test";
+import { afterEach, describe, expect, it, spyOn } from "bun:test";
 import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { spawn, spawnSync } from "node:child_process";
 import { createServer } from "node:net";
@@ -19,10 +19,17 @@ const scratch = (): string => { const dir = mkdtempSync(join(scratchBase, "hwc-"
  * nothing listens on, held for a moment to make sure, then given back. The queue's ports too:
  * acquire() asks them, and a run waiting there (another runner's test, or a real check on a CI host)
  * would come ahead of the test's run.
+ *
+ * Below 32768, under the ports a system hands out on its own by default: Linux gives a listener on
+ * port 0 or an outgoing connection one from 32768 up (ip_local_port_range), macOS and Windows from
+ * 49152 up. One
+ * of those taking a ticket port after the look above (another test file's server, on a CI host
+ * running files side by side) would take the place the test expects a run to take, and, listening
+ * without a word, hold every ticket lookup for the whole lookup time (#1940, #1939).
  */
 function freePortRange(count: number): number {
   for (let attempt = 0; attempt < 50; attempt++) {
-    const base = 20_000 + Math.floor(Math.random() * 30_000);
+    const base = 20_000 + Math.floor(Math.random() * 12_000);
     const held: { stop: (force?: boolean) => void }[] = [];
     try {
       for (let index = 0; base + index <= ticketPorts(base, count, count).at(-1)!; index++) held.push(Bun.listen({ hostname: "127.0.0.1", port: base + index, socket: { data() {} } }));
@@ -655,13 +662,19 @@ describe("slots", () => {
     const holder = await lock(base, 111, "/a");
     const desk = await lock(ticketDesk(base, 1, 3), 501, "/other");
     let clock = 1_000;
+    // The desk is waited for on the monotonic clock: here one of the test's own, a thirtieth of the
+    // desk's wait further on at every look, so a run that waits out the desk's own wait shows by the
+    // clock and not by how fast this host is (#1939).
+    let monotonic = 0;
+    const looks = spyOn(performance, "now").mockImplementation(() => (monotonic += DESK_WAIT_MS / 30));
     try {
-      const started = performance.now();
       // a wait of 1 ms, far shorter than the desk's own: the desk stays taken, and the run gives up within its wait
       const held = await acquireWaiting({ slots: 1, scan: 3, base, pid: 222, checkout: "/b" }, { waitMs: 1, now: () => clock, sleep: async (ms) => { clock += ms + 1; } });
       expect(held).toMatchObject({ refused: "busy" });
-      expect(performance.now() - started).toBeLessThan(DESK_WAIT_MS / 2);
+      expect(looks).toHaveBeenCalled();
+      expect(monotonic).toBeLessThan(DESK_WAIT_MS / 2);
     } finally {
+      looks.mockRestore();
       release(desk);
       release(holder);
     }
@@ -1490,4 +1503,46 @@ describe("check CLI", () => {
     expect(missingBuildReport.verification.status).toBe("unknown");
     expect(missingBuildReport.errors).toContain("built dist identity unavailable; cannot verify the built artifact");
   }, 180_000);
+
+  it.skipIf(process.platform !== "linux" || process.arch !== "x64")("says on the console why a run whose steps all passed failed when the source changed mid-run", () => {
+    const cwd = scratch();
+    git(cwd, "init", "-q");
+    git(cwd, "config", "user.name", "check test");
+    git(cwd, "config", "user.email", "check@example.invalid");
+    writeFileSync(join(cwd, ".gitignore"), "node_modules/\n.check/\ndist/\n");
+    writeFileSync(join(cwd, "tracked.txt"), "before");
+    const noOp = 'node -e "process.exit(0)" --';
+    writeFileSync(join(cwd, "package.json"), JSON.stringify({
+      name: "check-cli-fixture",
+      scripts: {
+        "generate:types": noOp,
+        "generate:themes": noOp,
+        typecheck: noOp,
+        build: 'node -e "const fs=require(\'node:fs\');fs.mkdirSync(\'dist\',{recursive:true});fs.writeFileSync(\'dist/index.html\',\'fixture\')"',
+        // the unit tests pass, but edit a tracked file while the check runs
+        "test:unit": 'node -e "require(\'node:fs\').writeFileSync(\'tracked.txt\',\'after\')"',
+      },
+    }));
+    git(cwd, "add", ".gitignore", "package.json", "tracked.txt");
+    git(cwd, "commit", "-qm", "fixture");
+    const actionlintDirectory = join(cwd, "node_modules", ".cache", "actionlint-1.7.12");
+    mkdirSync(actionlintDirectory, { recursive: true });
+    writeFileSync(join(actionlintDirectory, "actionlint"), "#!/bin/sh\nexit 0\n");
+    chmodSync(join(actionlintDirectory, "actionlint"), 0o755);
+    // an admission port of its own: on the shared one this run would wait behind every real run
+    const env: Record<string, string | undefined> = { ...process.env, CHECK_DIR: ".check", CHECK_LOCK_PORT: String(freePortRange(MAX_RUNS_LIMIT)) };
+    for (const name of ["CHECK_REPORT", "GITHUB_EVENT_NAME", "GITHUB_EVENT_PATH"]) delete env[name];
+
+    const result = spawnSync(process.execPath, [fileURLToPath(new URL("./check.ts", import.meta.url)), "fast"], { cwd, env, encoding: "utf8", timeout: 30_000 });
+
+    expect(result.status).toBe(1);
+    const reportPath = join(cwd, ".check", "report.json");
+    const report = JSON.parse(readFileSync(reportPath, "utf8")) as { steps: { status: string }[]; errors: string[] };
+    expect(report.steps.every((step) => step.status === "success")).toBe(true);
+    expect(report.errors).toEqual(["source changed during the check; verification was invalidated"]);
+    // the start line names the report on stdout; the failure's reason and the report come last, on stderr
+    const said = result.stderr.split("\n");
+    expect(said).toContain("check: source changed during the check; verification was invalidated");
+    expect(said).toContain(`check: report ${reportPath}`);
+  }, 60_000);
 });

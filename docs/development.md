@@ -12,6 +12,18 @@ bun run dev      # Vite on :5173, proxies /api and /ws
 
 `bun run server` and `bun run dev` never update themselves; only `bun run start` and the plugin run the update supervisor.
 
+The plugin's `start` and `stop` (`scripts/plugin.ts`) take turns through `lifecycle.lock` in the
+plugin's state directory (the owner lock of `server/owner-guard.ts`, taken over once its owner is
+proved gone): a start holds it until its server answers or the start fails, a stop until the server
+is gone, and one that waits says so and gives up after 60 s, never blocking on the lock's file guard.
+A start also keeps its server's birth in `server.owner` beside `server.pid` (or that it could not be
+read), opens no second server while that process may still run, even when it does not answer and its
+port looks free, and stops a server it could not record. `stop` on Linux and macOS leaves alone a
+pid the record proves another process holds now. A start keeps the run before it as
+`server.log.1` unless the recorded server still runs, and a failed start shows the last 15 lines of
+what its own server wrote, reading at most the log's last 64 KiB. That bounds what a failed start
+reads, not the size of a running server's log.
+
 ## Connection diagnostics
 
 Transport failures write one JSON line to the server's standard error, with an ISO timestamp,
@@ -103,6 +115,9 @@ Theme colors are edited only in the theme blocks of `src/styles.css`. Never edit
 copies (`src/lib/themes.generated.ts`, the DESIGN.md region between the `GENERATED THEMES`
 markers, the `theme-color` tag in `index.html`, the colors in `public/manifest.webmanifest`); run
 `bun run generate:themes` after a color change.
+The case folding a typed answer compares option names with (`src/lib/caseFolding.generated.ts`) is
+generated from Unicode's CaseFolding.txt for the version pinned in `scripts/generate-case-folding.ts`;
+never edit it, run `bun run generate:case-folding` after raising that version.
 Admission is serialized briefly on port 41745. After taking a candidate slot, the run checks all
 eight slots again for its checkout and counts every active holder against its requested limit,
 including holders above its candidate range. A busy admission port refuses rather than waits.
@@ -167,11 +182,13 @@ bun scripts/key-bar-hold-repeat-regression.ts # phone touch key-bar taps, holds 
 bun scripts/settings-pages-demo-regression.ts # every Settings page on a 390px and a 320px phone, and Back stepping out of the dialog
 bun scripts/interface-font-demo-regression.ts # Interface font at 390 and 1440: System and a typed list lead --font-ui, a reload keeps it, Default restores it; the message box takes the Chat font
 bun scripts/theme-first-paint-demo-regression.ts # the saved theme in every painted frame before and after the app starts, root and demo builds under the app's CSP
+bun scripts/push-health-demo-regression.ts # the alerts health notice with a stand-in PushManager: a retired subscription told once over the pane and in Settings, repaired once; a refusal, a key mismatch, denied, unsupported, offline, loading and a watching device's refused test, at 390 and 1440, light and dark, Korean at 390
+bun scripts/device-security-demo-regression.ts # Phone & devices on demo fixtures: revoking every device (the caller's warning, the confirmation, a refused write, a watching device) and the line every window gets when a device pairs
 bun scripts/chat-browser-qa.ts  # chat lens end to end
 bun scripts/omo-plan-browser-regression.ts # OmO todo progress and plan panel on isolated native fixtures
 bun scripts/pane-input-focus-demo-regression.ts # the input focus shortcut against fictional panes
 bun scripts/mirror-scroll-demo-regression.ts # fixed mirror wheel/touch, native history, no guessed program input, observe guards
-bun scripts/mirror-fold-demo-regression.ts # a mirror wider than a phone folded whole (portrait, landscape), Original width from the pane menu, observers and desktops unfolded
+bun scripts/mirror-fold-demo-regression.ts # a mirror, or an attached pane a phone watches at a wider grid, folded whole (portrait, landscape), Original width from the pane menu, driving phones and desktops unfolded
 bun scripts/shortcut-exact-modifiers-demo-regression.ts # recording exact-modifier chords: confirm, refusals, dispatch
 bun scripts/output-browser-qa.ts # terminal output flow control end to end
 bun scripts/math-browser-qa.ts  # chat math: KaTeX loads with the first expression
@@ -201,6 +218,7 @@ For isolated phone viewer and keyboard layout regressions (no herdr session; the
 bun scripts/file-viewer-mobile-regression.ts  # 8 viewport cases × tall/wide images
 bun scripts/keyboard-viewport-regression.ts   # keyboard, rotation and measured standalone status inset
 bun scripts/keyboard-viewport-demo-regression.ts # original real-app viewport suite on disposable demo fixtures
+bun scripts/terminal-keyboard-demo-regression.ts # the key bar's Show/Hide keyboard control: current-mode focus, measured state, composition refusal, observe/held/offline/ended; `--serve-ios` only serves the build on loopback for a Simulator
 bun scripts/droplet-demo-regression.ts        # real-app alerts below the header, keyboard and landscape
 bun scripts/chat-greeting-demo-regression.ts  # an empty chat's greeting: centred on a desktop, docked on a phone
 bun scripts/composer-fit-demo-regression.ts   # one Send/Stop control, pending Send now actions, context/label fit and Chat font sizing
@@ -323,8 +341,9 @@ older bridges receive no unknown control frame, and their visible Chat reads eve
 The client retains current interest through reconnect, replaying it after attachment and
 capability discovery. Hiding the page, leaving Chat or unmounting disables interest. The bridge
 drops interest with the attachment, and the client asks again with the pane's next attach: a
-tab that let go of its pane while out of use (Settings → Use alongside herdr's own window) has
-no pushes while it only watches, so it reads every 2 s, and gets pushes back when it attaches.
+tab that let go of its pane while out of use or idle (Settings → Use alongside herdr's own
+window) has no pushes while it only watches, so it reads every 2 s, and gets pushes back when it
+attaches.
 Observers may subscribe without gaining input or resize authority.
 
 The bridge shares one native-file monitor per interested attached pane and one 250 ms stat
@@ -533,7 +552,8 @@ after changing the staged session. Files, images, push and remote PCs are not pa
    `bun scripts/release-guards.ts --worker-deployed`.
 2. Merge it after CI passes.
 3. If it raised `REMOTE_BUNDLE_VERSION` to N, push the tag `remote-vN` on the merged commit and wait
-   for the **Remote PC bundles** workflow to publish it ([remote PCs](remote-pcs.md)). Merge nothing
+   for the **Remote PC bundles** workflow to publish it ([remote PCs](remote-pcs.md)); the Release
+   run refuses until its manifest and archives can be downloaded, not only tagged. Merge nothing
    that touches `server/`, `shared/`, `bun.lock` or `patches/` until the Release run is done: the
    Release run would then ask for a follow-up PR that raises the number again and a new tag.
 4. Run **Actions → Release → Run workflow**, select `main`, and enter `X.Y.Z` without `v`.
@@ -741,6 +761,13 @@ The [CI workflow](../.github/workflows/ci.yml) runs on every PR and `main` push:
   list names a script that does not exist; it pins no count, so PRs that add scripts do not
   conflict on it.
 
+  `scripts/windows-terminal-browser-qa.ts` needs native Windows, so the browser lane leaves it out
+  (it is on that list) and `windows-terminal-qa.yml` runs it on a GitHub-hosted Windows runner: on pull requests
+  that touch the mirror, the terminal's viewport code or the xterm patch, weekly on main, and on
+  a manual dispatch (**Actions → Windows terminal QA**). It is not a required check. To run it on
+  a Windows PC: `bun install --frozen-lockfile`, `bun run build`, then
+  `bun scripts/windows-terminal-browser-qa.ts` with herdr on PATH and Chromium installed.
+
 `bun run check browser` and `bun run check full` still run the serial lane, `scripts/ci-browser.sh`
 (`BROWSER_PARALLEL=1` hands it to the parallel runner).
 The serial lane prints each script's wall seconds and exit code, including the shared demo
@@ -756,6 +783,13 @@ does not fail the job, and is not counted as a plain pass either: its first log 
 `flaky`, and on GitHub it gets a warning annotation and a line in the job summary. A flaky script
 is a bug to fix in the script or the app, not noise: the second run only keeps one PR's merge
 from waiting on another change's race. A script that fails twice fails the job.
+One run of a script may take `BROWSER_SCRIPT_TIMEOUT_SECONDS` (default 600). A run past it is
+stopped with every process it started, prints `TIMEOUT <script>` and its last 40 log lines at
+once, is not run again and fails the lane (the summary and `summary.json` give it exit 124), so a
+hang names itself instead of running into the job's `timeout-minutes`. A script that exits while
+a process it started still holds its output open is stopped the same way, as `STOPPED`; on
+Linux such a process is found through `/proc` even after its parent has exited. A job cancelled at its `timeout-minutes` with scripts still logging
+was usually short of time, not hung: check how long `check: took a slot after` says it waited.
 The console, GitHub annotations, job summary and `summary.json` name the failing assertion and
 its first script file and line when the log contains them.
 `bun scripts/ci-flakes.ts` ranks, across the last 24 hours of `ci.yml` runs and every attempt of
@@ -803,7 +837,8 @@ request runs, and `"ubuntu-24.04"` keeps only main GitHub-hosted. `CI_SELF_HOSTE
 or main's jobs wait for one.
 
 Detect changes, the Integration and browser summary, the Windows and macOS jobs,
-`remote-bundles.yml`, `windows-install.yml` and `pr-title.yml` always stay GitHub-hosted.
+`remote-bundles.yml`, `windows-install.yml`, `windows-terminal-qa.yml` and `pr-title.yml` always
+stay GitHub-hosted.
 
 In `ci.yml`, Detect changes picks the runner with `scripts/ci-runner-route.sh`. A fork pull request
 always gets `ubuntu-24.04`, whatever the variable says. Since that script runs from the pull
@@ -845,7 +880,7 @@ downloads on self-hosted jobs, but dependency installation, checkout and artifac
 do; measure setup, test execution and retries separately when comparing speed. Setup, routing and the security model are in
 [scripts/self-hosted-runner/README.md](../scripts/self-hosted-runner/README.md).
 
-`scripts/ci-tests.ts` discovers all `.test.ts` files under
+`scripts/ci-tests.ts` discovers all `.test.ts` and `.test.tsx` files under
 src/shared/server/scripts/telemetry/push-relay/integrations.
 Files named `*.contract.test.ts`, tests under `server/herdr/` and `server/pty/`, and
 `server/updater.test.ts` (which includes real bridge restart/rollback cases) belong

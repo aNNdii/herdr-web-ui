@@ -29,7 +29,7 @@ import { fileLines, isFileComment, pathLabel, type FileComment, type LineRange }
 import { formatBytes } from "../lib/bridgeProgress.ts";
 import { LINE_ELEMENT_LIMIT } from "../lib/highlight.ts";
 import { useT } from "../lib/i18n.ts";
-import type { MarkdownBlock } from "../lib/markdown.ts";
+import type { MarkdownBlock } from "../../shared/markdown.ts";
 import { fileTrack } from "../lib/lineCursor.ts";
 import { knownPreview, parsePreviewOffThread } from "../lib/markdownPreview.ts";
 import { useMachineApi, useMachineId } from "../lib/machineContext.tsx";

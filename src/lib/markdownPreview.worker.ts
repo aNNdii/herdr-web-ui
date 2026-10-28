@@ -2,7 +2,7 @@
 // input the parser handles slowly stalls this worker, which is ended past its budget, never the tab.
 // A Preview that would draw too much for the page is answered as none (PREVIEW_ELEMENT_LIMIT).
 // The blocks carry their source lines, which the viewer's file comments anchor to.
-import { parseMarkdownWithLines, type MarkdownBlock } from "./markdown.ts";
+import { parseMarkdownWithLines, type MarkdownBlock } from "../../shared/markdown.ts";
 import { serveOffThread } from "./offThread.ts";
 import { PREVIEW_ELEMENT_LIMIT, previewElements } from "./textPreview.ts";
 

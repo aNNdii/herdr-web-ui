@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, spyOn } from "bun:test";
+import * as darwinProcess from "./darwin-process.ts";
 import { Database } from "bun:sqlite";
 import { appendFileSync, copyFileSync, linkSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -18,7 +19,9 @@ import * as herdr from "./herdr/client.ts";
 import { forgetHistoryChains } from "./codex.ts";
 import { DevinHistoryChanged } from "./devin.ts";
 import * as omo from "./omo.ts";
-import { ConversationUnavailable, devinSessionForPane, forgetPaneTranscriptState, forgetTranscriptState, gjcTranscriptPath, HistoryChanged, isDevinProcess, isOmoProcess, ompSessionStore, paneConversation, paneProcessRoots, paneTranscript, parseClaudeTranscript, unwrapPastes, transcriptImage, transcriptPage, transcriptToolOutput, TRANSCRIPT_WINDOW_BYTES } from "./conversation.ts";
+import { claudeProjectDir } from "./claude-store.ts";
+import { launchedAgents } from "./launched-agents.ts";
+import { claudePaneSession, ConversationUnavailable, devinSessionForPane, forgetPaneTranscriptState, forgetTranscriptState, gjcTranscriptPath, HistoryChanged, isDevinProcess, isOmoProcess, ompSessionStore, paneConversation, paneProcessRoots, paneTranscript, parseClaudeTranscript, unwrapPastes, transcriptImage, transcriptPage, transcriptToolOutput, TRANSCRIPT_WINDOW_BYTES } from "./conversation.ts";
 
 it("labels only Claude's explicit end_turn text as final-answer evidence", () => {
   const entry = (stop_reason: string | null) => JSON.stringify({ type: "assistant", message: { role: "assistant", stop_reason, content: [{ type: "text", text: "Answer" }] } });
@@ -561,6 +564,170 @@ describe("parseClaudeTranscript", () => {
     // the same words a minute later are another answer, and a notice's own repeat is kept
     expect(notices([local(stderr, "2026-10-08T08:06:31.117Z"), info("Unknown command: /gaol", "2026-10-08T08:07:31.118Z")])).toEqual(["Unknown command: /gaol", "Unknown command: /gaol"]);
     expect(notices([info("Message expired", "2026-10-08T08:06:31.117Z"), info("Message expired", "2026-10-08T08:06:31.118Z")])).toEqual(["Message expired\nMessage expired"]);
+  });
+
+  it("shows a bash-mode command with what it printed as one turn, which only the command opens", () => {
+    const user = (content: string, ts: string) => JSON.stringify({ type: "user", timestamp: ts, message: { role: "user", content } });
+    const records = [
+      user('<bash-input>echo "Hello"</bash-input>', "2026-10-27T03:00:00.000Z"),
+      user("<bash-stdout>  Hello\n    world\n</bash-stdout><bash-stderr></bash-stderr>", "2026-10-27T03:00:00.100Z"),
+      user("<bash-input>ls extra</bash-input>", "2026-10-27T03:00:01.000Z"),
+      user("<bash-stdout></bash-stdout><bash-stderr>\u001b[31mls: extra: No such file or directory\u001b[39m</bash-stderr>", "2026-10-27T03:00:01.100Z"),
+      // a command whose output was not recorded, then a prompt that quotes the tags
+      user("<bash-input>sleep 60</bash-input>", "2026-10-27T03:00:02.000Z"),
+      user("Why does <bash-input>ls</bash-input> show here?", "2026-10-27T03:00:03.000Z"),
+      // only a whole output entry is one: a prompt that starts like one is a prompt
+      user("<bash-stdout> is the tag I mean", "2026-10-27T03:00:04.000Z"),
+    ];
+    expect(parseClaudeTranscript(records.join("\n"))).toEqual([
+      { role: "user", ts: "2026-10-27T03:00:00.000Z", parts: [{ kind: "shell", command: 'echo "Hello"', stdout: "  Hello\n    world", stderr: "" }] },
+      { role: "user", ts: "2026-10-27T03:00:01.000Z", parts: [{ kind: "shell", command: "ls extra", stdout: "", stderr: "ls: extra: No such file or directory" }] },
+      { role: "user", ts: "2026-10-27T03:00:02.000Z", parts: [{ kind: "shell", command: "sleep 60" }] },
+      { role: "user", ts: "2026-10-27T03:00:03.000Z", parts: [{ kind: "text", text: "Why does <bash-input>ls</bash-input> show here?" }] },
+      { role: "user", ts: "2026-10-27T03:00:04.000Z", parts: [{ kind: "text", text: "<bash-stdout> is the tag I mean" }] },
+    ]);
+    // a page never starts at an output: it would lose its command
+    expect(turnStarts(Buffer.from(records.join("\n")), "claude-transcript")).toHaveLength(5);
+    // an output with no command before it is left out
+    expect(parseClaudeTranscript(records[1]!)).toEqual([]);
+  });
+
+  for (const provenance of [{ origin: { kind: "human" }, permissionMode: "default" }, { permissionMode: "default" }, { origin: { kind: "human" } }]) {
+    for (const array of [false, true]) {
+      it(`keeps bash tags literal in ${array ? "array" : "string"} prompts with ${Object.keys(provenance).join(" and ")}`, () => {
+        for (const text of ["<bash-input>ls</bash-input>", "<bash-stdout>err</bash-stdout>"]) {
+          const record = JSON.stringify({ type: "user", ...provenance, message: { role: "user", content: array ? [{ type: "text", text }] : text } });
+          expect(parseClaudeTranscript(record)).toEqual([{ role: "user", ts: null, parts: [{ kind: "text", text }] }]);
+          expect(turnStarts(Buffer.from(record), "claude-transcript")).toEqual([0]);
+        }
+      });
+    }
+  }
+
+  it("keeps bash output tags literal in queued human prompts", () => {
+    const text = "<bash-stdout>err</bash-stdout>";
+    const record = JSON.stringify({ type: "attachment", attachment: { type: "queued_command", commandMode: "prompt", origin: { kind: "human" }, prompt: text } });
+    expect(parseClaudeTranscript(record)).toEqual([{ role: "user", ts: null, parts: [{ kind: "text", text }] }]);
+  });
+
+  it("preserves literal stream tags inside bash stdout without fabricating stderr", () => {
+    const stdout = "before</bash-stdout><bash-stderr>fake error</bash-stderr><bash-stdout>after";
+    const user = (content: string) => JSON.stringify({ type: "user", message: { role: "user", content } });
+    const records = [user("<bash-input>printf tags</bash-input>"), user(`<bash-stdout>${stdout}</bash-stdout><bash-stderr></bash-stderr>`)];
+    expect(parseClaudeTranscript(records.join("\n"))[0]?.parts).toEqual([{ kind: "shell", command: "printf tags", stdout: `${stdout}</bash-stdout><bash-stderr>`, stderr: "" }]);
+    expect(turnStarts(Buffer.from(records.join("\n")), "claude-transcript")).toEqual([0]);
+  });
+
+  it("preserves literal stream tags inside bash stderr", () => {
+    const stderr = "before</bash-stderr><bash-stderr>after";
+    const user = (content: string) => JSON.stringify({ type: "user", message: { role: "user", content } });
+    const records = [user("<bash-input>printf tags</bash-input>"), user(`<bash-stdout></bash-stdout><bash-stderr>${stderr}</bash-stderr>`)];
+    const parts = parseClaudeTranscript(records.join("\n")).flatMap((turn) => turn.parts);
+    expect(parts).toEqual([{ kind: "shell", command: "printf tags", stdout: "", stderr }]);
+  });
+
+  for (const [stdout, stderr] of [
+    ["", "before</bash-stdout><bash-stderr>after"],
+    ["out", "x</bash-stdout>y"],
+  ] as const) {
+    it(`keeps a printed stdout close inside stderr ${JSON.stringify(stderr)} without adding a turn`, () => {
+      const user = (content: string) => JSON.stringify({ type: "user", message: { role: "user", content } });
+      const records = [
+        user("<bash-input>printf tags</bash-input>"),
+        user(`<bash-stdout>${stdout}</bash-stdout><bash-stderr>${stderr}</bash-stderr>`),
+      ].join("\n");
+      const ambiguous = stderr.includes("</bash-stdout><bash-stderr>");
+      expect(parseClaudeTranscript(records)).toEqual([
+        { role: "user", ts: null, parts: [{ kind: "shell", command: "printf tags",
+          stdout: ambiguous ? `${stdout}</bash-stdout><bash-stderr>${stderr}` : stdout,
+          stderr: ambiguous ? "" : stderr }] },
+      ]);
+      expect(turnStarts(Buffer.from(records), "claude-transcript")).toEqual([0]);
+    });
+  }
+
+  for (const { name, stdout, stderr, ambiguous } of [
+    { name: "N1", stdout: "a</bash-stdout><bash-stderr>b", stderr: "", ambiguous: true },
+    { name: "N2", stdout: 'user("<bash-stdout>Hello</bash-stdout><bash-stderr></bash-stderr>", 1)', stderr: "", ambiguous: true },
+    {
+      name: "N3",
+      stdout: `572: user('<bash-input>echo "Hello"</bash-input>')\n573: user("<bash-stdout>  Hello</bash-stdout><bash-stderr></bash-stderr>")\n575: user("<bash-stdout></bash-stdout><bash-stderr>ls: extra</bash-stderr>")`,
+      stderr: "", ambiguous: true,
+    },
+    { name: "N4", stdout: '{"content":"<bash-stdout>x</bash-stdout><bash-stderr></bash-stderr>"}', stderr: "", ambiguous: true },
+    { name: "N5", stdout: "o</bash-stdout><bash-stderr>p", stderr: "e", ambiguous: true },
+    { name: "N6", stdout: "", stderr: "x</bash-stderr><bash-stdout>y", ambiguous: false },
+    { name: "N7", stdout: "o", stderr: "a</bash-stderr><bash-stdout>b</bash-stdout><bash-stderr>c", ambiguous: true },
+    { name: "H", stdout: "ok", stderr: "x</bash-stdout><bash-stderr>y", ambiguous: true },
+    { name: "Codex R1", stdout: "before</bash-stdout><bash-stderr>after", stderr: "", ambiguous: true },
+    { name: "Codex R2", stdout: "", stderr: "before</bash-stderr><bash-stdout>middle</bash-stdout><bash-stderr>after", ambiguous: true },
+    { name: "empty-candidate collision", stdout: "x", stderr: "y</bash-stdout><bash-stderr>", ambiguous: true },
+    { name: "ambiguous trailing whitespace", stdout: "x</bash-stdout>\n<bash-stderr>y", stderr: "z \n", ambiguous: true },
+  ]) {
+    it(`keeps deterministic bash output ${name} intact in one shell turn`, () => {
+      const user = (content: string) => JSON.stringify({ type: "user", message: { role: "user", content } });
+      const records = [
+        user("<bash-input>printf tags</bash-input>"),
+        user(`<bash-stdout>${stdout}</bash-stdout><bash-stderr>${stderr}</bash-stderr>`),
+      ].join("\n");
+      const expectedStdout = ambiguous ? `${stdout}</bash-stdout><bash-stderr>${stderr}` : stdout;
+      const expectedStderr = ambiguous ? "" : stderr;
+      expect(parseClaudeTranscript(records)).toEqual([
+        { role: "user", ts: null, parts: [{ kind: "shell", command: "printf tags", stdout: expectedStdout, stderr: expectedStderr }] },
+      ]);
+      expect(turnStarts(Buffer.from(records), "claude-transcript")).toEqual([0]);
+    });
+  }
+
+  it("never fabricates stderr or loses payload characters across seeded bash tag pairs", () => {
+    const pieces = ["<bash-stdout>", "</bash-stdout>", "<bash-stderr>", "</bash-stderr>", "one", "two"];
+    const user = (content: string) => JSON.stringify({ type: "user", message: { role: "user", content } });
+    for (const seed of [0x2176, 0xc0de]) {
+      let state = seed;
+      const next = () => {
+        state = (Math.imul(state, 1664525) + 1013904223) >>> 0;
+        return state;
+      };
+      const payload = () => {
+        const count = next() % 9;
+        let text = "";
+        for (let i = 0; i < count; i++) text += pieces[next() % pieces.length];
+        return text;
+      };
+      for (let i = 0; i < 512; i++) {
+        const stdout = payload(), stderr = payload();
+        const records = [
+          user("<bash-input>printf tags</bash-input>"),
+          user(`<bash-stdout>${stdout}</bash-stdout><bash-stderr>${stderr}</bash-stderr>`),
+        ].join("\n");
+        const turns = parseClaudeTranscript(records);
+        expect(turns).toHaveLength(1);
+        const shell = turns[0]?.parts[0];
+        if (shell?.kind !== "shell") throw new Error("Expected one shell card");
+        expect(shell.stderr === "" || shell.stderr === stderr).toBe(true);
+        const shown = `${shell.stdout ?? ""}${shell.stderr ?? ""}`;
+        let at = 0;
+        for (const character of stdout + stderr) {
+          const found = shown.indexOf(character, at);
+          expect(found).toBeGreaterThanOrEqual(at);
+          at = found + 1;
+        }
+        expect(turnStarts(Buffer.from(records), "claude-transcript")).toEqual([0]);
+      }
+    }
+  });
+
+  it("attaches bash output to its shell across an informational notice", () => {
+    const user = (content: string) => JSON.stringify({ type: "user", message: { role: "user", content } });
+    const records = [
+      user("<bash-input>ls</bash-input>"),
+      JSON.stringify({ type: "system", subtype: "informational", content: "Something" }),
+      user("<bash-stdout>README.md</bash-stdout><bash-stderr></bash-stderr>"),
+    ];
+    expect(parseClaudeTranscript(records.join("\n")).map((turn) => turn.parts)).toEqual([
+      [{ kind: "shell", command: "ls", stdout: "README.md", stderr: "" }],
+      [{ kind: "notice", text: "Something", source: "informational" }],
+    ]);
   });
 
   it("shows a slash command's answer only as the whole entry, as text, and not past its length", () => {
@@ -2655,9 +2822,11 @@ describe("a Codex pane that reported no session yet", () => {
     const root = mkdtempSync(join(tmpdir(), "herdr-codex-fresh-"));
     const pane = { pane_id: "codex-fresh", cwd: root, foreground_cwd: root, agent: "codex", agent_status: "idle" } as HerdrPane;
     let screen = FRESH;
+    let scrolledUp = 0;
     const snapshot = spyOn(herdr, "sessionSnapshot").mockResolvedValue({ panes: [pane] } as SessionSnapshot);
-    const rpc = spyOn(herdr, "herdrRpc").mockImplementation(async (method: string) => (method === "agent.get"
-      ? { agent: { agent: "codex" } } : { process_info: { foreground_processes: [{ argv: ["codex"] }] } }) as never);
+    const rpc = spyOn(herdr, "herdrRpc").mockImplementation(async (method: string) => (method === "agent.get" ? { agent: { agent: "codex" } }
+      : method === "pane.get" ? { pane: { ...pane, scroll: { offset_from_bottom: scrolledUp, max_offset_from_bottom: 30, viewport_rows: 40 } } }
+      : { process_info: { foreground_processes: [{ argv: ["codex"] }] } }) as never);
     const read = spyOn(herdr, "paneRead").mockImplementation(async () => ({ text: screen }) as never);
     try {
       await expect(paneConversation(pane.pane_id, join(root, ".codex"))).rejects.toMatchObject({
@@ -2666,6 +2835,12 @@ describe("a Codex pane that reported no session yet", () => {
       // switched with /model: the status line says the new one
       screen = FRESH.replace("GPT-6.1-Sol low", "GPT-6-Sol high");
       await expect(paneConversation(pane.pane_id, join(root, ".codex"))).rejects.toMatchObject({ screen: { model: "gpt-6-sol", reasoning_effort: "high" } });
+      // scrolled up by a device, the viewport is history, perhaps an older frame: no model is named
+      scrolledUp = 3;
+      const scrolled = await paneConversation(pane.pane_id, join(root, ".codex")).catch((error: unknown) => error);
+      expect(scrolled).toBeInstanceOf(ConversationUnavailable);
+      expect((scrolled as ConversationUnavailable).screen).toBeUndefined();
+      scrolledUp = 0;
       // a picker hiding the footer leaves the model unknown, whatever its options say
       screen = "  >_ OpenAI Codex (v0.163.0)\n  Select Model and Effort\n› 1. GPT-6.1-Sol (default) (current)\n  GPT-6-Sol high · /tmp/project";
       const picker = await paneConversation(pane.pane_id, join(root, ".codex")).catch((error: unknown) => error);
@@ -2681,4 +2856,320 @@ describe("a Codex pane that reported no session yet", () => {
       expect((page as ConversationUnavailable).screen).toBeUndefined();
     } finally { snapshot.mockRestore(); rpc.mockRestore(); read.mockRestore(); forgetTranscriptState(); rmSync(root, { recursive: true, force: true }); }
   });
+
+  // the process's start time is read from the OS: this test's own process stands in for Codex's
+  it.skipIf(process.platform === "win32")("greets a Codex started in the terminal on no conversation, and only that one", async () => {
+    const root = mkdtempSync(join(tmpdir(), "herdr-codex-greet-"));
+    const home = join(root, ".codex");
+    mkdirSync(home);
+    const pane = { pane_id: "codex-greet", cwd: root, foreground_cwd: root, agent: "codex", agent_status: "done" } as HerdrPane;
+    let screen = FRESH;
+    let argv = ["codex"];
+    // what a detection read of a short screen also reaches up to (never what decides), and the rows a device scrolled up by
+    let above = "";
+    let scrolledUp = 0;
+    const snapshot = spyOn(herdr, "sessionSnapshot").mockImplementation(async () => ({ panes: [pane] }) as SessionSnapshot);
+    const rpc = spyOn(herdr, "herdrRpc").mockImplementation(async (method: string) => (method === "agent.get" ? { agent: { agent: "codex" } }
+      : method === "pane.get" ? { pane: { ...pane, scroll: { offset_from_bottom: scrolledUp, max_offset_from_bottom: 30, viewport_rows: 40 } } }
+      : { process_info: { foreground_processes: [{ pid: process.pid, argv }] } }) as never);
+    const read = spyOn(herdr, "paneRead").mockImplementation(async ({ source }) => ({ text: source === "detection" ? `${above}${screen}` : screen }) as never);
+    const ask = () => paneConversation(pane.pane_id, home).catch((error: unknown) => error);
+    try {
+      // no store yet, as for a CODEX_HOME Codex has not written to
+      const greeting = await ask() as Awaited<ReturnType<typeof paneConversation>>;
+      expect(greeting).toMatchObject({ source: "codex-transcript", turns: [], cursor: null, screen: true, metadata: { model: "gpt-6.1-sol", reasoning_effort: "low" } });
+      expect(greeting.history_id).toStartWith("unwritten:codex:");
+      // a fresh Codex on a short screen: herdr's detection read reaches up into the history above it,
+      // where an earlier program said something (herdr 0.9.5, after a clear); only the live screen counts
+      above = "\u2022 old output from a previous program\n";
+      expect(await ask()).toMatchObject({ history_id: greeting.history_id });
+      above = "";
+      // scrolled up by a device, the viewport is history: nothing proves the start screen, the terminal
+      // stands in, naming no model until the viewport is back at the bottom
+      scrolledUp = 3;
+      const scrolled = await ask();
+      expect(scrolled).toBeInstanceOf(ConversationUnavailable);
+      expect((scrolled as ConversationUnavailable).screen).toBeUndefined();
+      scrolledUp = 0;
+      // a store whose threads of this folder all ended before this Codex started
+      const db = new Database(join(home, "state_5.sqlite"));
+      db.exec("CREATE TABLE threads (id TEXT, rollout_path TEXT, cwd TEXT, source TEXT, created_at INTEGER, updated_at INTEGER, archived INTEGER DEFAULT 0, agent_role TEXT)");
+      db.query("INSERT INTO threads (id, rollout_path, cwd, source, created_at, updated_at) VALUES ('old', '/nowhere.jsonl', ?, 'cli', 1, 2)").run(root);
+      expect(await ask()).toMatchObject({ history_id: greeting.history_id });
+      // a resume or a fork on the command line opens a conversation that exists
+      argv = ["codex", "resume"];
+      expect(await ask()).toBeInstanceOf(ConversationUnavailable);
+      argv = ["codex", "fork", "--last"];
+      expect(await ask()).toBeInstanceOf(ConversationUnavailable);
+      argv = ["codex"];
+      // something said on screen, or a first turn at work
+      screen = FRESH.replace("\u203a Ask Codex", "\u203a hello\n\n\u2022 Hi there\n\n\u203a Ask Codex");
+      expect(await ask()).toBeInstanceOf(ConversationUnavailable);
+      screen = FRESH;
+      pane.agent_status = "working";
+      expect(await ask()).toBeInstanceOf(ConversationUnavailable);
+      pane.agent_status = "done";
+      // a thread of this folder written since this Codex started: perhaps its own, unread
+      const now = Math.floor(Date.now() / 1000);
+      db.query("UPDATE threads SET updated_at = ? WHERE id = 'old'").run(now);
+      expect(await ask()).toBeInstanceOf(ConversationUnavailable);
+      db.query("UPDATE threads SET updated_at = 2").run();
+      db.query("INSERT INTO threads (id, rollout_path, cwd, source, created_at, updated_at) VALUES ('new', '/nowhere-2.jsonl', ?, 'cli', ?, ?)").run(root, now, now);
+      expect(await ask()).toBeInstanceOf(ConversationUnavailable);
+      // one in another folder, a subagent's or a `codex exec` run's says nothing about this one
+      db.query("UPDATE threads SET cwd = '/elsewhere' WHERE id = 'new'").run();
+      db.query("INSERT INTO threads (id, rollout_path, cwd, source, created_at, updated_at, agent_role) VALUES ('sub', '/sub.jsonl', ?, 'cli', ?, ?, 'worker')").run(root, now, now);
+      db.query("INSERT INTO threads (id, rollout_path, cwd, source, created_at, updated_at) VALUES ('exec', '/exec.jsonl', ?, 'exec', ?, ?)").run(root, now, now);
+      expect(await ask()).toMatchObject({ history_id: greeting.history_id });
+      // a thread with no message yet holds no conversation, whoever made it; one with a message does
+      db.exec("ALTER TABLE threads ADD COLUMN first_user_message TEXT");
+      db.query("UPDATE threads SET cwd = ?, first_user_message = '' WHERE id = 'new'").run(root);
+      expect(await ask()).toMatchObject({ history_id: greeting.history_id });
+      db.query("UPDATE threads SET first_user_message = 'hi' WHERE id = 'new'").run();
+      expect(await ask()).toBeInstanceOf(ConversationUnavailable);
+      // the pane's folder named through a link: Codex stored the folder it resolves to
+      const alias = join(tmpdir(), `herdr-codex-greet-alias-${process.pid}`);
+      symlinkSync(root, alias);
+      try {
+        pane.cwd = alias;
+        pane.foreground_cwd = alias;
+        expect(await ask()).toBeInstanceOf(ConversationUnavailable);
+      } finally { pane.cwd = root; pane.foreground_cwd = root; rmSync(alias, { force: true }); }
+      // Codex runs in another folder than the pane's shell: that folder's conversations count too
+      const elsewhere = mkdtempSync(join(tmpdir(), "herdr-codex-greet-fg-"));
+      try {
+        db.query("UPDATE threads SET cwd = ? WHERE id = 'new'").run(elsewhere);
+        expect(await ask()).toMatchObject({ history_id: greeting.history_id });
+        pane.foreground_cwd = elsewhere;
+        expect(await ask()).toBeInstanceOf(ConversationUnavailable);
+      } finally { pane.foreground_cwd = root; rmSync(elsewhere, { recursive: true, force: true }); }
+      db.close();
+      // a store that cannot be read tells nothing, nor one that cannot even be looked at
+      writeFileSync(join(home, "state_5.sqlite"), "not a database");
+      expect(await ask()).toBeInstanceOf(ConversationUnavailable);
+      rmSync(join(home, "state_5.sqlite"));
+      symlinkSync(join(home, "state_5.sqlite"), join(home, "state_5.sqlite"));
+      expect(await ask()).toBeInstanceOf(ConversationUnavailable);
+    } finally { snapshot.mockRestore(); rpc.mockRestore(); read.mockRestore(); forgetTranscriptState(); rmSync(root, { recursive: true, force: true }); }
+  });
+
+  // each Codex is a child started with the CODEX_HOME under test, whose environment the server reads from
+  // the OS: a Bun process, since macOS's ps shows no environment for a system binary such as sleep
+  it.skipIf(process.platform === "win32")("greets a terminal Codex only in the store its own environment places for certain", async () => {
+    const root = mkdtempSync(join(tmpdir(), "herdr-codex-home-"));
+    const own = join(root, "own");
+    const fallback = join(root, "fallback");
+    mkdirSync(own);
+    mkdirSync(fallback);
+    const pane = { pane_id: "codex-home", cwd: root, foreground_cwd: root, agent: "codex", agent_status: "done" } as HerdrPane;
+    const children: Bun.Subprocess[] = [];
+    let codexes: { pid: number; argv: string[] }[] = [];
+    // each one says it runs before it is asked about: until its exec, the OS shows the environment it was forked with
+    // a string is the CODEX_HOME it starts with; an object sets (or, as undefined, drops) its variables
+    const started = async (...homes: (string | Record<string, string | undefined>)[]) => {
+      codexes = await Promise.all(homes.map(async (home) => {
+        const set = typeof home === "string" ? { CODEX_HOME: home } : home;
+        const env = Object.fromEntries(Object.entries({ ...process.env, ...set }).filter((entry): entry is [string, string] => entry[1] !== undefined));
+        const child = Bun.spawn([process.execPath, "-e", "console.log('ready'); setTimeout(() => {}, 60_000)"], { cwd: root, env, stdout: "pipe" });
+        children.push(child);
+        const reader = child.stdout.getReader();
+        let said = "";
+        while (!said.includes("ready")) {
+          const { value, done } = await reader.read();
+          if (done) throw new Error("the stand-in Codex exited before it ran");
+          said += new TextDecoder().decode(value);
+        }
+        reader.releaseLock();
+        return { pid: child.pid, argv: ["codex"] };
+      }));
+    };
+    const snapshot = spyOn(herdr, "sessionSnapshot").mockImplementation(async () => ({ panes: [pane] }) as SessionSnapshot);
+    const rpc = spyOn(herdr, "herdrRpc").mockImplementation(async (method: string) => (method === "agent.get" ? { agent: { agent: "codex" } }
+      : method === "pane.get" ? { pane: { ...pane, scroll: { offset_from_bottom: 0, max_offset_from_bottom: 30, viewport_rows: 40 } } }
+      : { process_info: { foreground_processes: codexes } }) as never);
+    const read = spyOn(herdr, "paneRead").mockImplementation(async () => ({ text: FRESH }) as never);
+    // the server's own default store holds nothing: a home it cannot place must not fall back to it
+    const serverHome = process.env["CODEX_HOME"];
+    process.env["CODEX_HOME"] = fallback;
+    const ask = () => paneConversation(pane.pane_id).catch((error: unknown) => error);
+    try {
+      // a home its environment names, with no store yet: the greeting
+      await started(own);
+      const greeting = await ask() as Awaited<ReturnType<typeof paneConversation>>;
+      expect(greeting).toMatchObject({ source: "codex-transcript", turns: [], cursor: null });
+      expect(greeting.history_id).toStartWith("unwritten:codex:");
+      // a relative CODEX_HOME: Codex places it under its folder, where a conversation has begun
+      const relative = join(root, "rel");
+      mkdirSync(relative);
+      const begun = (store: string) => {
+        const db = new Database(join(store, "state_5.sqlite"));
+        const now = Math.floor(Date.now() / 1000);
+        db.exec("CREATE TABLE threads (id TEXT, rollout_path TEXT, cwd TEXT, source TEXT, created_at INTEGER, updated_at INTEGER, archived INTEGER DEFAULT 0, agent_role TEXT, first_user_message TEXT)");
+        db.query("INSERT INTO threads (id, rollout_path, cwd, source, created_at, updated_at, first_user_message) VALUES ('begun', '/nowhere.jsonl', ?, 'cli', ?, ?, 'hi')").run(root, now, now);
+        db.close();
+      };
+      begun(relative);
+      await started("rel");
+      expect(await ask()).toBeInstanceOf(ConversationUnavailable);
+      // a CODEX_HOME that is no directory, or a second Codex whose home cannot be placed
+      await started(join(root, "missing"));
+      expect(await ask()).toBeInstanceOf(ConversationUnavailable);
+      await started(own, "rel");
+      expect(await ask()).toBeInstanceOf(ConversationUnavailable);
+      // no CODEX_HOME: the store is .codex in the HOME the Codex runs with, never the server's own
+      const user = join(root, "user");
+      mkdirSync(join(user, ".codex"), { recursive: true });
+      await started({ CODEX_HOME: undefined, HOME: user });
+      expect(await ask()).toMatchObject({ history_id: expect.stringMatching(/^unwritten:codex:/) });
+      begun(join(user, ".codex"));
+      expect(await ask()).toBeInstanceOf(ConversationUnavailable);
+      // with no HOME, or a relative one, there is no telling where it is
+      await started({ CODEX_HOME: undefined, HOME: undefined });
+      expect(await ask()).toBeInstanceOf(ConversationUnavailable);
+      await started({ CODEX_HOME: undefined, HOME: "user" });
+      expect(await ask()).toBeInstanceOf(ConversationUnavailable);
+    } finally {
+      if (serverHome === undefined) delete process.env["CODEX_HOME"]; else process.env["CODEX_HOME"] = serverHome;
+      for (const child of children) child.kill();
+      await Promise.all(children.map((child) => child.exited));
+      snapshot.mockRestore(); rpc.mockRestore(); read.mockRestore(); forgetTranscriptState(); rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+// herdr's detection read of a short screen reaches up into the history above it (herdr 0.9.5): what an
+// agent drew there before is not what its screen shows now, so it never names the model (#2163 review)
+describe("a model drawn only in the history above the live screen", () => {
+  const homes = { HOME: process.env["HOME"], CLAUDE_CONFIG_DIR: process.env["CLAUDE_CONFIG_DIR"] };
+  let root: string;
+  const mocks: { mockRestore(): void }[] = [];
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), "herdr-screen-history-"));
+    mkdirSync(join(root, ".codex"));
+    process.env["HOME"] = root;
+    process.env["CLAUDE_CONFIG_DIR"] = join(root, ".claude");
+  });
+  afterEach(() => {
+    for (const mock of mocks.splice(0)) mock.mockRestore();
+    for (const agent of ["claude", "codex", "gjc"]) launchedAgents.forget(`screen-history-${agent}`);
+    forgetTranscriptState();
+    for (const [name, value] of Object.entries(homes)) if (value === undefined) delete process.env[name]; else process.env[name] = value;
+    rmSync(root, { recursive: true, force: true });
+  });
+  /** A pane whose viewport (at the bottom) shows `live`, and whose detection read also reaches `history`;
+   * each scroll position herdr reports in turn (offset from the bottom, rows of history; null for none,
+   * as herdr's scroll is optional; "fail" for a lookup that fails), the last one from then on. */
+  const shown = (agent: string, status: string, history: string, live: string, scrolls: ([number, number] | null | "fail")[] = [[0, 30]]): string => {
+    const pane = { pane_id: `screen-history-${agent}`, cwd: root, foreground_cwd: root, agent, agent_status: status } as HerdrPane;
+    mocks.push(spyOn(herdr, "sessionSnapshot").mockResolvedValue({ panes: [pane] } as SessionSnapshot));
+    mocks.push(spyOn(herdr, "herdrRpc").mockImplementation(async (method: string) => {
+      if (method === "agent.get") return { agent: { agent } } as never;
+      if (method === "pane.get") {
+        const scroll = scrolls.length > 1 ? scrolls.shift()! : scrolls[0]!;
+        if (scroll === "fail") throw new herdr.HerdrError("connect_failed", "fixture: pane.get failed");
+        return { pane: { ...pane, ...(scroll === null ? {} : { scroll: { offset_from_bottom: scroll[0], max_offset_from_bottom: scroll[1], viewport_rows: 40 } }) } } as never;
+      }
+      if (method === "pane.process_info") return { process_info: { foreground_processes: [] } } as never;
+      throw new Error(`unexpected RPC: ${method}`);
+    }));
+    mocks.push(spyOn(herdr, "paneRead").mockImplementation(async ({ source }) => ({ text: source === "detection" ? history + live : live }) as never));
+    return pane.pane_id;
+  };
+
+  it("names no model from an older Claude banner while the live screen asks to trust a folder", async () => {
+    const id = shown("claude", "blocked", " \u2590\u259b\u2588\u2588\u2588\u259c\u258c   Claude Code v2.1.296\n\u259d\u259c\u2588\u2588\u2588\u2588\u2588\u259b\u2598  Haiku 5.5 \u00b7 Claude Max\n",
+      "Accessing workspace\nIs this a project you created or one you trust?\n\u276f 1. Yes, I trust this folder\n");
+    launchedAgents.launched(id, "claude");
+    expect((await paneConversation(id, join(root, ".codex"))).metadata?.model).toBeNull();
+  });
+
+  it("names no model from an older Codex footer above a cleared live screen", async () => {
+    const id = shown("codex", "working", "  >_ OpenAI Codex (v0.163.0)\n\n\u203a Ask Codex to do anything\n\n  GPT-6-Luna medium \u00b7 /tmp/project\n  ? for shortcuts\n", "\n\n\n\n\n\n\n");
+    const answer = await paneConversation(id, join(root, ".codex")).catch((error: unknown) => error);
+    expect(answer).toBeInstanceOf(ConversationUnavailable);
+    expect((answer as ConversationUnavailable).screen).toBeUndefined();
+  });
+
+  it("names the model only when the viewport stayed at the bottom, with the same history, around its read", async () => {
+    const frame = "  >_ OpenAI Codex (v0.163.0)\n\n\u203a Ask Codex to do anything\n\n  GPT-6.1-Sol low \u00b7 /tmp/project\n  ? for shortcuts\n";
+    const named = async (scrolls: ([number, number] | null | "fail")[]) => {
+      const id = shown("codex", "working", "", frame, scrolls);
+      const answer = await paneConversation(id, join(root, ".codex")).catch((error: unknown) => error);
+      for (const mock of mocks.splice(0)) mock.mockRestore();
+      return (answer as ConversationUnavailable).screen?.model ?? null;
+    };
+    expect(await named([[0, 30], [0, 30]])).toBe("gpt-6.1-sol");
+    // scrolled up when the read began, scrolled up by its end, or a row pushed into the history meanwhile
+    expect(await named([[3, 30], [0, 30]])).toBeNull();
+    expect(await named([[0, 30], [3, 30]])).toBeNull();
+    expect(await named([[0, 30], [0, 31]])).toBeNull();
+    // a scroll known for one read and not the other proves nothing
+    expect(await named([null, [0, 30]])).toBeNull();
+    expect(await named([[0, 30], null])).toBeNull();
+    // nor does a lookup that failed
+    expect(await named(["fail", "fail"])).toBeNull();
+    expect(await named([[0, 30], "fail"])).toBeNull();
+  });
+
+  // herdr's pane.get may report no scroll, and then gives no geometry: a viewport scrolled up into the blank
+  // rows under a short screen reads the same as the live one, so nothing proves the screen and none is read
+  it("names no model a start screen states when herdr reports no scroll", async () => {
+    const codex = "  >_ OpenAI Codex (v0.163.0)\n\n\u203a Ask Codex to do anything\n\n  GPT-6.1-Sol low \u00b7 /tmp/project\n  ? for shortcuts\n";
+    const screens = [
+      { agent: "claude", frame: " \u2590\u259b\u2588\u2588\u2588\u259c\u258c   Claude Code v2.1.296\n\u259d\u259c\u2588\u2588\u2588\u2588\u2588\u259b\u2598  Haiku 5.5 \u00b7 Claude Max\n\u276f Try a task\n", model: "claude-haiku-5-5", effort: null },
+      { agent: "codex", frame: codex, model: "gpt-6.1-sol", effort: "low" },
+      { agent: "gjc", frame: " \u2b22 opus-5.5 \u00b7 \u25c9 xhigh \u00b7 1.5% / main / project\n\u2502 > Type your message... \u2502\n", model: "claude-opus-5-5", effort: "xhigh" },
+    ];
+    for (const { agent, frame, model, effort } of screens) {
+      // an agent this server started, before its first message: the same frame names its model with a scroll
+      const cases: [[number, number] | null, { model: string | null; reasoning_effort: string | null }][] = [
+        [[0, 30], { model, reasoning_effort: effort }], [null, { model: null, reasoning_effort: null }]];
+      for (const [scroll, metadata] of cases) {
+        const id = shown(agent, "idle", "", frame, [scroll]);
+        launchedAgents.launched(id, agent);
+        const answer = await paneConversation(id, join(root, ".codex"));
+        expect(answer).toMatchObject({ turns: [], screen: true, metadata });
+        launchedAgents.forget(id);
+        for (const mock of mocks.splice(0)) mock.mockRestore();
+      }
+    }
+    // a Codex started in the terminal: the terminal stands in, naming no model
+    const terminal = shown("codex", "working", "", codex, [null]);
+    const answer = await paneConversation(terminal, join(root, ".codex")).catch((error: unknown) => error);
+    expect(answer).toBeInstanceOf(ConversationUnavailable);
+    expect((answer as ConversationUnavailable).screen).toBeUndefined();
+  });
+});
+
+// any client snapshot starts the Claude subagent refresh that reads this, also the one a pending message is checked against (#1545)
+it("reads a Claude pane's process start from the kernel on macOS, with no ps for it", async () => {
+  const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
+  const home = mkdtempSync(join(tmpdir(), "claude-darwin-start-"));
+  const previousHome = process.env["HOME"];
+  const session = "0b9d6a52-7a5e-4f8e-9a51-2f3c4d5e6f70";
+  const cwd = join(home, "project");
+  mkdirSync(join(home, ".claude", "projects", claudeProjectDir(cwd)), { recursive: true });
+  writeFileSync(join(home, ".claude", "projects", claudeProjectDir(cwd), `${session}.jsonl`), "");
+  const rpc = spyOn(herdr, "herdrRpc").mockImplementation((async (method: string) => method === "agent.get"
+    ? { agent: { agent_session: { value: session } } }
+    : { process_info: { foreground_processes: [{ pid: 4242, name: "claude", argv: ["claude"] }] } }) as unknown as typeof herdr.herdrRpc);
+  const blocking = spyOn(Bun, "spawnSync");
+  // the kernel's process record answers the start; no ps asks it, awaited or not (#1404). Claude's own
+  // store may still ask an awaited ps for the process's environment on a real Mac.
+  const kernel = spyOn(darwinProcess, "darwinStartTime").mockReturnValue(1_000_000n);
+  const awaited = spyOn(Bun, "spawn");
+  process.env["HOME"] = home;
+  Object.defineProperty(process, "platform", { value: "darwin" });
+  try {
+    const found = await claudePaneSession({ pane_id: "claude-darwin", cwd } as HerdrPane);
+    expect(found?.pid).toBe(4242);
+    expect(found?.startedAt).toBe(1_000);
+    expect((awaited.mock.calls as unknown as [string[]][]).filter(([argv]) => argv.includes("etime="))).toEqual([]);
+    expect(blocking).not.toHaveBeenCalled();
+  } finally {
+    Object.defineProperty(process, "platform", platform);
+    if (previousHome === undefined) delete process.env["HOME"]; else process.env["HOME"] = previousHome;
+    awaited.mockRestore(); blocking.mockRestore(); kernel.mockRestore(); rpc.mockRestore();
+    rmSync(home, { recursive: true, force: true });
+  }
 });

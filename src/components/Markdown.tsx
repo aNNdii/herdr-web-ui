@@ -3,10 +3,10 @@ import { BookOpen, Check, Copy, ImageOff, Maximize2 } from "lucide-react";
 
 import "./BlockComments.css";
 
-import { foldCode, mathNestsTooDeep, parseMarkdown, type InlineNode, type ListBlock, type MarkdownBlock, type SourceLines } from "../lib/markdown.ts";
+import { foldCode, mathNestsTooDeep, parseInline, parseMarkdown, type InlineNode, type ListBlock, type MarkdownBlock, type SourceLines } from "../../shared/markdown.ts";
 import { codeIsFilePath, OpenFileContext, splitFilePaths } from "../lib/filePaths.ts";
 import { FilePathLink } from "./FilePathLink.tsx";
-import { fileUriPath } from "../lib/terminalFileLinks.ts";
+import { fileUriPath } from "../../shared/fileUri.ts";
 import { WebPanelContext } from "../lib/webPanel.ts";
 import { MachineContext } from "../lib/machineContext.tsx";
 import { CHAT_HIGHLIGHT_LIMIT, languageForFence } from "../lib/highlight.ts";
@@ -255,8 +255,10 @@ function sourceAttributes(source: SourceLines | undefined): { "data-source-line"
  * item's box stands in for its bullet. */
 function List({ block, path, commentable }: { block: ListBlock; path: number[]; commentable: boolean }) {
   const Tag = block.ordered ? "ol" : "ul";
-  // an ordered list's markers take as many digits as its last number: the indent (ChatView.css) makes room for them
-  const digits = block.ordered ? String((block.start ?? 1) + block.items.length - 1).length : 1;
+  // the widest number's digits: its marker sets the list's indent (ChatView.css). The browser counts
+  // from 1 when `start` is past a 32-bit integer, so such a start sets no wider indent
+  const first = block.start !== undefined && block.start <= 2 ** 31 - 1 ? block.start : 1;
+  const digits = block.ordered ? String(first + block.items.length - 1).length : 1;
   const style = digits > 1 ? { "--markdown-list-digits": digits } as CSSProperties : undefined;
   return (
     <Tag className="markdown-list" start={block.ordered ? block.start : undefined} style={style}>
@@ -478,6 +480,24 @@ export const Markdown = memo(function Markdown({ children, className, html = fal
   const blocks = useMemo(() => parseMarkdown(children, 0, html), [children, html]);
   const parsed = <ParsedMarkdown blocks={blocks} className={className} />;
   return skills === null ? parsed : <SkillMatcherContext.Provider value={skills}>{parsed}</SkillMatcherContext.Provider>;
+});
+
+/** `nodes` with each link, file link and picture as its words: text in a control that answers when clicked opens nothing itself. */
+function withoutLinks(nodes: InlineNode[]): InlineNode[] {
+  return nodes.flatMap((node): InlineNode[] => {
+    switch (node.type) {
+      case "link": case "file": return withoutLinks(node.children);
+      case "image": return node.alt === "" ? [] : [{ type: "text", value: node.alt }];
+      case "strong": case "em": case "del": return [{ ...node, children: withoutLinks(node.children) }];
+      default: return [node];
+    }
+  });
+}
+
+/** One line of inline Markdown inside a button or a checkbox's label (an Ask card's option): emphasis, code and math, with no link in it. */
+export const InlineMarkdown = memo(function InlineMarkdown({ children }: { children: string }) {
+  const nodes = useMemo(() => withoutLinks(parseInline(children, false)), [children]);
+  return <Inline nodes={nodes} interactive={false} />;
 });
 
 /**

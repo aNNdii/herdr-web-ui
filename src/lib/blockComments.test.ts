@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { parseMarkdown, type ListBlock, type MarkdownBlock } from "./markdown.ts";
+import { parseMarkdown, type ListBlock, type MarkdownBlock } from "../../shared/markdown.ts";
 import { anchorTurn, BLOCK_COMMENTS_PREFIX, BlockCommentStore, blockContent, blockTarget, commentTarget, composeWithComments, draftComment, hasQuotedLine, isBlockComment, isBranchEntry, isFileEntry, isMarkdownBlock, isPaneComment, isReplyComment, outgoingMessage, partSegments, quoteExcerpt, quoteFor, replyPart, replyParts, SELECTION_QUOTE_MAX, selectionTarget, textRange, type BlockComment, type CommentTarget } from "./blockComments.ts";
 import { branchAnchor, type BranchComment, type BranchTarget } from "./branchComments.ts";
 import { fileAnchor, type FileComment, type FileTarget } from "./fileComments.ts";
