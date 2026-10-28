@@ -3,8 +3,11 @@ import type { PendingMessage, ServerMessage } from "../../shared/protocol.ts";
 import { paneStorageId } from "../../shared/machines.ts";
 import { greetingMemory } from "./greeting.ts";
 import { MachineSession, MachineSessionRegistry } from "./machineSession.ts";
-import { PendingMessageStore } from "./pendingMessages.ts";
+import { paneLifetimes } from "./paneLifetime.ts";
+import { PendingMessageStore, pendingMessages } from "./pendingMessages.ts";
 import type { HerdrSocket } from "./ws.ts";
+
+type FeaturesFrame = Extract<ServerMessage, { type: "features" }>;
 
 class FakeSocket {
   connected = false;
@@ -20,6 +23,9 @@ class FakeSocket {
   }
   connect(): void { this.connects++; this.connected = true; }
   close(): void { this.closes++; this.connected = false; this.handlers.clear(); this.disconnects.clear(); }
+  private trusted: (frame: FeaturesFrame) => boolean = () => false;
+  trustFeatures(check: (frame: FeaturesFrame) => boolean): void { this.trusted = check; }
+  trusts(frame: FeaturesFrame): boolean { return this.trusted(frame); }
   receive(message: ServerMessage): void { for (const handler of this.handlers) handler(message); }
   disconnect(): void { this.connected = false; for (const handler of this.disconnects) handler(); }
 }
@@ -34,6 +40,25 @@ function setup(machineId = "local", sharedStore?: PendingMessageStore) {
   return { session, socket, store };
 }
 function start(session: MachineSession, socket: FakeSocket): void { session.connect(); socket.receive(snapshot); }
+const named = (herdr_lifetime: string): ServerMessage => ({ type: "snapshot", features: ["submit", "pending-input"], snapshot: { version: "test", protocol: 22, workspaces: [], tabs: [], panes: [], agents: [], layouts: [], herdr_lifetime } });
+/** a page's localStorage, where the herdr fence finds what each pane kept */
+function withStorage(run: () => void): void {
+  const data = new Map<string, string>();
+  const storage = {
+    get length() { return data.size; },
+    key: (index: number) => [...data.keys()][index] ?? null,
+    getItem: (key: string) => data.get(key) ?? null,
+    setItem: (key: string, value: string) => { data.set(key, value); },
+    removeItem: (key: string) => { data.delete(key); },
+    clear: () => { data.clear(); },
+  };
+  const window = Object.getOwnPropertyDescriptor(globalThis, "window");
+  Object.defineProperty(globalThis, "window", { configurable: true, value: { localStorage: storage } });
+  try { run(); } finally {
+    if (window) Object.defineProperty(globalThis, "window", window);
+    else Reflect.deleteProperty(globalThis, "window");
+  }
+}
 
 describe("PC connection ownership", () => {
   it("knows the PC's id for the open connection from its snapshot, and none once it drops", () => {
@@ -48,6 +73,56 @@ describe("PC connection ownership", () => {
     session.connect();
     socket.receive(snapshot);
     expect(session.connection).toBeNull();
+  });
+  it("owns a queued send's receipt from a features frame naming the herdr it knows, and keeps it live through the snapshot (#2257)", () => {
+    withStorage(() => {
+      const { session, socket } = setup("known-herdr-pc", pendingMessages);
+      const owner = paneStorageId("known-herdr-pc", "w1:p1");
+      session.connect();
+      socket.receive(named("known-herdr-a"));
+      socket.disconnect();
+      session.connect();
+      const features: FeaturesFrame = { type: "features", features: ["submit", "pending-input"], connection: "c1", herdr_lifetime: "known-herdr-a" };
+      expect(socket.trusts(features)).toBe(true);
+      socket.receive(features);
+      expect(session.connection).toBe("c1");
+      // the send left once the features were known; its receipt and the live list come before the snapshot
+      session.acceptPending("w1:p1", message("p1"), session.epoch);
+      socket.receive({ type: "pending-messages", pane_id: "w1:p1", messages: [message("p1")] });
+      expect(pendingMessages.read(owner).map(({ state, serverOwned }) => [state, serverOwned])).toEqual([["queued", true]]);
+      const scope = session.scope;
+      socket.receive(named("known-herdr-a"));
+      expect(session.scope).toBe(scope);
+      expect(pendingMessages.isOwned(owner, "p1", session.scope)).toBe(true);
+      // the same herdr: nothing live is offered again as unsent text
+      expect(paneLifetimes.unsent().filter((item) => item.machine_id === "known-herdr-pc")).toEqual([]);
+      session.close();
+    });
+  });
+  it("waits for the snapshot when a features frame names another herdr, or none: its pane IDs may be given out again (#2257)", () => {
+    withStorage(() => {
+      const { session, socket } = setup("replaced-herdr-pc", pendingMessages);
+      session.connect();
+      socket.receive(named("replaced-herdr-a"));
+      socket.disconnect();
+      session.connect();
+      const frames: FeaturesFrame[] = [
+        { type: "features", features: ["submit", "pending-input"], connection: "c1", herdr_lifetime: "replaced-herdr-b" },
+        { type: "features", features: ["submit", "pending-input"], connection: "c1" },
+      ];
+      for (const features of frames) {
+        expect(socket.trusts(features)).toBe(false);
+        socket.receive(features);
+        expect(session.scope).toBeNull();
+        expect(session.connection).toBeNull();
+      }
+      // the snapshot runs the herdr fence first, then opens the connection's scope
+      socket.receive({ ...named("replaced-herdr-b"), connection: "c1" } as ServerMessage);
+      expect(paneLifetimes.generation("replaced-herdr-pc")).toBe("replaced-herdr-b");
+      expect(session.scope).not.toBeNull();
+      expect(session.connection).toBe("c1");
+      session.close();
+    });
   });
   it("lends its sessions to a peek without making one", () => {
     const made: string[] = [];
@@ -203,5 +278,71 @@ describe("PC connection ownership", () => {
     start(next, made[1]!.socket);
     expect(next.scope).not.toBeNull();
     registry.closeAll();
+  });
+  it("gives the page the herdr a reconnected PC names before any pane hears of its snapshot (#1608)", () => {
+    const { session, socket } = setup("fence-pc");
+    const named = (herdr_lifetime: string): ServerMessage => ({ type: "snapshot", snapshot: { version: "test", protocol: 22, workspaces: [], tabs: [], panes: [], agents: [], layouts: [], herdr_lifetime } });
+    paneLifetimes.observe([{ id: "fence-pc", snapshot: { version: "test", protocol: 22, workspaces: [], tabs: [], panes: [], agents: [], layouts: [], herdr_lifetime: "fence-herdr-a" } }], (pane) => pane.pane_id);
+    const drawnUnder: (string | null | undefined)[] = [];
+    session.on((message) => { if (message.type === "snapshot") drawnUnder.push(paneLifetimes.generation("fence-pc")); });
+    session.connect();
+    socket.receive(named("fence-herdr-b"));
+    expect(drawnUnder).toEqual(["fence-herdr-b"]);
+    session.close();
+  });
+  it("draws a reconnected PC's panes under no herdr when its snapshot proves none, before any pane hears of it (#1608)", () => {
+    const { session, socket } = setup("unproven-pc");
+    const owner = paneStorageId("unproven-pc", "w1:p1");
+    const bare = { version: "test", protocol: 22, workspaces: [], tabs: [], panes: [], agents: [], layouts: [] };
+    const seen: { lifetime: string | null | undefined; text: string | null }[] = [];
+    session.on((message) => {
+      if (message.type === "snapshot") seen.push({ lifetime: paneLifetimes.generation("unproven-pc"), text: paneLifetimes.paneStorage.getItem(`ovis:composer-draft:${owner}`) });
+    });
+    session.connect();
+    socket.receive({ type: "snapshot", snapshot: { ...bare, herdr_lifetime: "unproven-herdr-a" } });
+    paneLifetimes.paneStorage.setItem(`ovis:composer-draft:${owner}`, "old socket pane text");
+    socket.disconnect();
+    session.connect();
+    socket.receive({ type: "snapshot", snapshot: bare });
+    expect(seen).toEqual([{ lifetime: "unproven-herdr-a", text: null }, { lifetime: null, text: null }]);
+    session.close();
+  });
+  it("brings a PC's own drafts back once its connection names its herdr again, and leaves what was typed with no proof to recovery (#1608)", () => {
+    const data = new Map<string, string>();
+    const storage = {
+      get length() { return data.size; },
+      key: (index: number) => [...data.keys()][index] ?? null,
+      getItem: (key: string) => data.get(key) ?? null,
+      setItem: (key: string, value: string) => { data.set(key, value); },
+      removeItem: (key: string) => { data.delete(key); },
+      clear: () => { data.clear(); },
+    };
+    const window = Object.getOwnPropertyDescriptor(globalThis, "window");
+    Object.defineProperty(globalThis, "window", { configurable: true, value: { localStorage: storage } });
+    try {
+      const { session, socket } = setup("ingress-pc");
+      const draft = (pane: string): string => `ovis:composer-draft:${paneStorageId("ingress-pc", pane)}`;
+      const bare = { version: "test", protocol: 22, workspaces: [], tabs: [], panes: [], agents: [], layouts: [] };
+      session.connect();
+      socket.receive({ type: "snapshot", snapshot: { ...bare, herdr_lifetime: "ingress-herdr-a" } });
+      paneLifetimes.paneStorage.setItem(draft("w1:p1"), "A's own draft");
+      // the connection comes back with a snapshot that proves no herdr
+      socket.disconnect();
+      session.connect();
+      socket.receive({ type: "snapshot", snapshot: bare });
+      expect(paneLifetimes.paneStorage.getItem(draft("w1:p1"))).toBeNull();
+      // typed meanwhile, in a pane that had no draft
+      paneLifetimes.paneStorage.setItem(draft("w1:p2"), "unidentified new draft");
+      socket.disconnect();
+      session.connect();
+      socket.receive({ type: "snapshot", snapshot: { ...bare, herdr_lifetime: "ingress-herdr-a" } });
+      expect(paneLifetimes.paneStorage.getItem(draft("w1:p1"))).toBe("A's own draft");
+      expect(paneLifetimes.paneStorage.getItem(draft("w1:p2"))).toBeNull();
+      expect(paneLifetimes.unsent().filter((item) => item.machine_id === "ingress-pc").map((item) => `${item.pane_id}=${item.text}`)).toEqual(["w1:p2=unidentified new draft"]);
+      session.close();
+    } finally {
+      if (window) Object.defineProperty(globalThis, "window", window);
+      else Reflect.deleteProperty(globalThis, "window");
+    }
   });
 });

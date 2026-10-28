@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 
-import { defaultPiSessionDir, piTranscriptInStore, piTranscriptPath, piUnwrittenHeaderId, unwrittenSession } from "./pi.ts";
+import { defaultPiSessionDir, piPaneAgentDirs, piTranscriptInStore, piTranscriptPath, piUnwrittenHeaderId, unwrittenSession } from "./pi.ts";
 import { piPaneSession } from "./pi.ts";
 import { piAgentDir } from "./pi-models.ts";
 import { transcriptPage, piTranscriptImage } from "./conversation.ts";
@@ -419,8 +419,8 @@ describe("the pictures sent to pi reach the chat", () => {
     const bytes = Buffer.from(rows.join("\n"));
     const second = rows[0]!.length + rows[1]!.length + 2;
     expect(turnStarts(bytes, "pi-transcript")).toEqual([0, second]);
-    // omp draws no prompt picture yet, so it opens nothing there
-    expect(turnStarts(bytes, "omp-transcript")).toEqual([0]);
+    // omp draws its prompt pictures as pi does, so it opens a turn there too
+    expect(turnStarts(bytes, "omp-transcript")).toEqual([0, second]);
   });
 
   it("keeps a picture a /tree or a clear left behind out of the chat and out of reach", () => {
@@ -732,4 +732,15 @@ describe("piPaneSession names the transcript and the pi process behind it", () =
     })).toBeNull();
     expect(await piPaneSession("pane", store, { agent: null, processes: [], home: root })).toBeNull();
   });
+});
+
+it("names the agent directory of a pane's pi whatever its session store, for the web UI's extension", async () => {
+  const profile = join(root, "custom-pi-profile");
+  // a --session-dir the bridge cannot follow says nothing about where pi runs its extensions
+  for (const argv of [["/usr/bin/pi", "--session-dir", "/elsewhere"], ["/usr/bin/pi", "--session-dir=/elsewhere"], ["/usr/bin/pi"]]) {
+    const found = await piPaneAgentDirs("pane", { processes: [{ pid: 901, argv }], environOf: () => [`PI_CODING_AGENT_DIR=${profile}`], home: root });
+    expect(found.pids).toEqual([901]);
+    expect(found.agentDirs).toContain(profile);
+    expect(found.agentDirs).toContain(piAgentDir());
+  }
 });

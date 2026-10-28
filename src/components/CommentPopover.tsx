@@ -45,7 +45,7 @@ import { markDismissingPress } from "../lib/commentClick.ts";
 import { changedAttrs, inCommentLayer, POPOVER_CLASS, POPOVER_SCRIM_CLASS } from "../lib/commentDom.ts";
 import { popoverFocusesField } from "../lib/commentPopover.ts";
 import { useT } from "../lib/i18n.ts";
-import type { MarkdownBlock } from "../lib/markdown.ts";
+import type { MarkdownBlock } from "../../shared/markdown.ts";
 import { useFocusTrap } from "../lib/useFocusTrap.ts";
 import { CommentField, inAnotherDialog, useCommentDraft } from "./CommentDraft.tsx";
 import { FileReferenceLabel, type FileReference } from "./FileReference.tsx";

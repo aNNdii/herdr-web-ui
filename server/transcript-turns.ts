@@ -66,7 +66,7 @@ export function followClaudeBranch(branch: ClaudeBranch, line: Buffer, start: nu
   // a compaction's boundary starts a chain of its own, and names the record it continues
   const parent = entry.parentUuid === null ? typeof entry.logicalParentUuid === "string" ? entry.logicalParentUuid : null
     : typeof entry.parentUuid === "string" ? entry.parentUuid : undefined;
-  const prompt = opensTurn("claude-transcript", text);
+  const prompt = opensTurn("claude-transcript", text, null);
   const echo = !prompt && claudeCommandEchoRecord(entry as Parameters<typeof claudeCommandEchoRecord>[0]);
   if (branch.echo && typeof parent === "string" && branch.echo.line.has(parent)) {
     if (prompt) { branch.forks.push(branch.echo.range); branch.echo = undefined; } else branch.echo.line.add(entry.uuid);
@@ -107,8 +107,8 @@ const TURN_MARK: Record<StreamSource, Buffer> = {
  * task_started), a Claude or omp prompt (tool results answer the turn before it),
  * and the same for pi, whose prompts are `message` records with a user role.
  */
-function opensTurn(source: StreamSource, line: string): boolean {
-  let entry: { type?: unknown; uuid?: unknown; data?: { content?: unknown }; isMeta?: unknown; isCompactSummary?: unknown; payload?: { type?: unknown }; message?: { role?: unknown; content?: unknown } };
+function opensTurn(source: StreamSource, line: string, blobs: string | null): boolean {
+  let entry: { type?: unknown; uuid?: unknown; origin?: unknown; permissionMode?: unknown; data?: { content?: unknown }; isMeta?: unknown; isCompactSummary?: unknown; payload?: { type?: unknown }; message?: { role?: unknown; content?: unknown } };
   try { entry = JSON.parse(line); } catch { return false; }
   if (entry === null || typeof entry !== "object") return false;
   if (source === "copilot-transcript") return entry.type === "user.message" && copilotRootRecord(entry)
@@ -119,18 +119,20 @@ function opensTurn(source: StreamSource, line: string): boolean {
     const message = piMessage(entry);
     if (message?.role !== "user") return false;
     if ((message.content as Record<string, unknown>[]).some((part) => part.type === "text" && typeof part.text === "string" && part.text.length > 0)) return true;
-    // a pi prompt that is only pictures is drawn as a turn of its own, so it opens one
+    // a pi or omp prompt that is only pictures is drawn as a turn of its own, so it opens one (omp's
+    // pictures in its blob store `blobs`, as the parser names them)
+    if (source === "omp-transcript") return piPromptImages(entry, message, blobs).length > 0;
     return (source === "pi-transcript" || source === "cmd-transcript") && piPromptImages(entry, message).length > 0;
   }
   // another session's message opens a turn in either of its forms, the meta entry and the queued attachment
   if (claudePeerNotice(entry) !== null) return true;
   if (entry.type !== "user" || entry.isMeta || entry.isCompactSummary) return false;
   const content = entry.message?.content;
-  if (typeof content === "string") return !isCommandEntry(content);
+  if (typeof content === "string") return !isCommandEntry(content, entry);
   // a prompt that is only a picture is one too, as the parser draws it; a picture beside a tool's
   // result opens nothing: the result must stay on the page of the call it answers
   return Array.isArray(content) && (content.some((block: { type?: unknown; text?: unknown } | null) =>
-    block?.type === "text" && typeof block.text === "string" && !isCommandEntry(block.text.trim()))
+    block?.type === "text" && typeof block.text === "string" && !isCommandEntry(block.text.trim(), entry))
     || (!content.some((block: { type?: unknown } | null) => block?.type === "tool_result") && claudeImages(entry.uuid, content).length > 0));
 }
 
@@ -143,7 +145,7 @@ function opensTurn(source: StreamSource, line: string): boolean {
  */
 export interface PromptChain { parent: string | null; answered: boolean }
 
-export function turnStarts(bytes: Buffer, source: StreamSource, chain: PromptChain = { parent: null, answered: true }): number[] {
+export function turnStarts(bytes: Buffer, source: StreamSource, chain: PromptChain = { parent: null, answered: true }, blobs: string | null = null): number[] {
   const starts: number[] = [];
   for (let offset = 0; offset < bytes.length;) {
     const newline = bytes.indexOf(0x0a, offset);
@@ -152,7 +154,7 @@ export function turnStarts(bytes: Buffer, source: StreamSource, chain: PromptCha
     if (source === "claude-transcript" && line.includes('"type":"assistant"')) chain.answered = true;
     // a queued attachment carrying another session's message has no "user" in it: its own mark
     const candidate = line.includes(TURN_MARK[source]) || (source === "claude-transcript" && line.includes(PEER_MARK));
-    if (candidate && opensTurn(source, line.toString("utf8"))) {
+    if (candidate && opensTurn(source, line.toString("utf8"), blobs)) {
       if (source === "claude-transcript") {
         let parent: string | null = null;
         let peer = false;

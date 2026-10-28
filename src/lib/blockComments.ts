@@ -3,7 +3,7 @@ import { isSlashCommand, MAX_COMPOSER_CHARS, SELECTION_QUOTE_MAX } from "./compo
 import { branchAnchor, branchCommentAt, branchQuote, isBranchComment, sortBranchComments, type BranchComment, type BranchPlace, type BranchTarget } from "./branchComments.ts";
 import { fileAnchor, fileCommentAt, fileQuote, isFileComment, sortFileComments, type FileComment, type FileTarget, type LineRange } from "./fileComments.ts";
 import { isCommentPoint, type CommentPoint } from "./commentPoint.ts";
-import type { InlineNode, ListBlock, MarkdownBlock } from "./markdown.ts";
+import type { InlineNode, ListBlock, MarkdownBlock } from "../../shared/markdown.ts";
 
 /**
  * Comments on single blocks of an agent's final reply. This module owns what a comment is: how a

@@ -997,8 +997,10 @@ export function Composer({
     const sent = text;
     const sentAttachments = attachments;
     const { sent: sentComments, sentIds, commentsHeld } = outgoing;
+    let sendId: number | undefined;
     const settle = (result: boolean | string | DraftRefusal): void => {
-      const acknowledged = result === true ? composerDrafts.settle(draftKey, sent) : null;
+      // a send for a pane another herdr has replaced since leaves the new pane's box alone (#1608)
+      const acknowledged = result === true ? composerDrafts.settle(draftKey, sent, sendId) : null;
       if (result === true) blockComments.remove(commentOwner, sentIds);
       if (!mounted.current) return;
       if (typeof result !== "boolean") setNote(result);
@@ -1015,14 +1017,15 @@ export function Composer({
       setAttachments((current) => current.filter((attachment) => !sentAttachments.includes(attachment)));
     };
     if (!composerDrafts.begin(draftKey, sent)) return false;
+    sendId = composerDrafts.sendOf(draftKey);
     // a polish landing before the acknowledgement would count as an edit and keep the sent message here
     dictation.forget();
     try {
       const result = onSend(sent, clearDraft, sendAnyway, sentComments);
-      if (!(result instanceof Promise)) { settle(result); composerDrafts.end(draftKey); return true; }
-      void result.then(settle).catch(() => { if (mounted.current) setNote(t("Not confirmed. Check the terminal before sending again.")); }).finally(() => composerDrafts.end(draftKey));
+      if (!(result instanceof Promise)) { settle(result); composerDrafts.end(draftKey, sendId); return true; }
+      void result.then(settle).catch(() => { if (mounted.current) setNote(t("Not confirmed. Check the terminal before sending again.")); }).finally(() => composerDrafts.end(draftKey, sendId));
     } catch {
-      composerDrafts.end(draftKey);
+      composerDrafts.end(draftKey, sendId);
       if (mounted.current) setNote(t("Not confirmed. Check the terminal before sending again."));
     }
     return true;
@@ -1101,12 +1104,13 @@ export function Composer({
       }
     };
     if (!composerDrafts.begin(draftKey)) return;
+    const sendId = composerDrafts.sendOf(draftKey);
     try {
       const result = deliver();
-      if (!(result instanceof Promise)) { settle(result); composerDrafts.end(draftKey); return; }
-      void result.then(settle).catch(() => { if (mounted.current) setNote(t("Not confirmed. Check the terminal before sending again.")); }).finally(() => composerDrafts.end(draftKey));
+      if (!(result instanceof Promise)) { settle(result); composerDrafts.end(draftKey, sendId); return; }
+      void result.then(settle).catch(() => { if (mounted.current) setNote(t("Not confirmed. Check the terminal before sending again.")); }).finally(() => composerDrafts.end(draftKey, sendId));
     } catch {
-      composerDrafts.end(draftKey);
+      composerDrafts.end(draftKey, sendId);
       if (mounted.current) setNote(t("Not confirmed. Check the terminal before sending again."));
     }
   }, [connected, draftKey, sending]);

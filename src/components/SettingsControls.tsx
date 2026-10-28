@@ -35,12 +35,13 @@ export function SettingsRow({ label, description, htmlFor, wide = false, childre
 }
 
 /**
- * A switch; `buttonRef` reaches its button, for an owner that gives the focus back to it (after a question it asked),
- * and `describedBy` names the element whose words say what it acts on.
+ * A switch. `id` for a `<label htmlFor>` beside it; `describedBy`: the id of the hint read with it (the
+ * words that say what it acts on); `buttonRef` reaches its button, for an owner that gives the focus
+ * back to it (after a question it asked).
  */
-export function Toggle({ checked, label, onChange, disabled, buttonRef, describedBy }: { checked: boolean; label: string; onChange: (checked: boolean) => void; disabled?: boolean; buttonRef?: Ref<HTMLButtonElement>; describedBy?: string }) {
+export function Toggle({ checked, label, onChange, disabled, id, describedBy, buttonRef }: { checked: boolean; label: string; onChange: (checked: boolean) => void; disabled?: boolean; id?: string; describedBy?: string; buttonRef?: Ref<HTMLButtonElement> }) {
   return (
-    <button ref={buttonRef} type="button" className="settings-toggle" role="switch" aria-checked={checked} aria-label={label} aria-describedby={describedBy} disabled={disabled} onClick={() => onChange(!checked)}>
+    <button ref={buttonRef} type="button" id={id} className="settings-toggle" role="switch" aria-checked={checked} aria-label={label} aria-describedby={describedBy} disabled={disabled} onClick={() => onChange(!checked)}>
       <span className="settings-toggle-thumb" />
     </button>
   );

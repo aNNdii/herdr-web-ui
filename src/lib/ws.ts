@@ -1,4 +1,5 @@
 import type { ClientMessage, ClientRole, PendingMessage, ServerFeature, ServerMessage } from "../../shared/protocol.ts";
+import { receiptResumeId } from "./receiptResume.ts";
 import { OUTPUT_STALLED_CLOSE_CODE } from "../../shared/terminal-flow.ts";
 import { ConnectionTrace } from "./connectionTrace.ts";
 
@@ -16,8 +17,8 @@ export type SubmitDelivery = "immediate" | "queue" | "hold";
  */
 export type SubmitResult = { ok: true; pending?: PendingMessage; unconfirmed?: true } | { ok: false; code: string; message: string; typed?: false; draft?: string; box?: string };
 
-/** Right after a reconnect the snapshot that says what the server supports may still be on its way. */
-const SNAPSHOT_WAIT_MS = 2000;
+/** Right after a reconnect what the server supports may still be on its way: its `features` frame, or an older bridge's snapshot. */
+const FEATURES_WAIT_MS = 2000;
 /**
  * A submit the server never answers: the composer stops waiting and keeps the text. The
  * server types nothing once 45s have passed since the message reached it (queued behind
@@ -64,7 +65,7 @@ const SOCKET_CLOSED = 3;
 const DISCONNECTED: SubmitResult = { ok: false, code: "disconnected", message: "the connection dropped before the pane confirmed this message" };
 /** The connection dropped before the request's frame left: nothing can have reached the pane. */
 const NOT_TRANSMITTED: SubmitResult = { ok: false, code: "not_transmitted", message: "the connection dropped before this message was sent" };
-/** The socket is open, but the snapshot that says what the bridge takes has not come: nothing was sent (#1806). */
+/** The socket is open, but nothing has said yet what the bridge takes (features frame or snapshot): nothing was sent (#1806). */
 const CAPABILITIES_UNKNOWN: SubmitResult = { ok: false, code: "capabilities_unknown", message: "this PC has not said yet what it supports; nothing was sent" };
 
 /**
@@ -132,7 +133,7 @@ export class HerdrSocket {
   private readonly handlers = new Set<Handler>();
   private readonly disconnectHandlers = new Set<() => void>();
   private readonly beforeReplayHandlers = new Set<() => void>();
-  private snapshotKnown = false;
+  private featuresKnown = false;
   private readonly outputSeen = new Set<string>();
   private readonly inputReady = new Set<string>();
   /** each pane's changes of input on this connection (readiness given, lost or given again, attach, detach); see inputLease */
@@ -237,11 +238,13 @@ export class HerdrSocket {
   private left = false;
   /** when the page was last shown after being hidden (Date.now()); 0 once an attach after a stop used it */
   private shownAt = 0;
-  /** what the connected server listed in its snapshot: empty until it arrives, and on older bridges */
+  /** what the connected server listed in its features frame (an older bridge: its snapshot): empty until it arrives, and on older bridges */
   private features = new Set<ServerFeature>();
-  /** settles when this connection's snapshot arrives (or the connection ends) */
-  private snapshotSeen: Promise<void> = Promise.resolve();
-  private markSnapshot: () => void = () => {};
+  /** settles when this connection's features are known (or the connection ends) */
+  private featuresSeen: Promise<void> = Promise.resolve();
+  private markFeatures: () => void = () => {};
+  /** whether a `features` frame may say what this connection's bridge takes before its snapshot; see trustFeatures */
+  private featuresTrusted: (frame: Extract<ServerMessage, { type: "features" }>) => boolean = () => false;
   private nextSubmit = 1;
   /** submits waiting for their submit-result, by id */
   private readonly submits = new Map<number, (result: SubmitResult) => void>();
@@ -322,8 +325,8 @@ export class HerdrSocket {
     this.features = new Set();
     this.inputReady.clear();
     this.outputSeen.clear();
-    this.snapshotKnown = false;
-    this.snapshotSeen = new Promise((resolve) => { this.markSnapshot = resolve; });
+    this.featuresKnown = false;
+    this.featuresSeen = new Promise((resolve) => { this.markFeatures = resolve; });
     this.clearConnectTimer();
     this.connectTimer = window.setTimeout(() => {
       this.connectTimer = null;
@@ -355,7 +358,7 @@ export class HerdrSocket {
       for (const handler of this.beforeReplayHandlers) handler();
       for (const [paneId, state] of this.attached) {
         state.releaseSizeOwed = !state.keepSize;
-        this.rawSend({ type: "attach", pane_id: paneId, cols: state.cols, rows: state.rows, flow_control: "ack", ...(state.keepSize ? { keep_size: true } : {}) });
+        this.rawSend({ type: "attach", pane_id: paneId, cols: state.cols, rows: state.rows, flow_control: "ack", receipt_resume_id: receiptResumeId(), ...(state.keepSize ? { keep_size: true } : {}) });
       }
     });
 
@@ -386,34 +389,39 @@ export class HerdrSocket {
       const wasReady = readyPane !== null && this.inputReady.has(readyPane);
       // a server without the read-only view (an older bridge after a reconnect) ends this tab's watches
       let unwatched: string[] = [];
-      if (message.type === "snapshot") {
+      // A server lists its features in a first frame of their own, before the snapshot, which can wait
+      // seconds on herdr; an older bridge lists them in its snapshot only. Each list is the bridge's
+      // latest word, but what it restores is asked for once per connection, by the first of them. A features
+      // frame counts only when trusted (trustFeatures); otherwise its snapshot says, as an older bridge's does.
+      if ((message.type === "features" && this.featuresTrusted(message)) || message.type === "snapshot") {
+        const first = !this.featuresKnown;
         this.features = new Set(message.features ?? []);
-        this.snapshotKnown = true;
+        this.featuresKnown = true;
         this.pingKnown = this.features.has("ping");
-        // a probe sent before this snapshot (running or paused), on ping support remembered from an
+        // a probe sent before these features (running or paused), on ping support remembered from an
         // earlier connection: this bridge does not answer pings (an older one after a reconnect), so
         // its connection is trusted as before rather than dropped at the deadline or left paused
         if (!this.pingKnown && this.probing) this.endProbe();
         if (!this.features.has("input-ready")) for (const pane of this.outputSeen) if (this.attached.has(pane)) this.inputReady.add(pane);
         // Capabilities arrive after open's role/attach replay. Restore only current interest,
         // never send an unknown frame to an older bridge or replay a hidden/detached chat.
-        if (this.features.has("conversation-watch")) {
+        if (first && this.features.has("conversation-watch")) {
           for (const paneId of this.attached.keys()) {
             if (this.conversationWanted.has(paneId)) this.rawSend({ type: "conversation-watch", pane_id: paneId, enabled: true });
           }
         }
         if (this.features.has("watch")) {
-          for (const [paneId, grid] of this.watched) this.rawSend({ type: "watch", pane_id: paneId, cols: grid.cols, rows: grid.rows });
+          if (first) for (const [paneId, grid] of this.watched) this.rawSend({ type: "watch", pane_id: paneId, cols: grid.cols, rows: grid.rows });
         } else {
           unwatched = [...this.watched.keys()];
           this.watched.clear();
         }
-        this.markSnapshot();
+        this.markFeatures();
       }
       if (message.type === "error" && message.code === "attach_held") this.trace.record("input_held", {}, true);
       if (message.type === "watch-end") this.watched.delete(message.pane_id);
       if (message.type === "pty-data") this.outputSeen.add(message.pane_id);
-      if ((message.type === "input-ready" && message.ready !== false) || (message.type === "pty-data" && this.snapshotKnown && !this.features.has("input-ready"))) {
+      if ((message.type === "input-ready" && message.ready !== false) || (message.type === "pty-data" && this.featuresKnown && !this.features.has("input-ready"))) {
         if (this.attached.has(message.pane_id)) this.inputReady.add(message.pane_id);
       }
       if ((message.type === "input-ready" && message.ready === false) || message.type === "pty-exit" || (message.type === "error" && message.pane_id && ["attach_held", "input_not_ready"].includes(message.code))) this.inputReady.delete(message.pane_id!);
@@ -495,7 +503,7 @@ export class HerdrSocket {
     this.clearConnectTimer();
     this.clearLiveness();
     for (const handler of this.disconnectHandlers) handler();
-    this.markSnapshot();
+    this.markFeatures();
     this.settleSubmits(DISCONNECTED);
   }
 
@@ -725,12 +733,21 @@ export class HerdrSocket {
     return () => { this.beforeReplayHandlers.delete(handler); };
   }
 
+  /**
+   * Which `features` frames say what the bridge takes before the snapshot does. None by default: a send
+   * then waits for the snapshot, as on an older bridge. MachineSession trusts one that names the herdr the
+   * page already proved, so a send never leaves for a pane ID a replaced herdr gave out again.
+   */
+  trustFeatures(check: (frame: Extract<ServerMessage, { type: "features" }>) => boolean): void {
+    this.featuresTrusted = check;
+  }
+
   attach(paneId: string, cols: number, rows: number, keepSize = false): void {
     this.outputSeen.delete(paneId);
     this.inputReady.delete(paneId);
     this.changeLease(paneId);
     this.attached.set(paneId, { cols, rows, keepSize, releaseSizeOwed: !keepSize });
-    this.send({ type: "attach", pane_id: paneId, cols, rows, flow_control: "ack", ...(keepSize ? { keep_size: true } : {}) });
+    this.send({ type: "attach", pane_id: paneId, cols, rows, flow_control: "ack", receipt_resume_id: receiptResumeId(), ...(keepSize ? { keep_size: true } : {}) });
     if (this.conversationWanted.has(paneId) && this.features.has("conversation-watch")) {
       this.send({ type: "conversation-watch", pane_id: paneId, enabled: true });
     }
@@ -772,6 +789,11 @@ export class HerdrSocket {
     };
   }
 
+  /** Whether this tab holds an attach for the pane (attached and not let go of). */
+  isAttached(paneId: string): boolean {
+    return this.attached.has(paneId);
+  }
+
   detach(paneId: string): void {
     this.outputSeen.delete(paneId);
     this.inputReady.delete(paneId);
@@ -787,14 +809,14 @@ export class HerdrSocket {
   watch(paneId: string, cols: number, rows: number): boolean {
     if (!this.canWatch()) return false;
     this.watched.set(paneId, { cols, rows });
-    // before the snapshot, the snapshot handler sends it
-    if (this.connected && this.snapshotKnown) this.rawSend({ type: "watch", pane_id: paneId, cols, rows });
+    // before the features are known, the handler that learns them sends it
+    if (this.connected && this.featuresKnown) this.rawSend({ type: "watch", pane_id: paneId, cols, rows });
     return true;
   }
 
-  /** Before the snapshot, a watch waits for capability discovery rather than acquiring an attach. */
+  /** Before the features are known, a watch waits for capability discovery rather than acquiring an attach. */
   canWatch(): boolean {
-    return !this.snapshotKnown || this.features.has("watch");
+    return !this.featuresKnown || this.features.has("watch");
   }
 
   unwatch(paneId: string): void {
@@ -913,17 +935,17 @@ export class HerdrSocket {
     if (!this.connected || socket === null || this.mode === "observe") return null;
     if (resendId !== undefined && sendAnyway) return Promise.resolve({ ok: false, code: "invalid_delivery", message: "Use a held-copy resend id only for an immediate chat message", typed: false });
     return (async (): Promise<SubmitResult> => {
-      await Promise.race([this.snapshotSeen, new Promise((resolve) => window.setTimeout(resolve, SNAPSHOT_WAIT_MS))]);
+      await Promise.race([this.featuresSeen, new Promise((resolve) => window.setTimeout(resolve, FEATURES_WAIT_MS))]);
       // a liveness probe in flight is waited out: nothing is sent on a socket that may be dead
       if (!(await this.probeSettled(socket))) return NOT_TRANSMITTED;
       // refused here, before any frame left: nothing was typed
       if (this.mode === "observe") return { ok: false, code: "read_only", message: "Observe connections cannot submit messages.", typed: false };
-      // the wait ended before the snapshot said what this bridge takes: one that takes `submit` would get the
+      // the wait ended before the bridge said what it takes: one that takes `submit` would get the
       // message as raw typed input, past every check it makes before typing (#1591), so nothing is sent
-      if (!this.snapshotKnown) return CAPABILITIES_UNKNOWN;
+      if (!this.featuresKnown) return CAPABILITIES_UNKNOWN;
       // an older bridge would type it into whatever runs in the pane, a shell included
       if (agentOnly && !this.features.has("submit-agent-only")) return { ok: false, code: "agent_only_unsupported", message: "this PC's bridge cannot keep the message from a shell", typed: false };
-      // hold is decided once the snapshot said what the bridge supports: one too old to hold queues it as before
+      // hold is decided once the bridge said what it supports: one too old to hold queues it as before
       if (delivery === "hold" && !this.canHoldMessages()) delivery = "queue";
       if (delivery === "queue" && !this.canQueueMessages()) return { ok: false, code: "pending_input_unsupported", message: "Update this PC to queue messages.", typed: false };
       if (!this.features.has("submit")) {
@@ -940,16 +962,16 @@ export class HerdrSocket {
   }
 
   /** Explicitly steer or discard one server-owned pending item. Never queued or replayed. */
-  pendingAction(paneId: string, pendingId: string, action: "steer" | "discard", generation?: number): Promise<SubmitResult> | null {
+  pendingAction(paneId: string, pendingId: string, action: "steer" | "discard", generation?: number, withdrawalOnly = false): Promise<SubmitResult> | null {
     const socket = this.socket;
     if (!this.connected || socket === null || this.mode === "observe") return null;
     return (async (): Promise<SubmitResult> => {
-      await Promise.race([this.snapshotSeen, new Promise((resolve) => window.setTimeout(resolve, SNAPSHOT_WAIT_MS))]);
+      await Promise.race([this.featuresSeen, new Promise((resolve) => window.setTimeout(resolve, FEATURES_WAIT_MS))]);
       if (!(await this.probeSettled(socket))) return NOT_TRANSMITTED;
       if (this.mode === "observe") return { ok: false, code: "read_only", message: "Observe connections cannot change pending messages.", typed: false };
       if (!this.canQueueMessages()) return { ok: false, code: "pending_input_unsupported", message: "Update this PC to manage pending messages.", typed: false };
       return this.submitRequest({ type: "pending-action", id: this.nextSubmit++, pane_id: paneId, pending_id: pendingId, action,
-        ...(generation !== undefined ? { resend_generation: generation } : {}) });
+        ...(generation !== undefined ? { resend_generation: generation } : {}), launch_ended: true, ...(withdrawalOnly ? { withdrawal_only: true as const } : {}) });
     })();
   }
 
@@ -972,12 +994,12 @@ export class HerdrSocket {
     // back) during the waits below would carry this draft into an attachment it was not meant for
     const lease = this.inputLease(paneId);
     return (async (): Promise<SubmitResult> => {
-      await Promise.race([this.snapshotSeen, new Promise((resolve) => window.setTimeout(resolve, SNAPSHOT_WAIT_MS))]);
+      await Promise.race([this.featuresSeen, new Promise((resolve) => window.setTimeout(resolve, FEATURES_WAIT_MS))]);
       if (!(await this.probeSettled(socket))) return NOT_TRANSMITTED;
       if (this.mode === "observe") return { ok: false, code: "read_only", message: "Observe connections cannot type into the pane." };
       if (this.inputLease(paneId) !== lease) return { ok: false, code: "input_not_ready", message: "Terminal input changed before the text left. Nothing was sent." };
-      // the wait ended before the snapshot said what this bridge takes: "Update this PC" would be wrong advice
-      if (!this.snapshotKnown) return CAPABILITIES_UNKNOWN;
+      // the wait ended before the bridge said what it takes: "Update this PC" would be wrong advice
+      if (!this.featuresKnown) return CAPABILITIES_UNKNOWN;
       if (!this.features.has("terminal-insert")) return { ok: false, code: "unsupported", message: "Update this PC to insert text without Enter. Nothing was sent." };
       if (!this.inputReady.has(paneId)) return { ok: false, code: "input_not_ready", message: "Terminal input is not ready. Nothing was sent." };
       return this.submitRequest({ type: "insert", id: this.nextSubmit++, pane_id: paneId, text });
@@ -1011,9 +1033,9 @@ export class HerdrSocket {
     const socket = this.socket;
     if (!this.connected || socket === null || this.mode === "observe") return null;
     return (async (): Promise<SubmitResult> => {
-      // right after a reconnect the terminal's output can arrive before the snapshot that says
+      // right after a reconnect the terminal's output can arrive before the frame that says
       // whether the server takes masked input: wait for it, as a submit does
-      await Promise.race([this.snapshotSeen, new Promise((resolve) => window.setTimeout(resolve, SNAPSHOT_WAIT_MS))]);
+      await Promise.race([this.featuresSeen, new Promise((resolve) => window.setTimeout(resolve, FEATURES_WAIT_MS))]);
       if (!(await this.probeSettled(socket))) { secret = ""; return DISCONNECTED; }
       if (!this.features.has("secret-input")) { secret = ""; return { ok: false, code: "unsupported", message: "Update this PC to use masked input." }; }
       const id = this.nextSubmit++;
