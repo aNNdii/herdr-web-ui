@@ -12,6 +12,7 @@ import { DirectoryBrowser, homeRelative } from "./DirectoryBrowser.tsx";
 import { RecentFolderChips } from "./RecentFolderChips.tsx";
 import { Toggle } from "./SettingsControls.tsx";
 import { useMachineApi, useMachineId } from "../lib/machineContext.tsx";
+import { useAgentSkills } from "../lib/useAgentSkills.ts";
 import { useT } from "../lib/i18n.ts";
 import { useSettings } from "../lib/settings.ts";
 import { launchCapabilities, modelSuggestions } from "../lib/agentLaunchMode.ts";
@@ -64,19 +65,12 @@ export interface DialogFields {
 
 /** how long the fields rest before the address follows them: Safari refuses a burst of history writes */
 const DRAFT_MS = 400;
-/** how long the agent and folder rest before their skills are asked for: a path is typed one key at a time */
-const SKILLS_MS = 300;
 /** recent folders offered: one row a phone swipes sideways; a wider screen fits what one row holds and lists the rest under "+N" */
 const RECENT_FOLDERS_SHOWN = 8;
 
 function directoryBasename(value: string): string {
   const trimmed = value.replace(/\\/g, "/").replace(/\/+$/, "");
   return trimmed.split("/").pop() || value;
-}
-
-/** The skills among an agent's commands, as chips the first message takes: `$name`, `@name` or `/name`. */
-function skillRows(commands: readonly SlashCommand[]): SlashCommand[] {
-  return commands.filter((command) => command.source === "skill" && command.visibility !== "terminal");
 }
 
 const skillToken = (skill: SlashCommand): string => `${skill.trigger ?? "/"}${skill.name}`;
@@ -105,8 +99,9 @@ export function NewSessionDialog({ open, defaultCwd, tab = null, onClose, onCrea
   const [effort, setEffort] = useState("");
   const [ultracode, setUltracode] = useState(false);
   const [prompt, setPrompt] = useState("");
-  /** the picked agent's skills in the folder, once listed; null while none were asked for or the answer is on its way */
-  const [skills, setSkills] = useState<{ rows: SlashCommand[]; note: string | null } | null>(null);
+  // the skills the picked agent would offer in the folder, before any process exists (GET /api/agent/commands)
+  const skillFolder = tab ? tab.cwd : cwd.trim() || null;
+  const [skills, setSkills] = useAgentSkills(open, agentKind, skillFolder, fetchAgentCommands, t);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<UserError | null>(null);
   const [createdPaneId, setCreatedPaneId] = useState<string | null>(null);
@@ -191,30 +186,6 @@ export function NewSessionDialog({ open, defaultCwd, tab = null, onClose, onCrea
     return () => window.clearTimeout(timer);
   }, [open, onDraft, cwd, name, agentKind]);
 
-  // the skills the picked agent would offer in the folder, before any process exists (GET /api/agent/commands)
-  const skillFolder = tab ? tab.cwd : cwd.trim() || null;
-  useEffect(() => {
-    if (!open || agentKind === "") return;
-    let cancelled = false;
-    const timer = window.setTimeout(() => {
-      void fetchAgentCommands(agentKind, skillFolder)
-        .then((commands) => {
-          if (!cancelled) setSkills({ rows: skillRows(commands), note: null });
-        })
-        .catch((reason: unknown) => {
-          if (cancelled) return;
-          // a folder not there yet lists nothing; a PC whose bridge is from before the route cannot list
-          const note = reason instanceof ApiError && reason.code === "invalid_cwd" ? t("Skills are listed once the directory exists.")
-            : reason instanceof ApiError && reason.status === 404 ? t("This PC's bridge does not list skills yet.")
-              : userErrorMessage(reason).message;
-          setSkills({ rows: [], note });
-        });
-    }, SKILLS_MS);
-    return () => {
-      cancelled = true;
-      window.clearTimeout(timer);
-    };
-  }, [open, agentKind, skillFolder]);
 
   useEffect(() => {
     if (!open) return;
@@ -391,7 +362,7 @@ export function NewSessionDialog({ open, defaultCwd, tab = null, onClose, onCrea
             <span className="field-hint">{t(tab ? "Tab name (optional)" : "Optional workspace label")}</span>
           </label>
           {/* the launch's own choices, only where the agent's command line takes them (lib/agentLaunchMode.ts) */}
-          {(can.model || can.efforts.length > 0 || can.ultracode) && <div className="new-session-launch">
+          {(can.model || can.efforts.length > 0) && <div className="new-session-launch">
             {can.model && <div className="field">
               <label className="field-label" htmlFor="new-session-model">{t("Model")}</label>
               <input
@@ -421,12 +392,14 @@ export function NewSessionDialog({ open, defaultCwd, tab = null, onClose, onCrea
               </select>
               <span id="new-session-effort-hint" className="field-hint">{t("Levels depend on the model.")}</span>
             </div>}
-            {/* Claude Code's own term, a setting beside the level rather than one of them; off adds nothing */}
-            {can.ultracode && <div className="field new-session-ultracode">
-              <label className="field-label" htmlFor="new-session-ultracode">{t("Ultracode")}</label>
-              <Toggle id="new-session-ultracode" checked={ultracode} label={t("Ultracode")} disabled={fieldsDisabled} describedBy="new-session-ultracode-hint" onChange={setUltracode} />
-              <span id="new-session-ultracode-hint" className="field-hint">{t("Dynamic workflows at any effort level. Needs Claude Code 2.1.284 or later.")}</span>
-            </div>}
+          </div>}
+          {/* Claude Code's own term, a setting beside the level rather than one of them, on one line under Model and
+              Effort; the whole sentence is the switch's description and the line's tooltip; off adds nothing */}
+          {can.ultracode && <div className="new-session-ultracode" title={t("Dynamic workflows at any effort level. Needs Claude Code 2.1.284 or later.")}>
+            <Toggle id="new-session-ultracode" checked={ultracode} label={t("Ultracode")} disabled={fieldsDisabled} describedBy="new-session-ultracode-hint" onChange={setUltracode} />
+            <label className="new-session-ultracode-label" htmlFor="new-session-ultracode">{t("Ultracode")}</label>
+            <span className="new-session-ultracode-note" aria-hidden="true">{t("Claude Code 2.1.284 or later")}</span>
+            <span id="new-session-ultracode-hint" className="visually-hidden">{t("Dynamic workflows at any effort level. Needs Claude Code 2.1.284 or later.")}</span>
           </div>}
           {agentKind !== "" && <div className="field">
             <label className="field-label" htmlFor="new-session-prompt">{t("First message")}</label>

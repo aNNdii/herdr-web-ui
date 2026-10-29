@@ -292,7 +292,7 @@ describe("comment place", () => {
 
 describe("branch field error", () => {
   const refused = (code: string, param: string | null = null, status = 404) =>
-    new ApiError("/api/workspace/diff/files", status, "refused", code, param);
+    new ApiError("/api/workspace/diff/files", status, "refused", code, null, param);
   const either = [false, true];
 
   it("puts an error under the field the server names", () => {

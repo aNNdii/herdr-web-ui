@@ -207,4 +207,5 @@ export const CHAT_JA: Record<string, string> = {
   "Share link": "リンクを共有",
   "{n} agent finished": "エージェント {n} 件完了",
   "{n} agents finished": "エージェント {n} 件完了",
+  "Sent · waiting for the agent's next turn": "送信済み · エージェントの次のターンを待っています",
 };

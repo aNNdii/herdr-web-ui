@@ -207,4 +207,5 @@ export const CHAT_KO: Record<string, string> = {
   "Share link": "링크 공유",
   "{n} agent finished": "에이전트 {n}개 완료",
   "{n} agents finished": "에이전트 {n}개 완료",
+  "Sent · waiting for the agent's next turn": "전송됨 · 에이전트의 다음 턴을 기다리는 중",
 };

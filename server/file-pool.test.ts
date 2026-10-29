@@ -1,9 +1,10 @@
 import { afterEach, describe, expect, it } from "bun:test";
-import { closeSync, constants as fsConstants, fstatSync, mkdtempSync, openSync, rmSync, writeFileSync, writeSync } from "node:fs";
+import { closeSync, constants as fsConstants, fstatSync, mkdirSync, mkdtempSync, openSync, rmSync, writeFileSync, writeSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import type { FileInfo } from "../shared/protocol.ts";
+import type { FileInfo, SlashCommand } from "../shared/protocol.ts";
+import { commandScansSettled, scanPaneCommands, setCommandsWait, setUnclaimedLimits } from "./commands.ts";
 import { FileBusyError, filePoolSize, fileTask, fileThreadsClosed, holdFilePool, setFilePoolOptions } from "./file-pool.ts";
 import type { FileTask, OpenedFile } from "./file-tasks.ts";
 
@@ -13,8 +14,9 @@ const waitAsync = (Atomics as unknown as { waitAsync: (cells: Int32Array, index:
 
 /** A held answer: the thread runs its task, then waits until `release`. */
 const gate = () => {
-  const cells = new Int32Array(new SharedArrayBuffer(8));
+  const cells = new Int32Array(new SharedArrayBuffer(12));
   cells[1] = -1;
+  cells[2] = -1;
   return {
     buffer: cells.buffer as SharedArrayBuffer,
     release: () => { Atomics.store(cells, 0, 1); Atomics.notify(cells, 0); },
@@ -23,6 +25,11 @@ const gate = () => {
       const waited = waitAsync(cells, 1, -1, 10_000);
       if ((waited.async ? await waited.value : waited.value) === "timed-out") throw new Error("the held thread never ran its task");
       return cells[1]!;
+    },
+    /** The FIFO a FIFO gate's thread, ended inside its read, never closed: closed once that thread is gone. */
+    closeFifo: () => {
+      const fd = Atomics.exchange(cells, 2, -1);
+      if (fd >= 0) closeSync(fd);
     },
   };
 };
@@ -141,6 +148,109 @@ describe("file threads", () => {
     expect([...await walk].sort()).toEqual(["big.bin", "notes.txt"]);
   });
 
+  /** Claude's commands in `root`, with `root` as its home */
+  const scan = (): FileTask => ({ op: "commands", agent: "claude", cwd: root, home: root, roots: {}, version: null, serverEnv: {} });
+  const names = (commands: SlashCommand[]): string[] => commands.map((command) => command.name);
+
+  it("runs at most `scans` commands scans at once, and file tasks take the threads left (#2254)", async () => {
+    setUp({ workers: 3, waiting: 4, deadlineMs: 30_000, scanDeadlineMs: 30_000, scans: 2 });
+    mkdirSync(join(root, ".claude", "skills", "listed"), { recursive: true });
+    writeFileSync(join(root, ".claude", "skills", "listed", "SKILL.md"), "---\nname: listed\ndescription: A skill in the scanned home.\n---\n");
+    const hold = gate();
+    const scans = [fileTask<SlashCommand[]>(held(scan(), hold.buffer)), fileTask<SlashCommand[]>(held(scan(), hold.buffer))];
+    const third = fileTask<SlashCommand[]>(scan());
+    // two scans hold two threads: the third waits for one of theirs rather than taking the last
+    expect(filePoolSize()).toEqual({ threads: 2, idle: 0, waiting: 1 });
+    // a file task behind it still takes a free thread at once
+    expect(await fileTask<FileInfo | null>({ op: "info", path: file })).toMatchObject({ size: 5 });
+    expect(filePoolSize()).toEqual({ threads: 3, idle: 1, waiting: 1 });
+    hold.release();
+    for (const commands of await Promise.all([...scans, third])) expect(names(commands)).toContain("listed");
+  });
+
+  it("gives a commands scan a deadline of its own, longer than a folder walk's", async () => {
+    setUp({ workers: 2, waiting: 0, deadlineMs: 150, longDeadlineMs: 150, scanDeadlineMs: 30_000 });
+    const hold = gate();
+    const scanning = fileTask<SlashCommand[]>(held(scan(), hold.buffer));
+    // a walk held as long is refused at its deadline; the scan is still waited for
+    await expect(fileTask(held({ op: "walk", cwd: root }, hold.buffer))).rejects.toBeInstanceOf(FileBusyError);
+    hold.release();
+    expect(names(await scanning)).toContain("clear");
+  });
+
+  it("hands a scan the server's environment, which its thread does not see", async () => {
+    setUp({ workers: 1, waiting: 0, deadlineMs: 30_000 });
+    const agentDir = join(root, "pi-agent");
+    mkdirSync(join(agentDir, "prompts"), { recursive: true });
+    writeFileSync(join(agentDir, "prompts", "from-server-env.md"), "A prompt pi finds through the server's PI_CODING_AGENT_DIR.\n");
+    const before = process.env["PI_CODING_AGENT_DIR"];
+    process.env["PI_CODING_AGENT_DIR"] = agentDir;
+    try {
+      expect(names(await scanPaneCommands("pi", root))).toContain("from-server-env");
+    } finally {
+      if (before === undefined) delete process.env["PI_CODING_AGENT_DIR"];
+      else process.env["PI_CODING_AGENT_DIR"] = before;
+    }
+  });
+
+  it("counts a request's wait from when it began, and drops a scan still waiting for a thread once nobody waits for it (#2254)", async () => {
+    setUp({ workers: 1, waiting: 1, deadlineMs: 30_000 });
+    setCommandsWait(30_000);
+    try {
+      const hold = gate();
+      const busy = fileTask<FileInfo | null>(held({ op: "info", path: file }, hold.buffer));
+      // the only thread is taken, so the scan waits for it; its request began 30 s ago (its herdr
+      // lookups took them all), so it is refused at once rather than 30 s from now
+      await expect(scanPaneCommands("claude", root, {}, null, undefined, performance.now() - 30_000)).rejects.toBeInstanceOf(FileBusyError);
+      // and the scan nobody waits for gives up its waiting place, free for the next task
+      expect(filePoolSize().waiting).toBe(0);
+      const next = fileTask<FileInfo | null>({ op: "info", path: file });
+      hold.release();
+      expect(await busy).toMatchObject({ size: 5 });
+      expect(await next).toMatchObject({ size: 5 });
+    } finally { setCommandsWait(); }
+  });
+
+  it("keeps a bounded number of unclaimed scan answers, the oldest dropped first (#2254)", async () => {
+    setUp({ workers: 4, waiting: 0, deadlineMs: 30_000 });
+    const before = process.env["HOME"];
+    process.env["HOME"] = join(root, "home");
+    const skill = (folder: string, name: string) => {
+      mkdirSync(join(root, folder, ".claude", "skills", name), { recursive: true });
+      writeFileSync(join(root, folder, ".claude", "skills", name, "SKILL.md"), `---\nname: ${name}\ndescription: A skill of ${folder}.\n---\n`);
+    };
+    /** a scan of `folder` whose request leaves as soon as a thread took it (one is free): it finishes unclaimed */
+    const abandoned = async (folder: string) => {
+      const leaving = new AbortController();
+      const scan = scanPaneCommands("claude", join(root, folder), {}, null, leaving.signal);
+      leaving.abort();
+      await expect(scan).rejects.toBeInstanceOf(FileBusyError);
+      await commandScansSettled();
+    };
+    try {
+      setUnclaimedLimits({ entries: 2 });
+      for (const folder of ["one", "two", "three"]) {
+        skill(folder, `${folder}-before`);
+        await abandoned(folder);
+      }
+      await commandScansSettled();
+      for (const folder of ["one", "two", "three"]) skill(folder, `${folder}-after`);
+      // "one" was dropped for "three": scanned again, it has the skill added since; "three"'s kept answer has not
+      expect(names(await scanPaneCommands("claude", join(root, "one")))).toContain("one-after");
+      expect(names(await scanPaneCommands("claude", join(root, "three")))).not.toContain("three-after");
+      // an answer larger than the whole allowance is not kept
+      setUnclaimedLimits({ chars: 1 });
+      await abandoned("two");
+      await commandScansSettled();
+      skill("two", "two-later");
+      expect(names(await scanPaneCommands("claude", join(root, "two")))).toContain("two-later");
+    } finally {
+      setUnclaimedLimits();
+      if (before === undefined) delete process.env["HOME"];
+      else process.env["HOME"] = before;
+    }
+  });
+
   it("closes a descriptor whose thread is ended before it answers", async () => {
     setUp({ workers: 1, waiting: 0, deadlineMs: 30_000 });
     const hold = gate();
@@ -171,6 +281,7 @@ describe("file threads", () => {
     closeSync(writer);
     await fileThreadsClosed();
     expect(() => fstatSync(fd)).toThrow();
+    hold.closeFifo();
   });
 
   it("keeps a descriptor its thread is reading open until that thread is gone, when the last server stops", async () => {
@@ -189,10 +300,13 @@ describe("file threads", () => {
     const other = openSync(big, "r");
     expect(other).not.toBe(fd);
     closeSync(other);
-    // the read returns, the thread is gone, and only then is its descriptor closed
-    closeSync(openSync(fifo, "w"));
+    // the read returns (a write that never waits: the thread opened the FIFO before it said it ran), the thread is gone, and only then is its descriptor closed
+    const writer = openSync(fifo, fsConstants.O_WRONLY | fsConstants.O_NONBLOCK);
+    writeSync(writer, "x");
+    closeSync(writer);
     await fileThreadsClosed();
     expect(() => fstatSync(fd)).toThrow();
+    hold.closeFifo();
   });
 
   it("ends its threads, a busy one too, when the last server holding them stops", async () => {

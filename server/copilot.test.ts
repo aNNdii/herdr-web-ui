@@ -11,6 +11,7 @@ import { parseConversationMetadata } from "./conversation-metadata.ts";
 import * as herdr from "./herdr/client.ts";
 import * as omo from "./omo.ts";
 import * as processStart from "./process-start.ts";
+import * as processOwner from "./process-owner.ts";
 import type { SessionSnapshot } from "../shared/protocol.ts";
 
 const session = "12aa83d8-48bc-41f2-a498-7055c5c44a01";
@@ -68,16 +69,70 @@ async function logFixture(held: readonly string[]) {
   };
 }
 
+for (const revoked of [false, true]) {
+  it.skipIf(process.platform !== "linux")(`keeps ${revoked ? "denied" : "registered"} Copilot ownership when epoch start time changes`, async () => {
+    const fixture = await logFixture([session]);
+    const { environment, log, pid, binding } = fixture;
+    const realStarted = processStart.processStartedAt;
+    const started = realStarted(pid)!;
+    let correction = 0;
+    const epoch = spyOn(processStart, "processStartedAt").mockImplementation((current) =>
+      current === pid ? started + correction : realStarted(current));
+    try {
+      appendFileSync(log, register(session));
+      const original = binding();
+      expect(original?.sessionId).toBe(session);
+      if (revoked) {
+        appendFileSync(log, register(session, "Unregistering"));
+        expect(binding()).toBeNull();
+        writeFileSync(log, "ordinary replacement without lifecycle evidence\n");
+        expect(copilotProcessSession(environment, ["copilot"], pid)).toBeNull();
+      }
+      for (correction of [-2000, 3000, -1000]) {
+        if (revoked) expect(copilotProcessSession(environment, ["copilot"], pid)).toBeNull();
+        else expect(binding()?.generation).toBe(original?.generation);
+      }
+    } finally { epoch.mockRestore(); await fixture.close(); }
+  });
+}
+
+it.skipIf(process.platform !== "linux")("retains denial on unknown birth but recognizes a genuinely replaced Copilot process", async () => {
+  const fixture = await logFixture([session]);
+  const { environment, log, pid } = fixture;
+  const realBirth = processOwner.readProcessBirth;
+  const original = realBirth(pid);
+  let birth = original;
+  const reading = spyOn(processOwner, "readProcessBirth").mockImplementation((current) =>
+    current === pid ? birth : realBirth(current));
+  const read = () => copilotProcessSession(environment, ["copilot"], pid);
+  try {
+    expect(original.state).toBe("identified");
+    if (original.state !== "identified") throw new Error("Fixture process birth unavailable");
+    appendFileSync(log, "CLI started\n");
+    expect(read()?.sessionId).toBe(session);
+    appendFileSync(log, register(session, "Unregistering"));
+    expect(read()).toBeNull();
+    writeFileSync(log, "replacement CLI started\n");
+    expect(read()).toBeNull();
+    birth = { state: "unknown" };
+    expect(read()).toBeNull();
+    birth = original;
+    expect(read()).toBeNull();
+    birth = { state: "identified", birth: { platform: "linux", value: original.birth.value + "0" } };
+    expect(read()?.sessionId).toBe(session);
+  } finally { reading.mockRestore(); await fixture.close(); }
+});
+
 it.skipIf(process.platform !== "linux")("never reuses cached handoff unregister evidence when the process identity lookup fails", async () => {
   const fixture = await logFixture([session]);
   const { environment, log, pid } = fixture;
   const read = () => copilotProcessSession(environment, ["copilot"], pid, "unregistered");
-  const realStarted = processStart.processStartedAt;
+  const realBirth = processOwner.readProcessBirth;
   try {
     appendFileSync(log, register(session) + register(session, "Unregistering"));
     expect(read()?.sessionId).toBe(session);
     writeFileSync(log, register(other));
-    const missing = spyOn(processStart, "processStartedAt").mockImplementation((current) => current === pid ? null : realStarted(current));
+    const missing = spyOn(processOwner, "readProcessBirth").mockImplementation((current) => current === pid ? { state: "unknown" } : realBirth(current));
     try { expect(read()).toBeNull(); } finally { missing.mockRestore(); }
     expect(read()).toBeNull();
     expect(copilotProcessSession(environment, ["copilot"], pid)?.sessionId).toBe(other);
@@ -535,17 +590,42 @@ it.skipIf(process.platform !== "linux")("retries a failed Copilot process lookup
     expect(changed.turns[0]?.parts[0]).toEqual({ kind: "text", text: "changed history" });
     unavailable = true;
     ownCalls = 0;
-    await expect(paneConversation("own")).rejects.toBeInstanceOf(ConversationUnavailable);
+    await expect(paneConversation("own")).rejects.toMatchObject({ diagnostic: "copilot_process_lookup_failed", message: "no_session_path" });
     expect(ownCalls).toBe(2);
     unavailable = false;
     empty = true;
     ownCalls = 0;
-    await expect(paneConversation("own")).rejects.toBeInstanceOf(ConversationUnavailable);
+    await expect(paneConversation("own")).rejects.toMatchObject({ diagnostic: "copilot_process_set_unproved", message: "no_session_path" });
     expect(ownCalls).toBe(1);
   } finally {
     info.mockRestore(); environment.mockRestore(); rpc.mockRestore(); snapshots.mockRestore();
     forgetTranscriptState();
     await own.close(); await peer.close();
+  }
+});
+
+it.skipIf(process.platform !== "linux")("reads a Copilot pane at the page size the chat asks for", async () => {
+  const own = await logFixture([]);
+  const snapshot = { panes: [{ pane_id: "sized", agent: "copilot", cwd: own.root }], agents: [] } as unknown as SessionSnapshot;
+  const snapshots = spyOn(herdr, "sessionSnapshot").mockResolvedValue(snapshot);
+  const rpc = spyOn(herdr, "herdrRpc").mockResolvedValue({ process_info: { foreground_processes: [] } });
+  const environment = spyOn(omo, "processEnviron").mockImplementation(() => own.environment);
+  const info = spyOn(herdr, "paneProcessInfo").mockImplementation(async (paneId) => ({ pane_id: paneId, foreground_processes: [{ pid: own.pid, name: "copilot", argv: ["copilot"] }] }));
+  const asked = (conversation: { turns: { role: string; parts: unknown[] }[] }) =>
+    conversation.turns.filter((turn) => turn.role === "user").map((turn) => turn.parts[0]);
+  try {
+    appendFileSync(own.log, register(session));
+    writeFileSync(join(own.root, "session-state", session, "events.jsonl"), start
+      + prompt("first") + answer("one") + prompt("second") + answer("two") + prompt("third") + answer("three"));
+    expect(asked(await paneConversation("sized"))).toHaveLength(3);
+    const newest = await paneConversation("sized", undefined, { prompts: 1 });
+    expect(asked(newest)).toEqual([{ kind: "text", text: "third" }]);
+    const older = await paneConversation("sized", undefined, { before: newest.cursor!, prompts: 1 });
+    expect(asked(older)).toEqual([{ kind: "text", text: "second" }]);
+  } finally {
+    info.mockRestore(); environment.mockRestore(); rpc.mockRestore(); snapshots.mockRestore();
+    forgetTranscriptState();
+    await own.close();
   }
 });
 
