@@ -66,6 +66,18 @@ describe("rust_host_runs", () => {
     expect(Bun.spawnSync(["pgrep", "-f", tag]).stdout.toString().trim()).toBe("");
   });
 
+  it("refuses a hung host that exits 0 once its children die, however slowly the tree is walked", () => {
+    // the host waits on its first child only, then exits 0; a slow ps holds the walk at the second child, after
+    // the first one was killed, so a host still running there exits 0 before its own kill (fixed wait: the gap a
+    // loaded runner leaves between the kills, which this test makes certain instead of rare)
+    const tools = mkdtempSync(join(dir, "slow-ps-"));
+    writeFileSync(join(tools, "ps"), `#!/bin/sh\nsleep 0.2\nexec /bin/ps "$@"\n`, { mode: 0o755 });
+    const child = script("child", "sleep 60");
+    const host = script("waits-on-one", `${USAGE}\n${child} & first=$!\n${child} &\nwait "$first" || true\nexit 0`);
+    const hung = sh(`if rust_host_runs ${host}; then echo RUNS; else echo REFUSED; fi`, { PATH: `${tools}:${process.env["PATH"]}` });
+    expect(hung.out).toContain("REFUSED");
+  }, 15_000);
+
   it("refuses another program and a missing file", () => {
     expect(sh(`rust_host_runs ${script("other", "exit 0")} || echo REFUSED`).out).toContain("REFUSED");
     expect(sh(`rust_host_runs ${join(dir, "absent")} || echo REFUSED`).out).toContain("REFUSED");
