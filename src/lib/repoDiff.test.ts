@@ -75,7 +75,7 @@ describe("repository diff words", () => {
     expect(diffErrorMessage(t, new ApiError("/api/workspace/diff/files", 404, "Not found", "not_found"))).toBe("This PC's bridge cannot show changes yet.");
     expect(diffErrorMessage(t, new ApiError("/api/workspace/diff/files", 403, "watch only", "read_only"))).toBe("This device can only watch.");
     expect(diffErrorMessage(t, new ApiError("/api/workspace/diff/files", 504, "deadline", "git_timeout"))).toBe("git took too long to answer.");
-    expect(diffErrorMessage(t, new ApiError("/api/workspace/diff/file", 409, "the worktree no longer has that branch checked out", "worktree_moved", "head"))).toBe("The branch is no longer checked out in its worktree. Turn off “Show uncommitted changes” in View options or choose the branch again.");
+    expect(diffErrorMessage(t, new ApiError("/api/workspace/diff/file", 409, "the worktree no longer has that branch checked out", "worktree_moved", null, "head"))).toBe("The branch is no longer checked out in its worktree. Turn off “Show uncommitted changes” in View options or choose the branch again.");
     expect(diffErrorMessage(t, new Error("socket closed"))).toBe("Changes could not be loaded.");
     // the branch scope's own refusals, each told apart, and an older bridge that knows no such scope
     expect(diffErrorMessage(t, new ApiError("/api/workspace/diff/files", 409, "no commit yet", "unborn_head"))).toBe("The repository has no commits yet, so there is no branch to compare.");

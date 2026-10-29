@@ -13,7 +13,7 @@ import { CHAT_WIDTHS, DICTATION_LANGUAGES, DIFF_STYLES, MARKDOWN_WIDTHS, VOICE_B
 type Settings = Omit<CurrentSettings, "darkTheme" | "lightTheme" | "fileOpen" | "webLinks" | "claudeLaunchMode" | "codexLaunchMode"
   | "followHerdrFocus" | "composerNewTabButton" | "uiFontFamily" | "terminalMirrorWrap"
   | "comments" | "commentMode" | "commentLayout" | "commentOnSelect"
-  | "codeCommentLineClick" | "mobileCommentGesture" | "mobileCommentInput" | "suggestAgents" | "suggestSkills" | "suggestBuiltins" | "showInstallApp" | "sidebarFilter">;
+  | "codeCommentLineClick" | "mobileCommentGesture" | "mobileCommentInput" | "suggestAgents" | "suggestSkills" | "suggestBuiltins" | "showInstallApp" | "sidebarFilter" | "historyPrompts">;
 type Palette = "amber" | "charcoal" | "catppuccin";
 const PALETTES: readonly Palette[] = ["amber", "charcoal", "catppuccin"];
 const STORAGE_KEY = "ovis:settings";

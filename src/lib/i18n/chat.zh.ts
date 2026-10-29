@@ -207,4 +207,5 @@ export const CHAT_ZH: Record<string, string> = {
   "Share link": "分享链接",
   "{n} agent finished": "{n} 个代理已完成",
   "{n} agents finished": "{n} 个代理已完成",
+  "Sent · waiting for the agent's next turn": "已发送 · 等待 agent 的下一轮",
 };

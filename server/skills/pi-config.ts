@@ -55,9 +55,9 @@ const canonical = (path: string): string => { try { return realpathSync(path); }
 const strings = (value: unknown): string[] => Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === "string") : [];
 
 /** PI_CODING_AGENT_DIR from the pane's own environ first, then the server's, else ~/.pi/agent. */
-function agentDirectory(home: string, env: readonly string[] | null): string {
+function agentDirectory(home: string, env: readonly string[] | null, serverEnv: AgentCommandContext["serverEnv"]): string {
   const own = environValue(env, "PI_CODING_AGENT_DIR");
-  const dir = own || process.env["PI_CODING_AGENT_DIR"];
+  const dir = own || (serverEnv ?? process.env)["PI_CODING_AGENT_DIR"];
   if (!dir) return join(home, ".pi", "agent");
   return dir === "~" || dir.startsWith("~/") ? join(home, dir.slice(2)) : dir;
 }
@@ -208,8 +208,8 @@ const piSettings = (home: string, scope: PiScope, base: string, settings: Record
   skills: strings(settings["skills"]), prompts: strings(settings["prompts"]), extensions: strings(settings["extensions"]),
 });
 
-export function readPiConfig({ home, cwd, env }: AgentCommandContext): PiConfig {
-  const agentDir = agentDirectory(home, env);
+export function readPiConfig({ home, cwd, env, serverEnv }: AgentCommandContext): PiConfig {
+  const agentDir = agentDirectory(home, env, serverEnv);
   const userRaw = migrated(plainObject(readJson(join(agentDir, "settings.json"))));
   const trusted = typeof cwd === "string" && cwd !== "" && projectTrusted(agentDir, userRaw, cwd);
   const projectBase = trusted ? join(cwd, ".pi") : null;
