@@ -114,7 +114,10 @@ On GitHub (Settings of the fork):
   cannot push upstream's workflow changes, and a pull request it opens runs no CI.
 - **Variables → Actions:** `NEXT_SYNC_AUTOMERGE=true` to merge clean syncs without a click (needs
   **General → Allow auto-merge** and a ruleset on `next` requiring the CI checks);
-  `NEXT_AUTO_RELEASE=false` to release only on demand.
+  `NEXT_AUTO_RELEASE=false` to release only on demand; `CI_SELF_HOSTED_LABELS="ubuntu-24.04"` (with the
+  quotes) so CI's Linux jobs run on GitHub's runners. Unset, `scripts/ci-runner-route.sh` sends a push
+  or a pull request from this repository to upstream's self-hosted runner (`self-hosted-ovis`), which
+  the fork does not have, and those jobs stay queued.
 - **Actions:** keep **CI** and the two fork workflows; disable upstream's **Website** (deploys
   upstream's site after CI on `main`), **Release** (tags plain `vX.Y.Z` versions, which would move
   every fork install onto plain upstream), **Remote PC bundles** (builds and publishes upstream's
