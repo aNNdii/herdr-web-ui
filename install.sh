@@ -185,8 +185,11 @@ open_app() {
   fi
 }
 
-# kills a process and everything it started (ps -A -o pid= -o ppid= reads the same on Linux and macOS)
+# kills a process and everything it started (ps -A -o pid= -o ppid= reads the same on Linux and macOS).
+# The process is stopped first: running, it could notice its children die and exit 0 before its
+# own kill, which a caller would read as success.
 kill_tree() {
+  kill -STOP "$1" 2>/dev/null || true
   for kill_child in $(ps -A -o pid= -o ppid= 2>/dev/null | awk -v parent="$1" '$2 == parent { print $1 }'); do
     kill_tree "$kill_child"
   done
