@@ -38,6 +38,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { closeSync, fstatSync, openSync, readFileSync, readSync, realpathSync, statSync } from "node:fs";
 import { readStatuslineContext } from "./statusline.ts";
 import nodePath, { basename, dirname, relative, sep, type PlatformPath } from "node:path";
+import { isDshProcess, resolveDshTranscript, dshConversation, dshToolOutput, type DshTranscript } from "./dsh.ts";
 import { authorizedTranscript } from "./transcript-store.ts";
 
 import type { ConversationMetadata, ConversationTurn, HerdrPane, SessionSnapshot } from "../shared/protocol.ts";
@@ -1332,7 +1333,8 @@ type ResolvedTranscript =
     | { source: "copilot-transcript"; binding: string; peerClaims: ReadonlySet<string> }
   ))
   | { source: "opencode-transcript"; path: string; session: string }
-  | { source: "hermes-transcript"; path: string; sessionId: string };
+  | { source: "hermes-transcript"; path: string; sessionId: string }
+  | ({ source: "dsh-transcript" } & DshTranscript);
 
 /** A native file or database session, resolved without parsing conversation turns. */
 export type NativeTranscript =
@@ -1358,14 +1360,22 @@ async function resolveTranscript(pane: HerdrPane, cwd: string, codexHome?: strin
     const info = known !== undefined ? { process_info: known ?? undefined } : await herdrRpc<{ process_info?: { shell_pid?: number; foreground_processes?: { argv?: unknown }[] } }>(
       "pane.process_info", { pane_id: paneId },
     ).catch(() => null);
-    const running = (info?.process_info?.foreground_processes ?? []).some((process) =>
+    const foreground = info?.process_info?.foreground_processes ?? [];
+    const running = foreground.some((process) =>
       isGjcProcess(Array.isArray(process.argv) ? process.argv.map(String) : []),
     );
+    // Preserve GJC's route even when it runs a dsh child in the same foreground group.
     if (running || await gjcPidUnderShell(info?.process_info?.shell_pid)) agent = "gjc";
+    // a dsh TUI that does not report to herdr (dsh-tui-pi): its launcher in front, read from this same
+    // probe, which the dsh binding then reuses; the lock that process holds still picks the session
+    else if (foreground.some((process) => Array.isArray(process.argv) && isDshProcess(process.argv))) {
+      agent = "dsh";
+      if (known === undefined) known = (info?.process_info as KnownProcesses) ?? null;
+    }
     else if (await kiroCodexProcess(info?.process_info as ProcessInfo | undefined) !== null) agent = "codex";
   }
-  // a Muse or Letta pane's processes are asked for once, for omo and for its own binding
-  if ((agent === "muse" || agent === "letta") && known === undefined) known = (await paneProcessInfo(paneId).catch(() => undefined)) ?? null;
+  // a Muse, Letta or dsh pane's processes are asked for once, for omo and for its own binding
+  if ((agent === "muse" || agent === "letta" || agent === "dsh" || agent === "dsh-tui") && known === undefined) known = (await paneProcessInfo(paneId).catch(() => undefined)) ?? null;
   if (await paneRunsOmo(paneId, known)) {
     return { source: "omo-transcript", path: await omoTranscriptPath(paneId, cwd, panes) };
   }
@@ -1373,6 +1383,8 @@ async function resolveTranscript(pane: HerdrPane, cwd: string, codexHome?: strin
   // session headers name the one they run in
   const sessionCwd = typeof pane.foreground_cwd === "string" && pane.foreground_cwd.length > 0 ? pane.foreground_cwd : cwd;
   try {
+    // dsh-tui reports itself to herdr as `dsh-tui`; the other dsh TUIs are found by their process above
+    if (agent === "dsh" || agent === "dsh-tui") return { source: "dsh-transcript", ...await resolveDshTranscript(known) };
     if (agent === "copilot") return { source: "copilot-transcript", ...await copilotTranscriptPath(pane, panes ?? [pane]) };
     if (agent === "grok") {
       const found = await resolveGrokStore(pane, grokHome);
@@ -1588,6 +1600,10 @@ export async function paneConversation(paneId: string, codexHome?: string, page:
     }
     if (page.before !== undefined || page.since !== undefined || page.from !== undefined) throw new HistoryChanged();
     return await notBegun(launch.source, launch.historyId);
+  }
+  if (resolved.source === "dsh-transcript") {
+    rememberPaneRead(paneId, resolved.path);
+    return await dshConversation(resolved, page);
   }
   if (resolved.source === "devin-transcript") {
     try {
@@ -2339,6 +2355,7 @@ export async function toolOutput(paneId: string, ref: string, codexHome?: string
     return output !== null && output.length > TOOL_OUTPUT_MAX ? `${output.slice(0, TOOL_OUTPUT_MAX)}\n… trimmed` : output;
   }
   rememberPaneRead(paneId, resolved.path);
+  if (resolved.source === "dsh-transcript") return await dshToolOutput(resolved, ref);
   if (resolved.source === "hermes-transcript") return hermesToolOutput(resolved.sessionId, resolved.path, ref, TOOL_OUTPUT_MAX);
   let nativeRef = ref;
   if (resolved.source === "copilot-transcript") {
