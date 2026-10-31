@@ -145,6 +145,7 @@ export async function handleRequest(request: Request, ctx: ServerContext): Promi
   }
   const requestShape = { loopback, forwarded, funnel, tailscaleLogin, forwardedFor, serveOnly };
   const identity = await identityOf(token === "" && pairedDevice === null && isServeOwnerRequest(requestShape) && (pathname === "/ws" || pathname.startsWith("/api/")), requestHost);
+  const portalProven = options.portal?.vouches(request.headers.get("x-portal-proof") ?? null) ?? false;
   const access = decideAccess({
     ...requestShape,
     host: requestHost,
@@ -153,6 +154,12 @@ export async function handleRequest(request: Request, ctx: ServerContext): Promi
     ...identity,
     tokenConfigured: token !== "",
     gated: devices.gated,
+    portal: {
+      proven: portalProven,
+      user: portalProven ? request.headers.get("x-portal-user") : null,
+      auth: portalProven ? request.headers.get("x-portal-auth") : null,
+      role: portalProven ? options.portal?.roleFor(request.headers.get("x-portal-user"), request.headers.get("x-portal-auth")) ?? "watch" : "watch",
+    },
   });
   const authenticated = access.level === "full" || (bridgePath && bridgeAuthorized);
 
@@ -210,6 +217,21 @@ export async function handleRequest(request: Request, ctx: ServerContext): Promi
     setRequestRoute("watch-refusal");
     return jsonResponse({ error: { code: "read_only", message: "this device can only watch" } }, 403);
   }
+  // Portal visitors use the same watch checks above as paired watch devices. Even a Portal
+  // identity explicitly given drive in local state cannot use these controls to leave access
+  // behind: device changes (including redeeming a pairing code), push subscriptions and their
+  // status, and Portal controls require the owner's app credential.
+  const standingAccess = mutating && (
+    pathname.startsWith("/api/portal/")
+    || pathname.startsWith("/api/devices/")
+    || (request.method === "POST" && (pathname === "/api/push/subscribe" || pathname === "/api/push/status"))
+  );
+  // and what it keeps open is closed after a while, so it comes through Portal's sign-in again (portal.ts recheckMs)
+  const portalRecheckMs = access.level === "full" && access.via === "portal" ? options.portal?.recheckMs : undefined;
+  if (access.level === "full" && access.via === "portal" && standingAccess) {
+    setRequestRoute("owner-refusal");
+    return jsonResponse({ error: { code: "owner_only", message: "A visitor signed in through Portal cannot pair devices, subscribe to alerts or control Portal here. Use the access token or a paired device." } }, 403);
+  }
 
   // API reads can chain several bounded 10 s Herdr RPCs. Give the handler time to return
   // its JSON result or timeout instead of Bun closing the socket at its default 10 s idle
@@ -249,7 +271,7 @@ export async function handleRequest(request: Request, ctx: ServerContext): Promi
       // that closed the gate, so whoever holds it has no access left by the time there is news
       const openAccess = access.level === "full" && access.via === "open";
       const pairings = { subscribe: (listener: (event: DevicePairedEvent) => void) => devices.onPaired((event, origin) => { if (!openAccess && event.device_id !== deviceId && !sameBrowser(origin, keys)) listener(event); }) };
-      const response = await handleMachineRequest(request, machines, deviceId ? (close) => devices.onRevoke(deviceId, close) : undefined, preferences, readOnly, herdrSidebar, seen, pairings);
+      const response = await handleMachineRequest(request, machines, deviceId ? (close) => devices.onRevoke(deviceId, close) : portalRecheckMs !== undefined ? (close) => { const timer = setTimeout(close, portalRecheckMs); return () => clearTimeout(timer); } : undefined, preferences, readOnly, herdrSidebar, seen, pairings);
       response.headers.set("cache-control", "no-store");
       if (issuedKey !== null && response.ok) response.headers.append("set-cookie", streamCookie(issuedKey, isSecureRequest(request)));
       return response;
@@ -259,6 +281,7 @@ export async function handleRequest(request: Request, ctx: ServerContext): Promi
     setRequestRoute(pathname);
     if (!sameOrigin(request)) return new Response("invalid origin", { status: 403 });
     const deviceId = access.level === "full" ? access.device?.id : undefined;
+    const recheck = portalRecheckMs === undefined ? {} : { recheckMs: portalRecheckMs };
     const machineId = url.searchParams.get("machine_id");
     if (machineId && machineId !== "local") {
       if (access.level === "none") return unauthorizedJson(access.reason);
@@ -267,7 +290,7 @@ export async function handleRequest(request: Request, ctx: ServerContext): Promi
       try {
         relay = new MachineRelay(machines, machineId, readOnly, browserSnapshot);
         await relay.ready;
-        const upgraded = ctx.upgrade(request, { headers, data: connectionData({ relay, deviceId, readOnly }) });
+        const upgraded = ctx.upgrade(request, { headers, data: connectionData({ relay, deviceId, readOnly, ...recheck }) });
         if (upgraded) return undefined;
         relay.close();
       } catch { relay?.close(); return new Response("remote websocket unavailable", { status: 502 }); }
@@ -278,7 +301,7 @@ export async function handleRequest(request: Request, ctx: ServerContext): Promi
     const observed = observedIngress({ ...requestShape, ...identity, peerKnown: ip !== null, forwardingHeaders: forwardingHeaders(request.headers) });
     const surface = bridgeAuthorized ? false : visitSurface(url.searchParams.get("surface"));
     const ingress: TelemetryIngress = observed === "direct" ? (loopback ? "local" : "lan") : observed;
-    const upgraded = ctx.upgrade(request, { headers, data: connectionData({ deviceId, readOnly, bridge: bridgeAuthorized, ...(surface ? { surface } : {}), ...(surface === false ? {} : { ingress }) }) });
+    const upgraded = ctx.upgrade(request, { headers, data: connectionData({ deviceId, readOnly, bridge: bridgeAuthorized, ...(surface ? { surface } : {}), ...(surface === false ? {} : { ingress }), ...recheck }) });
     if (upgraded) return undefined;
     return new Response("websocket upgrade required", { status: 426 });
   }
@@ -360,7 +383,7 @@ export async function handleRequest(request: Request, ctx: ServerContext): Promi
   if (pathname === "/api/health") {
     setRequestRoute(pathname);
     const auth: HealthAuth = access.level === "full"
-      ? { required: false, authenticated: true, via: access.via, role: access.role, ...(access.via === "token" && bearerMatches(request, token) ? { bearer: true as const } : {}) }
+      ? { required: false, authenticated: true, via: access.via, role: access.role, ...(access.via === "token" && bearerMatches(request, token) ? { bearer: true as const } : {}), ...(access.portal ? { portal: access.portal } : {}) }
       : { required: true, authenticated, ...(authenticated ? {} : { reason: access.reason }) };
     // this server is open to the network with no token and nothing paired, told to a client
     // that got in and to nobody else: naming it to an anonymous caller would be
