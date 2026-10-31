@@ -14,7 +14,8 @@ import { codexReadCall, codexReadSkills, selectedSkill } from "./skill-activity.
 import { trimOutput } from "./tool-output.ts";
 import type { TranscriptParser } from "./transcript-records.ts";
 import type { AgentInfo } from "../shared/herdr-api.generated.ts";
-import { agentGet, paneProcessInfo, paneRead, sessionSnapshot } from "./herdr/client.ts";
+import { agentGet, HerdrError, paneGet, paneProcessInfo, paneRead, sessionSnapshot } from "./herdr/client.ts";
+import { kiroCodexProcess, kiroNested, kiroWrapper } from "./kiro-terminal.ts";
 import { resolveAgent } from "./pane-context.ts";
 import { FOOTER } from "./codex-steering.ts";
 import { codexStartScreenUnused } from "./start-screen.ts";
@@ -523,14 +524,23 @@ export function codexHomeInPsLine(text: string): string | null {
  * an explicit `configured` store wins, then the pane's Codex process's own, then the default.
  */
 export async function paneCodexHome(paneId: string, configured?: string): Promise<string> {
-  if (configured) return configured;
+  return (await paneCodexHomePlaced(paneId, configured)).home;
+}
+
+/**
+ * paneCodexHome, and whether it was `placed`: configured, or told by a Codex process of the pane. One not
+ * placed is the default store only because no Codex process was seen (a probe failed or raced): a reader
+ * that finds a conversation there asks again, as a Codex proven since may keep its store elsewhere.
+ */
+export async function paneCodexHomePlaced(paneId: string, configured?: string): Promise<{ home: string; placed: boolean }> {
+  if (configured) return { home: configured, placed: true };
   try {
     // the first Codex listed decides, with or without a home of its own: a child or wrapper it
     // started with another CODEX_HOME writes to a store that is not this pane's conversation
     const [first] = (await codexProcessesOf(paneId)).list;
-    if (first !== undefined) return (await processCodexHome(first.pid, first.argv)) ?? defaultCodexHome();
+    if (first !== undefined) return { home: (await processCodexHome(first.pid, first.argv)) ?? defaultCodexHome(), placed: true };
   } catch { /* herdr busy: the default store */ }
-  return defaultCodexHome();
+  return { home: defaultCodexHome(), placed: false };
 }
 
 /**
@@ -2341,7 +2351,31 @@ async function codexProcessesOf(paneId: string): Promise<{ list: { pid: number; 
       }
       return codex.test(argv[script] ?? "");
     });
+  if (list.length === 0) {
+    const nested = await kiroCodexProcess(processInfo);
+    // A PID can be reused between reads: the verified births identify the whole nested chain.
+    if (nested !== null) return { list: [nested], key: `kiro:${nested.identity}` };
+  }
   return { list, key: list.map((process) => process.pid).sort((left, right) => left - right).join(",") };
+}
+
+/** A missing label is expected for Kiro's outer PTY, but only its proven live Codex can use this fallback. */
+async function codexAgentInfo(paneId: string): Promise<Pick<AgentInfo, "agent_session" | "terminal_title" | "terminal_title_stripped" | "cwd" | "foreground_cwd"> & { nestedTerminal?: true }> {
+  try {
+    const agent = await agentGet(paneId);
+    const info = await paneProcessInfo(paneId).catch(() => undefined);
+    // herdr's own report that the outer PTY is Kiro's wrapper keeps the guard, whether or not one more
+    // process-table probe proves its Codex: a failed or racing probe must not make this a plain pane
+    return kiroNested(info, agent.agent === "codex") ? { ...agent, nestedTerminal: true } : agent;
+  }
+  catch (error) {
+    // herdr's wrapper fact, as above: the process lookup that follows proves the Codex or finds none
+    if (!(error instanceof HerdrError) || error.code !== "agent_not_found"
+      || !kiroWrapper(await paneProcessInfo(paneId).catch(() => undefined))) throw error;
+    const pane = await paneGet(paneId);
+    // Never revive an earlier occupant's session report through a shell wrapper.
+    return { ...pane, agent_session: undefined, nestedTerminal: true };
+  }
 }
 
 /** When each pane last looked at the other Codex panes for a set of threads, and which panes those were. */
@@ -2758,11 +2792,12 @@ async function openRollouts(paneId: string, home: string): Promise<{ codexProces
  * taken only as the pane's fresh conversation (freshReportedThread).
  */
 export async function codexOpenRollout(paneId: string, cwd: string | null | undefined, home = defaultCodexHome()): Promise<string | null> {
-  const agent = await agentGet(paneId);
+  const agent = await codexAgentInfo(paneId);
   const { codexProcesses, processes, open } = await openRollouts(paneId, home);
   if (open.size === 1) return [...open][0]!;
   const reported = cwd ? reportedRollout(agent.agent_session, home) : null;
-  if (reported !== null && resumedThread(codexProcesses.map((process) => process.argv ?? [])) === null
+  // a nested pane's peers may carry no label either, so freshReportedThread cannot rule them out
+  if (reported !== null && !agent.nestedTerminal && resumedThread(codexProcesses.map((process) => process.argv ?? [])) === null
     && await freshReportedThread(paneId, cwd!, home, reported, codexProcesses)) return reported;
   const bound = boundRollouts.get(paneId);
   if (bound === undefined || bound.processes !== processes || processes === "" || !cwd || codexRolloutPath(bound.path, home) === null) return null;
@@ -2803,18 +2838,22 @@ export async function codexOpenRollout(paneId: string, cwd: string | null | unde
  * conversation a TUI shows: when nothing of this folder tells, the screen is matched against
  * all of them (loadedConversation).
  */
-export async function codexTranscriptPath(paneId: string, cwd: string, home = defaultCodexHome(), panes?: HerdrPane[]): Promise<string | null> {
+export async function codexTranscriptPath(paneId: string, cwd: string, home = defaultCodexHome(), panes?: HerdrPane[], homeUnplaced = false): Promise<string | null> {
   if (panes !== undefined) {
     const open = new Set(panes.map((pane) => pane.pane_id));
     for (const pane of [...boundRollouts.keys()]) if (!open.has(pane)) boundRollouts.delete(pane);
   }
-  const agent = await agentGet(paneId);
+  const agent = await codexAgentInfo(paneId);
   const session = agent.agent_session;
 
   const { codexProcesses, processes, open } = await openRollouts(paneId, home);
   // no Codex process of the pane proven now: what its screen still shows (an earlier occupant's, or
   // a Codex gone since) ties it to no conversation, and the terminal stands in
   if (codexProcesses.length === 0) return null;
+  // `home` was chosen while no Codex process of the pane was seen (paneCodexHomePlaced): one seen now
+  // must be known to write there (its environment says so), or what this store holds is not proof
+  const first = codexProcesses[0];
+  if (homeUnplaced && first !== undefined && await processCodexHome(first.pid, first.argv) !== home) return null;
   if (open.size === 1) return [...open][0]!;
   const resumed = resumedThread(codexProcesses.map((process) => process.argv ?? []));
 
@@ -2916,8 +2955,13 @@ export async function codexTranscriptPath(paneId: string, cwd: string, home = de
     boundRollouts.set(paneId, boundHere);
     return boundHere.path;
   }
-  if (resumed === null && reported !== null && await freshReportedThread(paneId, cwd, home, reported, codexProcesses, panes)) return reported;
+  // a nested pane's peers may carry no label either, so freshReportedThread cannot rule them out
+  if (resumed === null && reported !== null && !agent.nestedTerminal
+    && await freshReportedThread(paneId, cwd, home, reported, codexProcesses, panes)) return reported;
   if (resumed !== null) return resumedNewer.length === 0 ? resumedPath : null;
+  // Other nested terminals may have no agent labels either, so the weaker exchange/peer
+  // heuristics cannot establish ownership. Only a substantial screen match (or its binding) can.
+  if (agent.nestedTerminal) return null;
   // Nothing ties this pane to a rollout at all: no resume, no match by a long answer for this
   // process, and so no /new to be unsure about (a session herdr names is only a candidate). Short
   // answers on screen may tell (#283). Never remembered as a binding: what it shows is read again
