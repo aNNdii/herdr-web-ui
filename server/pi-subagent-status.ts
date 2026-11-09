@@ -1,9 +1,8 @@
 import type { HerdrPane } from "../shared/protocol.ts";
-import type { PiSubagentsLive } from "../shared/pi-subagents-bridge.ts";
 import { plain, within } from "./claude-subagents.ts";
 import { piPaneSession } from "./pi.ts";
 import { piSubagentActivity, piSubagentCounts, piSubagentsMark, type PiSession, type PiSubagentActivity } from "./pi-subagents.ts";
-import { askPiSubagentsLive, nextPiLiveState, piLiveView, type PiLiveState, type PiLiveTarget } from "./pi-subagents-live.ts";
+import { askPiSubagentsLive, MISSED, nextPiLiveState, piLiveView, type PiLiveAnswer, type PiLiveState, type PiLiveTarget } from "./pi-subagents-live.ts";
 import { processStartedAt } from "./process-start.ts";
 import { piRunsSubagents } from "./skills/pi-agents.ts";
 import { readPiConfig } from "./skills/pi-config.ts";
@@ -28,8 +27,8 @@ export interface PiSubagentDeps {
   locate?: (pane: HerdrPane) => Promise<LocatedPiSession | null>;
   /** default processStartedAt: tells, without a herdr call, that the tracked pi process is gone or replaced */
   processStart?: (pid: number) => number | null;
-  /** default askPiSubagentsLive: what the pane's pi process says itself through the web UI's pi extension, or null */
-  live?: (target: PiLiveTarget) => Promise<PiSubagentsLive | null>;
+  /** default askPiSubagentsLive: what the pane's pi process says itself through the web UI's pi extension, MISSED this time, or null */
+  live?: (target: PiLiveTarget) => Promise<PiLiveAnswer>;
   now?: () => number;
   pollMs?: number;
   refreshMs?: number;
@@ -65,7 +64,8 @@ interface Tracked {
  * keeps the session it had, so that its list can say what was left running there is lost; its
  * count is 0. Every poll also asks the pane's pi process (one question out at a time, only with a
  * known pid), and its answer counts the pane again: what the process says of its agents overrides
- * the file (PiLiveView), and no answer leaves the file alone, as without the extension. A poll
+ * the file (PiLiveView), and no answer leaves the file alone, as without the extension; one that
+ * only missed this poll keeps the last answer for a poll or two (nextPiLiveState). A poll
  * whose session file stat and answers are as they were reads nothing, and while the budgeted read
  * is behind, the last counts stand.
  */
@@ -82,7 +82,7 @@ export class PiSubagentStatus {
   private readonly refreshMs: number;
   private readonly locate: (pane: HerdrPane) => Promise<LocatedPiSession | null>;
   private readonly processStart: (pid: number) => number | null;
-  private readonly live: (target: PiLiveTarget) => Promise<PiSubagentsLive | null>;
+  private readonly live: (target: PiLiveTarget) => Promise<PiLiveAnswer>;
 
   constructor(private readonly deps: PiSubagentDeps) {
     this.now = deps.now ?? Date.now;
@@ -198,7 +198,7 @@ export class PiSubagentStatus {
     const { path, pid } = tracked;
     if (path === null || pid === null || !tracked.live) return null;
     const mark = piSubagentsMark();
-    const request: Promise<void> = this.live({ pid, cwd: tracked.cwd, environ: tracked.environ, path }).catch(() => null).then((answer) => {
+    const request: Promise<void> = this.live({ pid, cwd: tracked.cwd, environ: tracked.environ, path }).catch((): PiLiveAnswer => MISSED).then((answer) => {
       if (this.asking.get(paneId) !== request) return;
       this.asking.delete(paneId);
       const current = this.panes.get(paneId);
@@ -208,6 +208,8 @@ export class PiSubagentStatus {
       current.asked = true;
       if (next === null && current.liveState === null) return;
       current.liveState = next;
+      // a missed poll: the last answer stands, and so do the counts
+      if (answer === MISSED && next !== null) return;
       current.liveSeq += 1;
       this.count(paneId, current);
     });

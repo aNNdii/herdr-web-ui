@@ -20,6 +20,14 @@ import { userHome } from "./user-home.ts";
  * pane's located pi pid and the tracked session file. No extension, one from before the route (404),
  * a socket that is gone or too slow, Windows (no socket): no answer, and the file alone speaks.
  *
+ * One poll without an answer is no word from pi, and dropping to the file for it would show a
+ * `/reload`'s lost agents running again for that poll (and flap the counts and alerts): an answer
+ * that may come next poll (too slow, a failed request, no socket, which is also the moment between
+ * a `/reload`'s two bridges) is MISSED, and the last answer stands through MAX_MISSED_ANSWERS of
+ * them in a row. A definitive one (null: a 404 from an extension without the route, an answer not
+ * of its shape, or one for another pid or session file) drops it at once, as does the tracker when
+ * the pane's pi process or session changes or the pane leaves pi.
+ *
  * pi-subagents tells nothing of a workflow's end, and between two stages of one nothing may run:
  * a `SubagentWorkflow` the file still has running ends (as lost) only once the manager answered
  * idle (`running: false`) on two polls at least IDLE_CONFIRM_MS apart, with every answer between
@@ -37,6 +45,11 @@ import { userHome } from "./user-home.ts";
 
 /** how long an answer may take: the extension answers from memory */
 export const LIVE_READ_MS = 800;
+/** no answer this time, though the next poll may get one: the last answer stands (see above) */
+export const MISSED = "missed";
+export type PiLiveAnswer = PiSubagentsLive | typeof MISSED | null;
+/** the polls in a row the last answer stands through without one */
+export const MAX_MISSED_ANSWERS = 2;
 /** how long the manager must stay idle before what the file alone still runs counts as ended */
 export const IDLE_CONFIRM_MS = 60_000;
 const MAX_AGENTS = 1000;
@@ -75,15 +88,16 @@ export function parsePiSubagentsLive(value: unknown): PiSubagentsLive | null {
   return { version: PI_SUBAGENTS_LIVE_VERSION, pid: answer["pid"], sessionFile, loaded: answer["loaded"], running, agents, workflows };
 }
 
-/** What the extension on `socket` answers, or null: no listener, a 404 (an older extension), too slow, not its shape. */
-export async function readPiSubagentsLive(socket: string, signal?: AbortSignal): Promise<PiSubagentsLive | null> {
+/** What the extension on `socket` answers; null for a 404 (an older extension) or not its shape, MISSED when no listener, too slow or failed. */
+export async function readPiSubagentsLive(socket: string, signal?: AbortSignal): Promise<PiLiveAnswer> {
   try {
     const timeout = AbortSignal.timeout(LIVE_READ_MS);
     const response = await fetch(`http://localhost${PI_SUBAGENTS_LIVE_ROUTE}`, { unix: socket, signal: signal ? AbortSignal.any([signal, timeout]) : timeout });
-    if (!response.ok) return null;
+    if (response.status === 404) return null;
+    if (!response.ok) return MISSED;
     return parsePiSubagentsLive(await response.json());
   } catch {
-    return null;
+    return MISSED;
   }
 }
 
@@ -97,12 +111,13 @@ function sameFile(named: string | null, path: string): boolean {
   try { return realpathSync(named) === path; } catch { return false; }
 }
 
-/** The live answer of the pane's pi process, through its own extension socket, or null when it does not speak for this pid and session. */
-export async function askPiSubagentsLive(target: PiLiveTarget, options: { home?: string; signal?: AbortSignal } = {}): Promise<PiSubagentsLive | null> {
+/** The live answer of the pane's pi process, through its own extension socket; MISSED without one now (no socket included), null when it does not speak for this pid and session. */
+export async function askPiSubagentsLive(target: PiLiveTarget, options: { home?: string; signal?: AbortSignal } = {}): Promise<PiLiveAnswer> {
   const socket = await piExtensionSocket({ pid: target.pid, cwd: target.cwd }, target.environ, options.home ?? userHome());
-  if (socket === null) return null;
+  if (socket === null) return MISSED;
   const answer = await readPiSubagentsLive(socket, options.signal);
-  return answer !== null && answer.pid === target.pid && sameFile(answer.sessionFile, target.path) ? answer : null;
+  if (answer === null || answer === MISSED) return answer;
+  return answer.pid === target.pid && sameFile(answer.sessionFile, target.path) ? answer : null;
 }
 
 /** The answers of one pane's pi so far: the newest, and the idle streak it ends. */
@@ -114,6 +129,8 @@ export interface PiLiveState {
   activity: string;
   /** the idle answers in a row: the first one's time and mark, how many, and the latest one's time */
   idle: { at: number; mark: number; answers: number; lastAt: number } | null;
+  /** the polls in a row without an answer since this one */
+  missed: number;
 }
 
 function activityOf(answer: PiSubagentsLive): string {
@@ -122,13 +139,18 @@ function activityOf(answer: PiSubagentsLive): string {
   return `${agents.join(",")}|${workflows.join(",")}`;
 }
 
-/** The state after an answer asked for at `mark` came in at `at` (the tracker's clock); null without an answer: the file alone. */
-export function nextPiLiveState(previous: PiLiveState | null, answer: PiSubagentsLive | null, mark: number, at: number): PiLiveState | null {
+/**
+ * The state after an answer asked for at `mark` came in at `at` (the tracker's clock); null without
+ * an answer: the file alone. A MISSED one keeps the last answer, its mark and idle streak, through
+ * MAX_MISSED_ANSWERS in a row.
+ */
+export function nextPiLiveState(previous: PiLiveState | null, answer: PiLiveAnswer, mark: number, at: number): PiLiveState | null {
+  if (answer === MISSED) return previous !== null && previous.missed < MAX_MISSED_ANSWERS ? { ...previous, missed: previous.missed + 1 } : null;
   if (answer === null) return null;
   const activity = activityOf(answer);
-  if (answer.running !== false) return { answer, mark, activity, idle: null };
+  if (answer.running !== false) return { answer, mark, activity, idle: null, missed: 0 };
   const streak = previous?.idle && previous.activity === activity ? previous.idle : null;
-  return { answer, mark, activity, idle: streak ? { ...streak, answers: streak.answers + 1, lastAt: at } : { at, mark, answers: 1, lastAt: at } };
+  return { answer, mark, activity, idle: streak ? { ...streak, answers: streak.answers + 1, lastAt: at } : { at, mark, answers: 1, lastAt: at }, missed: 0 };
 }
 
 /** The override for server/pi-subagents.ts, or null when the pi process does not load pi-subagents (the file alone, as before). */

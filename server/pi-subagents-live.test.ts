@@ -11,7 +11,7 @@ import { createPiSubagentsRoster } from "../integrations/pi-subagents-roster.ts"
 import type { HerdrPane } from "../shared/protocol.ts";
 import { PiSubagentStatus } from "./pi-subagent-status.ts";
 import { forgetPiSubagents, piSubagentActivity, piSubagentCounts, piSubagentsMark, type PiLiveView, type PiSession } from "./pi-subagents.ts";
-import { askPiSubagentsLive, IDLE_CONFIRM_MS, nextPiLiveState, parsePiSubagentsLive, piLiveView, type PiLiveState } from "./pi-subagents-live.ts";
+import { askPiSubagentsLive, IDLE_CONFIRM_MS, MAX_MISSED_ANSWERS, MISSED, nextPiLiveState, parsePiSubagentsLive, piLiveView, type PiLiveAnswer, type PiLiveState } from "./pi-subagents-live.ts";
 
 const posix = process.platform !== "win32";
 const roots: string[] = [];
@@ -96,7 +96,7 @@ describe("parsePiSubagentsLive", () => {
 
 describe("the idle rule", () => {
   const idle = answer({ running: false });
-  const step = (state: PiLiveState | null, next: PiSubagentsLive | null, time: number) => nextPiLiveState(state, next, piSubagentsMark(), time);
+  const step = (state: PiLiveState | null, next: PiLiveAnswer, time: number) => nextPiLiveState(state, next, piSubagentsMark(), time);
 
   it("confirms idle only after two idle answers at least IDLE_CONFIRM_MS apart", () => {
     let state = step(null, idle, 0);
@@ -124,6 +124,25 @@ describe("the idle rule", () => {
     state = step(state, answer({ running: false, workflows: [{ id: "wf_1", lastUsageAt: 2, agents: 2 }], agents: [agent("a1", "completed", 1, { endedAt: 9 })] }), 2 * IDLE_CONFIRM_MS);
     state = step(state, answer({ running: false, workflows: [{ id: "wf_1", lastUsageAt: 2, agents: 2 }], agents: [agent("a1", "completed", 1, { endedAt: 9 })] }), 3 * IDLE_CONFIRM_MS);
     expect(piLiveView(state)?.idle).not.toBeNull();
+  });
+
+  it("keeps the last answer through two missed polls in a row, and drops it at once for a definitive none", () => {
+    expect(MAX_MISSED_ANSWERS).toBe(2);
+    const first = step(null, idle, 0);
+    let state = step(first, MISSED, 2_000);
+    expect(state).toMatchObject({ answer: first!.answer, mark: first!.mark, idle: first!.idle, missed: 1 });
+    state = step(state, MISSED, 4_000);
+    expect(piLiveView(state)?.mark).toBe(first!.mark);
+    // a third in a row: no word from pi for too long, the file alone
+    expect(step(state, MISSED, 6_000)).toBeNull();
+    // an answer in between starts the count over, and the idle streak goes on across the misses
+    state = step(step(state, idle, IDLE_CONFIRM_MS), MISSED, IDLE_CONFIRM_MS + 2_000);
+    expect(state?.missed).toBe(1);
+    expect(piLiveView(state)?.idle).toEqual({ mark: first!.mark });
+    // a 404, an answer for another session: at once
+    expect(step(first, null, 2_000)).toBeNull();
+    // nothing to keep
+    expect(step(null, MISSED, 0)).toBeNull();
   });
 
   it("gives no view without pi-subagents loaded, or without a registry's word on idle", () => {
@@ -242,7 +261,7 @@ describe("askPiSubagentsLive", () => {
     const ext = await extension(pi.path);
     expect(await askPiSubagentsLive({ pid: 4242, cwd: null, environ: ext.environ, path: "/other.jsonl" })).toBeNull();
     // another pid's socket is not there
-    expect(await askPiSubagentsLive({ pid: 4243, cwd: null, environ: ext.environ, path: pi.path })).toBeNull();
+    expect(await askPiSubagentsLive({ pid: 4243, cwd: null, environ: ext.environ, path: pi.path })).toBe(MISSED);
     // pi names the file through a link: the same file
     const link = join(temp("pal-link-"), "s.jsonl");
     symlinkSync(pi.path, link);
@@ -259,8 +278,9 @@ describe("askPiSubagentsLive", () => {
     await old.start({ hasUI: true, sessionManager: { getSessionFile: () => pi.path } });
     const environ = [`PI_CODING_AGENT_DIR=${agentDir}`];
     expect(await askPiSubagentsLive({ pid: 4242, cwd: null, environ, path: pi.path })).toBeNull();
+    // no socket: gone for good, or between a /reload's two bridges, which the next poll tells
     await old.stop();
-    expect(await askPiSubagentsLive({ pid: 4242, cwd: null, environ, path: pi.path })).toBeNull();
+    expect(await askPiSubagentsLive({ pid: 4242, cwd: null, environ, path: pi.path })).toBe(MISSED);
   });
 });
 
@@ -270,13 +290,13 @@ describe("PiSubagentStatus with the pi process's answers", () => {
   /** lets the answer asked for at the last poll come in */
   const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
 
-  function tracker(path: string, live: () => PiSubagentsLive | null) {
+  function tracker(path: string, live: () => PiLiveAnswer, pid = () => 10) {
     let time = NOW;
     const changes: [string, number, number, number | null][] = [];
     const status = new PiSubagentStatus({
       pane: async () => null,
       onChange: (...change) => { changes.push(change); },
-      locate: async () => ({ path, pid: 10, startedAt: null, environ: null, cwd: null }),
+      locate: async () => ({ path, pid: pid(), startedAt: null, environ: null, cwd: null }),
       processStart: () => null,
       live: async () => live(),
       now: () => time,
@@ -311,6 +331,68 @@ describe("PiSubagentStatus with the pi process's answers", () => {
     expect(status.countOf("p1")).toBe(0);
     expect((await status.activity("p1"))!.runs.map((run) => [run.id, run.status])).toEqual([["wf_1", "lost"]]);
     expect(changes.map(([, running]) => running)).toEqual([2, 1, 0]);
+  });
+
+  it("keeps pi's answer through a missed poll or two, so a /reload's lost agents do not run again", async () => {
+    const pi = piSession();
+    pi.prompt(1);
+    pi.background(2, "a1");
+    pi.background(3, "a2");
+    // after a /reload: pi runs a2 alone
+    let reply: PiLiveAnswer = answer({ running: true, agents: [agent("a2", "running", 3)] });
+    const { status, changes } = tracker(pi.path, () => reply);
+    await status.refresh([pane("p1")]);
+    await settle();
+    // the first answer judges nothing the file held only after it was asked for
+    status.poll();
+    await settle();
+    expect(status.countOf("p1")).toBe(1);
+    reply = MISSED;
+    for (let poll = 0; poll < 2; poll++) {
+      status.poll();
+      await settle();
+      expect(status.countOf("p1")).toBe(1);
+    }
+    // a third in a row: the file alone
+    status.poll();
+    await settle();
+    expect(status.countOf("p1")).toBe(2);
+    expect(changes.map(([, running]) => running)).toEqual([2, 1, 2]);
+  });
+
+  it("drops pi's answer at once for a definitive none, or when the pane's pi process changes", async () => {
+    const pi = piSession();
+    pi.background(2, "a1");
+    pi.background(3, "a2");
+    let reply: PiLiveAnswer = answer({ running: true, agents: [agent("a2", "running", 3)] });
+    let pid = 10;
+    const { status } = tracker(pi.path, () => reply, () => pid);
+    await status.refresh([pane("p1")]);
+    await settle();
+    status.poll();
+    await settle();
+    expect(status.countOf("p1")).toBe(1);
+    // an extension without the route (404), an answer for another session
+    reply = null;
+    status.poll();
+    await settle();
+    expect(status.countOf("p1")).toBe(2);
+    // another pi process in the pane: what the last one said is not its word
+    reply = answer({ running: true, agents: [agent("a2", "running", 3)] });
+    status.poll();
+    await settle();
+    expect(status.countOf("p1")).toBe(1);
+    reply = MISSED;
+    pid = 11;
+    await status.refresh([{ ...pane("p1"), agent_session: { agent: "pi", kind: "path", source: "herdr:pi", value: "s2" } } as HerdrPane]);
+    await settle();
+    expect(status.countOf("p1")).toBe(2);
+    // the pane leaves pi: nothing of it counts
+    reply = answer({ running: true, agents: [agent("a2", "running", 3)] });
+    status.poll();
+    await settle();
+    await status.refresh([{ ...pane("p1"), agent: null } as HerdrPane]);
+    expect(status.countOf("p1")).toBe(0);
   });
 
   it("keeps a workflow between its stages, while its agents spend", async () => {
