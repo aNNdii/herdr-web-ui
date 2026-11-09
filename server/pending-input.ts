@@ -12,16 +12,24 @@ export interface PendingIdentity {
   claudeSession?: string | null;
 }
 
-/** An identity learned after enqueue is not a replacement; only mutually known parts disagree. */
+/** Whether two reads of a process's start name the same process. macOS allows a second: its birth was once read from
+ * `ps`'s whole elapsed seconds, now from the kernel exactly. */
+export function sameProcessBirth(before: number, after: number, platform: NodeJS.Platform = process.platform): boolean {
+  return platform === "darwin" ? Math.abs(before - after) <= 1000 : before === after;
+}
+
+/**
+ * An identity learned after enqueue is not a replacement; only mutually known parts disagree. A known start of the same
+ * PID that can no longer be read is no match either: the process may have ended and another taken its PID.
+ */
 export function samePendingIdentity(before: PendingIdentity, after: PendingIdentity, platform: NodeJS.Platform = process.platform): boolean {
   const changed = <T>(a: T | null | undefined, b: T | null | undefined) => a != null && b != null && a !== b;
   return before.agent === after.agent && before.terminalId === after.terminalId
     && !changed(before.session, after.session) && !changed(before.omoSession, after.omoSession)
     && !changed(before.claudeSession, after.claudeSession)
     && !changed(before.processPid, after.processPid)
-    // macOS allows a second: its birth was once read from `ps`'s whole elapsed seconds, now from the kernel exactly.
-    && (before.processBirth == null || after.processBirth == null
-      || (platform === "darwin" ? Math.abs(before.processBirth - after.processBirth) <= 1000 : before.processBirth === after.processBirth));
+    && (before.processBirth == null
+      || (after.processBirth == null ? before.processPid == null || before.processPid !== after.processPid : sameProcessBirth(before.processBirth, after.processBirth, platform)));
 }
 export interface PendingRecord<Owner, Lease> {
   owner: Owner;
@@ -51,6 +59,9 @@ export class PendingInputError extends Error {
 }
 
 /** One authoritative record per message. Both automatic sends and explicit steering claim it here. */
+/** A message held behind one whose paste was left in the terminal's input line (#511): nothing of it was typed. */
+const BEHIND_PASTE = { code: "pending_held", message: "An earlier message is in the terminal's input line; send this one after it is cleared or sent" };
+
 export class PendingInputs<Owner, Lease> {
   private readonly records = new Map<string, PendingRecord<Owner, Lease>>();
   private readonly statuses = new Map<string, AgentStatus>();
@@ -58,6 +69,8 @@ export class PendingInputs<Owner, Lease> {
   private readonly events = new Map<string, number>();
   private readonly gates = new Map<string, TurnGate>();
   private readonly closed = new Map<Owner, number>();
+  /** sends on their way when their pane moved (`move`) */
+  private readonly movedInFlight = new WeakSet<PendingRecord<Owner, Lease>>();
   private readonly removed = new Map<string, { owner: Owner; paneId: string; outcome: Removed["outcome"]; at: number }>();
   private readonly resends = new Map<string, { id: string; paneId: string; fingerprint: string; reply: Promise<HeldCopyReply>; settledAt: number | null; uncertain: boolean }>();
 
@@ -105,6 +118,8 @@ export class PendingInputs<Owner, Lease> {
       reply: Promise.resolve().then(task).then((reply) => {
         entry.uncertain = !reply.ok && ambiguous(reply.code ?? ""); entry.settledAt = this.now();
         const item = this.records.get(id);
+        // the pane's ID now: a move while the copy was on its way took the entry and the record along
+        const paneId = entry.paneId;
         if (reply.ok && item?.paneId === paneId) this.finish(item, "sent");
         else if (entry.uncertain && item?.paneId === paneId) {
           // Another connection may have committed input. An Edit already waiting
@@ -146,7 +161,8 @@ export class PendingInputs<Owner, Lease> {
   }
 
   /** `held`: the message waits for an explicit send; `next` never offers it to automatic delivery. */
-  enqueue(owner: Owner, paneId: string, requestId: number, text: string, lease: Lease, identity: PendingIdentity, held = false): PendingRecord<Owner, Lease> {
+  /** `agentOnly`: for an agent alone (shared/protocol.ts submit `agent_only`); the caller has seen an agent in `identity` */
+  enqueue(owner: Owner, paneId: string, requestId: number, text: string, lease: Lease, identity: PendingIdentity, held = false, agentOnly = false): PendingRecord<Owner, Lease> {
     const previous = [...this.records.values()].find((item) => item.owner === owner && item.message.request_id === requestId);
     if (previous) {
       if (previous.paneId !== paneId || previous.message.text !== text) throw new PendingInputError("invalid_submit_id", "This submit id already belongs to another message");
@@ -171,7 +187,7 @@ export class PendingInputs<Owner, Lease> {
     if ([...this.records.values()].some((item) => item.paneId === paneId && item.message.state === "uncertain")) throw new PendingInputError("pending_uncertain", "Check the terminal before sending more pending messages");
     const item: PendingRecord<Owner, Lease> = {
       owner, paneId, lease, identity, inFlight: false,
-      message: { id: this.newId(), request_id: requestId, text, state: held ? "held" : "queued", created_at: new Date(this.now()).toISOString() },
+      message: { id: this.newId(), request_id: requestId, text, state: held ? "held" : "queued", created_at: new Date(this.now()).toISOString(), ...(agentOnly ? { agent_only: true as const } : {}) },
     };
     this.records.set(item.message.id, item);
     this.publish(owner, paneId);
@@ -185,6 +201,12 @@ export class PendingInputs<Owner, Lease> {
 
   retains(owner: Owner, id: string): boolean { return this.records.get(id)?.owner === owner; }
 
+  /** The pending message `id`, still held here, was accepted for an agent alone: a saved copy's resend keeps that whatever it says. */
+  agentOnly(paneId: string, id: string): boolean { const item = this.records.get(id); return item?.paneId === paneId && item.message.agent_only === true; }
+
+  /** Whether any message for the pane is still here, queued, held or going: a runtime move waits for none. */
+  holds(paneId: string): boolean { return [...this.records.values()].some((item) => item.paneId === paneId); }
+
   next(paneId: string): PendingRecord<Owner, Lease> | null {
     if (!ready(this.statuses.get(paneId)) || this.gates.has(paneId)
       || [...this.records.values()].some((item) => item.paneId === paneId && (item.inFlight || item.message.state === "uncertain"))) return null;
@@ -196,6 +218,8 @@ export class PendingInputs<Owner, Lease> {
       || [...this.records.values()].some((other) => other.paneId === item.paneId && other.inFlight)
       || (automatic ? this.next(item.paneId) !== item : !["queued", "held"].includes(item.message.state))) return false;
     item.message.state = "sending"; delete item.message.error; item.inFlight = true;
+    // before anything is typed: the row's turn is written after this on this PC's clock (src/lib/sentWaiting.ts)
+    item.message.sending_at = new Date(this.now()).toISOString();
     // An explicit send can start while an earlier send's turn is not confirmed yet. That gate keeps
     // watching the turn until this message commits its own key: a refusal before it frees nothing.
     if (!this.gates.get(item.paneId)?.committed) this.gates.set(item.paneId, { by: item.message.id, committed: false, sawWorking: false, completed: false, deadline: null });
@@ -215,6 +239,8 @@ export class PendingInputs<Owner, Lease> {
   settle(item: PendingRecord<Owner, Lease>, fault?: Fault, uncertain = false, retryWhenReady = false): void {
     if (this.records.get(item.message.id) !== item || !item.inFlight) return;
     item.inFlight = false;
+    // a send the pane's move overtook is never tried again by itself under the new ID: it waits for its Send
+    if (this.movedInFlight.delete(item)) retryWhenReady = false;
     if (!fault) {
       this.finish(item, "sent");
       const gate = this.gates.get(item.paneId);
@@ -222,10 +248,12 @@ export class PendingInputs<Owner, Lease> {
       return;
     }
     item.message.state = uncertain ? "uncertain" : retryWhenReady ? "queued" : "held";
+    if (!uncertain) delete item.message.sending_at;
     if (retryWhenReady && !uncertain) delete item.message.error; else item.message.error = fault;
     const gate = this.gates.get(item.paneId);
     if (uncertain || gate?.by === item.message.id || gate?.completed) this.gates.delete(item.paneId);
-    if (uncertain) this.holdPane(item.paneId, fault);
+    // the pane's other messages wait behind it, each for its own reason: a paste left in the input line is that message's alone (#511)
+    if (uncertain) this.holdPane(item.paneId, fault.code === "pasted_not_sent" ? BEHIND_PASTE : fault);
     this.publish(item.owner, item.paneId);
   }
 
@@ -313,6 +341,32 @@ export class PendingInputs<Owner, Lease> {
 
   holdPane(paneId: string, fault: Fault): void {
     for (const owner of new Set([...this.records.values()].filter((item) => item.paneId === paneId).map((item) => item.owner))) this.hold(owner, paneId, fault);
+  }
+
+  /**
+   * herdr moved the pane under a new ID: its messages, their outcomes and held-copy sends follow it, each
+   * held for an explicit send (one on its way, uncertain), and every owner is told both IDs' lists.
+   */
+  move(from: string, to: string, fault: Fault): void {
+    if (from === to) return;
+    this.holdPane(from, fault);
+    const owners = new Set<Owner>();
+    for (const item of this.records.values()) if (item.paneId === from) {
+      item.paneId = to;
+      owners.add(item.owner);
+      if (item.inFlight) this.movedInFlight.add(item);
+    }
+    for (const receipt of this.removed.values()) if (receipt.paneId === from) receipt.paneId = to;
+    for (const [key, entry] of [...this.resends]) {
+      if (entry.paneId !== from) continue;
+      const [, id, generation] = JSON.parse(key) as [string, string, number];
+      entry.paneId = to;
+      this.resends.delete(key);
+      this.resends.set(JSON.stringify([to, id, generation]), entry);
+    }
+    // its status and turn come again under the new ID; a gate the old one opened guards nothing there
+    this.forget(from);
+    for (const owner of owners) { this.publish(owner, from); this.publish(owner, to); }
   }
 
   close(owner: Owner): void { this.hold(owner); this.closed.set(owner, this.now()); }

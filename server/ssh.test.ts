@@ -1,9 +1,10 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import { createHash, generateKeyPairSync } from "node:crypto";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { refusalHint, SshConnection, sshClient } from "./ssh.ts";
+import { refusalHint, SshConnection, sshClient, sweepSshDirs } from "./ssh.ts";
+import { posixHost, type HostInspection } from "./remote-host.ts";
 
 // The direct mode Windows uses (its OpenSSH has no connection sharing), run here against a
 // stand-in ssh. Windows itself runs it against real hosts; this sh stand-in needs a POSIX shell.
@@ -52,6 +53,11 @@ if [ -n "$tunnel" ]; then
   exec "$FAKE_BUN" -e "let opened = 0; Bun.listen({ hostname: '127.0.0.1', port: $port, socket: { open() { if (++opened === Number(process.env.FAKE_TUNNEL_ENDS_AT)) process.exit(0); }, data() {} } });"
 fi
 [ "$last" = "exit" ] && exit 0
+case "$FAKE_FLOOD" in
+  whitespace) head -c 8388608 /dev/zero | tr '\0' ' '; printf '[]'; exit 0 ;;
+  stdout) exec yes ;;
+  stderr) exec yes >&2 ;;
+esac
 echo ran
 `;
 
@@ -68,7 +74,7 @@ for (const line of readFileSync(process.argv.at(-1), "utf8").trim().split("\n"))
 }' "$file"
 `;
 
-const FAKE_KEYS = ["FAKE_DIR", "FAKE_BUN", "FAKE_PASSPHRASE", "FAKE_PROMPT", "FAKE_HOSTKEY_LINE", "FAKE_INTRUDER", "FAKE_CONFIG_FORWARD", "FAKE_TUNNEL_ENDS_AT"];
+const FAKE_KEYS = ["FAKE_DIR", "FAKE_BUN", "FAKE_PASSPHRASE", "FAKE_PROMPT", "FAKE_HOSTKEY_LINE", "FAKE_INTRUDER", "FAKE_CONFIG_FORWARD", "FAKE_TUNNEL_ENDS_AT", "FAKE_FLOOD"];
 
 describe.skipIf(process.platform === "win32")("SSH without connection sharing", () => {
   const cleanups: (() => void)[] = [];
@@ -110,6 +116,15 @@ describe.skipIf(process.platform === "win32")("SSH without connection sharing", 
     const run = calls().find((line) => line.endsWith("sh -c 'true'"))!;
     expect(run).toContain("BatchMode=yes");
     expect(run).toContain("StrictHostKeyChecking=yes");
+    expect(ssh.connected()).toBe(true);
+  });
+
+  // a PC's discovery answer is read only up to its cap: past it the command is stopped, and nothing it said is taken, so a
+  // PC cannot pad a list nor stream until the command's timeout
+  it.each(["whitespace", "stdout", "stderr"])("stops reading a PC's herdr discovery past its cap: %s", async (flood) => {
+    const { ssh, ask } = fixture({ FAKE_FLOOD: flood });
+    await ssh.start(ask("unused"));
+    await expect(posixHost.discoverSessions!(ssh, { runtimeDir: "/fixture/runtime" } as HostInspection)).rejects.toThrow("more output than expected");
     expect(ssh.connected()).toBe(true);
   });
 
@@ -233,6 +248,37 @@ describe.skipIf(process.platform === "win32")("SSH without connection sharing", 
       await ssh.start(ask("unused"));
       await expect(ssh.forward(40_000, 7317)).rejects.toThrow("LocalForward, RemoteForward or DynamicForward");
     });
+  });
+
+  it("leaves no folder behind for connections that never start, and removes a started one's on close", async () => {
+    const { root, ssh, ask } = fixture();
+    // a setup that was cancelled before connecting, or a test that stubs start and close
+    const idle = Array.from({ length: 20 }, () => new SshConnection({ destination: "pc" }, join(root, "state"), undefined, false, false));
+    expect(idle.map((connection) => connection["dir"]).filter((dir) => dir && existsSync(dir))).toEqual([]);
+    await ssh.start(ask("unused"));
+    const dir = ssh["dir"];
+    expect(existsSync(join(dir, "askpass"))).toBe(true);
+    ssh.close();
+    expect(existsSync(dir)).toBe(false);
+    const cancelled = new SshConnection({ destination: "pc" }, join(root, "state"), undefined, false, false);
+    cancelled.close();
+    await expect(cancelled.start(ask("unused"))).rejects.toThrow("Connection cancelled");
+    expect(cancelled["dir"]).toBe("");
+  });
+});
+
+describe("sweeping connection folders an earlier server left", () => {
+  it("removes only this prefix's empty folders older than the limit", async () => {
+    const root = mkdtempSync(join(tmpdir(), "ovis-ssh-sweep-"));
+    try {
+      const old = (Date.now() - 2 * 60 * 60_000) / 1000;
+      for (const name of ["herdr-ssh-old1", "herdr-ssh-old2", "herdr-ssh-busy", "herdr-ssh-new", "other-old"]) mkdirSync(join(root, name));
+      writeFileSync(join(root, "herdr-ssh-busy", "askpass"), "");
+      for (const name of ["herdr-ssh-old1", "herdr-ssh-old2", "herdr-ssh-busy", "other-old"]) utimesSync(join(root, name), old, old);
+      expect(await sweepSshDirs(root)).toBe(2);
+      expect(["herdr-ssh-old1", "herdr-ssh-old2", "herdr-ssh-busy", "herdr-ssh-new", "other-old"].filter((name) => existsSync(join(root, name)))).toEqual(["herdr-ssh-busy", "herdr-ssh-new", "other-old"]);
+      expect(await sweepSshDirs(join(root, "missing"))).toBe(0);
+    } finally { rmSync(root, { recursive: true, force: true }); }
   });
 });
 

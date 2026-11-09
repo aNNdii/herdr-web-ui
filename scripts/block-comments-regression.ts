@@ -1229,7 +1229,7 @@ const cases: Record<string, Case> = {
   },
 
   /**
-   * Settings → Comments off while the sheet holds an edit typed (a finger's count, the mode on): the sheet goes and the
+   * Settings → Chat → Comments off while the sheet holds an edit typed (a finger's count, the mode on): the sheet goes and the
    * edit is not stored after every comment was deleted (the store keeps nothing while comments are off).
    */
   async "touch-setting"(open) {
@@ -1255,7 +1255,7 @@ const cases: Record<string, Case> = {
     await sheet.waitFor();
     await fieldOf(page).fill("Touch note. Edited.");
     await page.keyboard.press("ControlOrMeta+Shift+Comma");
-    await openSettingsPage(page, "Comments");
+    await openSettingsPage(page, "Chat");
     const commentsSwitch = page.locator(".settings-dialog").getByRole("switch", { name: "Comments", exact: true });
     await commentsSwitch.click();
     const confirm = page.getByRole("alertdialog");
@@ -1265,12 +1265,12 @@ const cases: Record<string, Case> = {
     await eventually("the sheet gone", async () => (await sheet.count()) === 0);
     await frames(page, 10);
     assert.deepEqual(await storedOf(page), [], "the edit typed in the sheet is not stored after Comments off");
-    console.log("PASS touch-setting: Settings → Comments off with an edit typed in the sheet closes it and stores nothing");
+    console.log("PASS touch-setting: Settings → Chat → Comments off with an edit typed in the sheet closes it and stores nothing");
     assert.deepEqual(errors, []);
     await close();
   },
 
-  /** Settings → Comments off: asked, then nothing: no marks, cards, toggles, bar or stored comments. */
+  /** Settings → Chat → Comments off: asked, then nothing: no marks, cards, toggles, bar or stored comments. */
   async setting(open) {
     const { page, context, url, errors, sent, close } = await open(WIDE);
     await modeOn(page);
@@ -1287,32 +1287,32 @@ const cases: Record<string, Case> = {
     await selectionFieldOf(page).waitFor();
     await page.keyboard.type("Unsaved thought");
     await page.keyboard.press("ControlOrMeta+Shift+Comma");
-    // every comment setting is on one page, Comments, between Chat and Terminal: the switch, then the selected text's
-    // group (both rows of the preview and the chat), then the code view's
+    // every comment setting is on the Chat page, in three groups after Files: the switch (Comments), then the selected
+    // text's group (both rows of the preview and the chat), then the code view's
     const settingsDialog = page.locator(".settings-dialog");
     await settingsDialog.waitFor();
-    assert.deepEqual(await settingsDialog.getByRole("tab").allInnerTexts().then((names) => names.map((name) => name.trim()).slice(1, 4)), ["Chat", "Comments", "Terminal"], "Comments sits between Chat and Terminal");
-    await openSettingsPage(page, "Comments");
-    const commentsPage = settingsDialog.getByRole("tabpanel", { name: "Comments", exact: true });
+    await openSettingsPage(page, "Chat");
+    const commentsPage = settingsDialog.getByRole("tabpanel", { name: "Chat", exact: true });
     const commentsSwitch = commentsPage.getByRole("switch", { name: "Comments", exact: true });
-    assert.deepEqual(await commentsPage.locator(".settings-section > h3").allInnerTexts(), ["Selected text", "Code view"], "the page's titled groups");
+    const sections = await commentsPage.locator(".settings-section").evaluateAll((nodes) => nodes.map((node) => node.getAttribute("data-section")));
+    const files = sections.indexOf("file-viewer");
+    assert.deepEqual(sections.slice(files, files + 4), ["file-viewer", "comments", "selected-text", "code-view"], "the comment groups follow Files");
     const groupOf = (title: string): Locator => commentsPage.locator(".settings-section", { has: page.getByRole("heading", { name: title, exact: true }) });
     const selectedGroup = groupOf("Selected text");
-    assert.equal(await selectedGroup.locator(".settings-note").innerText(), "In the Markdown preview and the chat");
     assert.deepEqual(await selectedGroup.locator(".settings-label").allInnerTexts(), ["When you select text", "Comments beside the text"]);
     assert.equal(await selectedGroup.getByRole("button", { name: "Open the comment field", exact: true }).getAttribute("aria-pressed"), "true", "the seeded field variant is chosen");
     assert.equal(await selectedGroup.getByRole("button", { name: "Show a Comment button", exact: true }).getAttribute("aria-pressed"), "false");
     const codeGroup = groupOf("Code view");
     assert.deepEqual(await codeGroup.locator(".settings-label").allInnerTexts(), ["Click a line to comment", "On mobile, comment with", "On mobile, write comments in"]);
     assert.ok(!(await codeGroup.innerText()).includes("In the code view"), "the code view's notes leave its name to the group");
-    /** The rows below the switch: each control, and whether it is disabled. */
+    /** The rows below the switch: each control (not a row's Restore defaults), and whether it is disabled. */
     const rowsDisabled = async (): Promise<boolean[]> => [
-      ...await selectedGroup.getByRole("button").evaluateAll((nodes) => nodes.map((node) => (node as HTMLButtonElement).disabled)),
+      ...await selectedGroup.locator("button:not(.settings-reset)").evaluateAll((nodes) => nodes.map((node) => (node as HTMLButtonElement).disabled)),
       ...await codeGroup.getByRole("switch").evaluateAll((nodes) => nodes.map((node) => (node as HTMLButtonElement).disabled)),
-      ...await codeGroup.getByRole("button").evaluateAll((nodes) => nodes.map((node) => (node as HTMLButtonElement).disabled)),
+      ...await codeGroup.locator("button:not(.settings-reset):not([role=switch])").evaluateAll((nodes) => nodes.map((node) => (node as HTMLButtonElement).disabled)),
     ];
     assert.ok((await rowsDisabled()).length === 9 && (await rowsDisabled()).every((disabled) => !disabled), "with comments on, every row below the switch is enabled");
-    console.log("PASS setting: Settings → Comments, between Chat and Terminal, holds the switch, Selected text (When you select text, Comments beside the text) and Code view (its three rows)");
+    console.log("PASS setting: Settings → Chat holds, after Files, the Comments switch, Selected text (When you select text, Comments beside the text) and Code view (its three rows)");
     await commentsSwitch.click();
     const confirm = page.getByRole("alertdialog");
     await confirm.waitFor();
@@ -1326,16 +1326,7 @@ const cases: Record<string, Case> = {
     await confirm.getByRole("button", { name: "Turn off and delete", exact: true }).click();
     await confirm.waitFor({ state: "detached" });
     assert.ok((await rowsDisabled()).every((disabled) => disabled), "with comments off, every row below the switch is disabled");
-    // the Chat page and the File viewer page have no comment rows, and no note pointing elsewhere
-    await openSettingsPage(page, "Chat");
-    const chatPage = settingsDialog.getByRole("tabpanel", { name: "Chat", exact: true });
-    for (const name of ["Comments", "Comments beside the text"]) assert.equal(await chatPage.locator(".settings-label", { hasText: new RegExp(`^${name}$`) }).count(), 0, `the Chat page has no ${name} row`);
-    await openSettingsPage(page, "File viewer");
-    const filesPage = settingsDialog.getByRole("tabpanel", { name: "File viewer", exact: true });
-    assert.equal(await filesPage.getByRole("heading", { name: "Comments", exact: true }).count(), 0, "the File viewer page has no Comments group");
-    assert.equal(await filesPage.getByRole("switch", { name: "Click a line to comment", exact: true }).count(), 0);
-    assert.equal(await filesPage.locator(".settings-note").count(), 0, "nor the note that pointed to the Chat page");
-    console.log("PASS setting: with Comments off every row below the switch is disabled; the Chat and File viewer pages show no comment rows");
+    console.log("PASS setting: with Comments off every row below the switch is disabled");
     await page.keyboard.press("Escape");
     await page.locator(".settings-dialog").waitFor({ state: "detached" });
     await eventually("no card", async () => (await cardsOf(page).count()) === 0);
@@ -1356,7 +1347,7 @@ const cases: Record<string, Case> = {
 
     // no comment stored, but one being written with text typed: turning comments off would lose it, so it asks about it
     await page.keyboard.press("ControlOrMeta+Shift+Comma");
-    await openSettingsPage(page, "Comments");
+    await openSettingsPage(page, "Chat");
     await commentsSwitch.click();
     assert.equal(await commentsSwitch.getAttribute("aria-checked"), "true");
     await page.keyboard.press("Escape");
@@ -1365,7 +1356,7 @@ const cases: Record<string, Case> = {
     await selectionFieldOf(page).waitFor();
     await page.keyboard.type("Typed only");
     await page.keyboard.press("ControlOrMeta+Shift+Comma");
-    await openSettingsPage(page, "Comments");
+    await openSettingsPage(page, "Chat");
     await commentsSwitch.click();
     await confirm.waitFor();
     assert.equal(await confirm.getByRole("heading").first().innerText(), "Delete 1 comment?", "the comment being written is the one asked about");

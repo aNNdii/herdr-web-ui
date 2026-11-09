@@ -2,14 +2,17 @@ import { closeSync, lstatSync, openSync, readSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { OmoRun, OmoTask, OmoTaskResult } from "../shared/protocol.ts";
+import type { PiSubagentsLiveAgent } from "../shared/pi-subagents-bridge.ts";
 import { workflowTitle } from "../shared/workflow-title.ts";
 import { plain, READ_BUDGET, readLines, RECENT_LIMIT, RECENT_MS, remember, START_SLACK_MS } from "./claude-subagents.ts";
 
 /**
- * The agents and `SubagentWorkflow` runs a Pi pane's `@tintinweb/pi-subagents` 0.22.0 started, for
- * the pane's running count, the background list and the chat's result cards. Every rule of
- * pi-subagents' on-disk format lives here, ported, never imported: the pi session file is the
- * truth. The whole file counts, every branch of it.
+ * The agents and `SubagentWorkflow` runs a Pi pane's `@tintinweb/pi-subagents` (0.22.0, checked
+ * with 0.23.1) started, for the pane's running count, the background list and the chat's result
+ * cards. Every rule of pi-subagents' on-disk format lives here, ported, never imported: the pi
+ * session file is the history, the chat's cards and the fallback. The whole file counts, every
+ * branch of it. What runs now, where the pi process says it itself, is that process's word
+ * (`PiSession.liveView`, see below).
  *
  * - A background agent starts (or resumes) with an `Agent` tool result whose `details.status` is
  *   `background`, keyed by `details.agentId`, and runs until a later `custom` entry
@@ -29,10 +32,30 @@ import { plain, READ_BUDGET, readLines, RECENT_LIMIT, RECENT_MS, remember, START
  * - What runs lives in the pi process that started it: one the pane no longer runs pi for, or
  *   that started more than START_SLACK_MS before the pi process now in the pane, is lost. That is
  *   worked out when read, never stored.
- * - `/reload` is not seen: it keeps the process and the session file and aborts every agent and
- *   workflow, but (checked with pi 1.3.0 and pi-subagents 0.22.0) writes nothing to the session:
- *   no record for an aborted agent, no notification for a workflow, no marker of the reload. What
- *   ran at a reload stays `running` until pi restarts in the pane, which makes it lost.
+ * - `/reload` is not in the file: it keeps the process and the session file and aborts every agent
+ *   and workflow, but (checked with pi 1.3.0 and pi-subagents 0.22.0) writes nothing to the
+ *   session: no record for an aborted agent, no notification for a workflow, no marker of the
+ *   reload. From the file alone what ran at a reload stays `running` until pi restarts in the
+ *   pane, which makes it lost; the live view below ends it.
+ *
+ * The live view (server/pi-subagents-live.ts) is what the pane's pi process answers through the web
+ * UI's pi extension, kept from pi-subagents' own events and manager registry, when it loads
+ * pi-subagents. It judges only facts read before the answer was asked for (read marks,
+ * piSubagentsMark), and over those:
+ * - an agent the file has running runs only while the process has it running; ended there (its
+ *   record not written yet) it takes that status and end, and unknown there it is lost (a /reload
+ *   started the roster empty). An agent the file has ended that the process ran again since (an
+ *   @mention or RPC resume) runs from that start.
+ * - a foreground `Agent` call, keyed by its call id, is the process's running agent of its
+ *   description (and type); a call without a description, the one free agent of its type where
+ *   exactly one fits. Without one it runs as the file says, until the idle rule ends it.
+ * - an agent running in the process that no row shows yet (an RPC, scheduler or @mention spawn, a
+ *   result pi has not written) is added, with the process's start, tool uses and tokens.
+ * - workflows stay the file's: no event tells a workflow's end. Once the process confirmed its
+ *   manager idle (`running: false` on two polls at least a minute apart, nothing happening in
+ *   between; a `gate` or a pause can leave it idle for a while), what the file still has running is lost; that, too, ends a running foreground call.
+ * Without a view (no extension, one from before its route, Windows, pi-subagents not loaded) the
+ * file alone speaks, as before.
  *
  * The file is read from where the last read stopped, at most a budget of bytes per call: until it
  * has been read to its end the answer is behind. The counts say so (`current`), and the list is
@@ -59,6 +82,20 @@ import { plain, READ_BUDGET, readLines, RECENT_LIMIT, RECENT_MS, remember, START
  * workflow script's name.
  */
 
+/**
+ * What the pane's pi process itself says of its agents, through the web UI's pi extension
+ * (server/pi-subagents-live.ts builds it from `GET /v1/subagents`), when it says it and loads
+ * pi-subagents. Only facts the index read before the answer was asked for (`mark`) are judged by it.
+ */
+export interface PiLiveView {
+  /** piSubagentsMark() taken before the answer was asked for */
+  mark: number;
+  /** the process's top-level agents since its session started, by id */
+  agents: ReadonlyMap<string, PiSubagentsLiveAgent>;
+  /** the manager answered idle on every poll for at least the confirm time, since the answer asked for at `mark`; null otherwise */
+  idle: { mark: number } | null;
+}
+
 /** One Pi pane's session as the tracker resolved it. */
 export interface PiSession {
   /** the pi session file (canonical, as piTranscriptPath returns it) */
@@ -69,6 +106,8 @@ export interface PiSession {
   live: boolean;
   /** when the pi process now in the pane started; a start older than this less START_SLACK_MS is lost */
   startedAt: number | null;
+  /** the pi process's own word; absent or null: the file alone */
+  liveView?: PiLiveView | null;
 }
 
 export interface PiSubagentCounts {
@@ -116,6 +155,8 @@ interface Start { at: number; seq: number }
 
 interface AgentFacts {
   id: string;
+  /** the read mark when the index last changed them */
+  seen: number;
   title: string | null;
   type: string | null;
   model: string | null;
@@ -129,6 +170,7 @@ interface AgentFacts {
 
 interface RunFacts {
   id: string;
+  seen: number;
   callName: string | null;
   scriptPath: string | null;
   start: Start;
@@ -136,7 +178,21 @@ interface RunFacts {
 }
 
 /** A foreground `Agent` call, running while its assistant message waits for it. */
-interface ForegroundCall { id: string; title: string | null; type: string | null; model: string | null; start: Start }
+interface ForegroundCall { id: string; seen: number; title: string | null; type: string | null; model: string | null; start: Start }
+
+/**
+ * The read marks: every fact the index reads is stamped with the current mark, and the live answer
+ * (server/pi-subagents-live.ts) takes a new one before it asks. A fact stamped below an answer's
+ * mark was in the file before the answer was asked for, so pi had already told the extension of it
+ * (pi-subagents emits its events before it writes the result or record): only such facts are
+ * judged by that answer, which no read racing the answer can then contradict.
+ */
+let marks = 0;
+
+/** A new read mark, taken before the pi process is asked. */
+export function piSubagentsMark(): number {
+  return ++marks;
+}
 
 interface SessionIndex {
   fileId: string;
@@ -173,7 +229,7 @@ function catchUp(path: string, budget: number, environ?: readonly string[] | nul
   remember(indexes, path, index, MAX_SESSIONS);
   if (index.offset >= stat.size) { index.behind = false; return index; }
   const state = index;
-  const read = readLines(path, state.offset, stat.size, budget, (line) => scanLine(state, line), state.skipping);
+  const read = readLines(path, state.offset, stat, budget, (line) => scanLine(state, line), state.skipping);
   state.offset = read.offset;
   state.skipping = read.skipping;
   state.behind = read.more;
@@ -210,7 +266,7 @@ function scanLine(index: SessionIndex, line: string): void {
     for (const [id, { details }] of notification(entry) ?? []) {
       const run = index.runs.get(id);
       const status = endStatus(details["status"]);
-      if (run && status !== null) run.end = { status, at, description: text(details["description"]) };
+      if (run && status !== null) { run.end = { status, at, description: text(details["description"]) }; run.seen = marks; }
     }
   }
 }
@@ -237,7 +293,7 @@ function scanMessage(index: SessionIndex, message: Row | null, start: Start): vo
     });
     for (const call of calls) if (call.name === "Agent" || call.name === "SubagentWorkflow") remember(index.calls, call.id, { name: call.name, args: call.args, at: start.at, seq: start.seq }, MAX_CALLS);
     const open = message["stopReason"] !== "toolUse" ? [] : calls.flatMap((call) => call.name !== "Agent" ? [] : [{
-      id: call.id, title: text(call.args["description"]), type: text(call.args["subagent_type"]), model: text(call.args["model"]), start,
+      id: call.id, seen: marks, title: text(call.args["description"]), type: text(call.args["subagent_type"]), model: text(call.args["model"]), start,
     }]);
     index.last = { callIds: calls.map((call) => call.id), open };
     return;
@@ -253,7 +309,7 @@ function scanMessage(index: SessionIndex, message: Row | null, start: Start): vo
   if (message["toolName"] === "Agent") agentResult(index, details, call, start);
   else if (message["toolName"] === "SubagentWorkflow") {
     const id = text(details["taskId"]);
-    if (id !== null) remember(index.runs, id, { id, callName: text(call?.args["name"]), scriptPath: text(call?.args["scriptPath"]), start: { at: call?.at ?? start.at, seq: start.seq }, end: null }, MAX_RUNS);
+    if (id !== null) remember(index.runs, id, { id, seen: marks, callName: text(call?.args["name"]), scriptPath: text(call?.args["scriptPath"]), start: { at: call?.at ?? start.at, seq: start.seq }, end: null }, MAX_RUNS);
   }
 }
 
@@ -276,6 +332,7 @@ function agentResult(index: SessionIndex, details: Row, call: { args: Row; at: n
   const endedFirst = background && call !== undefined && known?.end && known.end.seq > call.seq ? known.end : null;
   remember(index.agents, id, {
     id,
+    seen: marks,
     title: text(details["description"]) ?? text(args["description"]) ?? known?.title ?? null,
     type: text(details["subagentType"]) ?? text(args["subagent_type"]) ?? known?.type ?? null,
     model: text(details["modelName"]) ?? text(args["model"]) ?? known?.model ?? null,
@@ -303,13 +360,14 @@ function scanRecord(index: SessionIndex, data: Row | null, start: Start): void {
     : index.last?.open.find((open) => open.title === description && (open.type === null || open.type === type));
   if (call && index.last) index.last.open = index.last.open.filter((open) => open !== call);
   if (known) {
+    known.seen = marks;
     known.end = end;
     known.records = [...known.records, record].slice(-MAX_RECORDS);
     if (call) { known.start = call.start; known.model = call.model ?? known.model; }
     return;
   }
   remember(index.agents, id, {
-    id, title: description ?? call?.title ?? null, type: type ?? call?.type ?? null, model: call?.model ?? null,
+    id, seen: marks, title: description ?? call?.title ?? null, type: type ?? call?.type ?? null, model: call?.model ?? null,
     start: call?.start ?? { at: count(data["startedAt"]) ?? start.at, seq: start.seq }, end, records: [record],
   }, MAX_AGENTS);
 }
@@ -365,7 +423,7 @@ function cardOf(index: SessionIndex | null, id: string, details: Row, block: str
   const preview = typeof details["resultPreview"] === "string" ? details["resultPreview"] : "";
   if (id.startsWith("wf_") || index?.runs.has(id)) {
     const known = index?.runs.get(id);
-    const run: RunFacts = { ...(known ?? { id, callName: null, scriptPath: null, start: { at, seq: 0 } }), end: { status, at, description: text(details["description"]) } };
+    const run: RunFacts = { ...(known ?? { id, seen: 0, callName: null, scriptPath: null, start: { at, seq: 0 } }), end: { status, at, description: text(details["description"]) } };
     const result = blockTag(block, "result");
     // `Workflow "<name>" <status> — <done>/<total> agents[, <n> replayed from <run>]`: the counts at the end, not digits in the name
     const agents = / — (\d+)\/(\d+) agents(?:, \d+ replayed from [\s\S]*)?$/.exec(unescapeXml(blockTag(block, "summary") ?? "").trim());
@@ -457,7 +515,7 @@ function tally<T>(cache: Map<string, Tally<T>>, file: string, budget: { left: nu
   if (known.offset >= stat.size) { known.behind = false; return known; }
   if (budget.left <= 0) { known.behind = true; return known; }
   const state = known;
-  const read = readLines(file, state.offset, stat.size, Math.min(budget.left, READ_BUDGET), (line) => each(state.facts, line), state.skipping);
+  const read = readLines(file, state.offset, stat, Math.min(budget.left, READ_BUDGET), (line) => each(state.facts, line), state.skipping);
   budget.left -= read.offset - state.offset;
   state.offset = read.offset;
   state.skipping = read.skipping;
@@ -720,10 +778,19 @@ function listed<T, F>(items: Item<T, F>[], now: number): Item<T, F>[] {
 
 type TaskFacts = Omit<AgentFacts, "end" | "records">;
 
-/** What the index says now, for this pane's pi process. */
+const LIVE_ENDED = { completed: "completed", failed: "failed", stopped: "cancelled" } as const;
+
+/** What the index says now, for this pane's pi process, with what that process says itself (PiLiveView) over it. */
 function view(index: SessionIndex, session: PiSession): { tasks: Item<OmoTask, TaskFacts>[]; runs: Item<OmoRun, RunFacts>[] } {
-  const task = (facts: TaskFacts, end: AgentFacts["end"]): Item<OmoTask, TaskFacts> => {
-    const lost = end === null && isLost(facts.start.at, session);
+  const live = session.liveView ?? null;
+  /** the live answer was asked for after the index read these facts */
+  const judged = (seen: number): boolean => live !== null && seen < live.mark;
+  /** confirmed idle since before these facts were read: what still runs in the file does not */
+  const idleLost = (seen: number): boolean => live?.idle != null && seen < live.idle.mark;
+  /** the live agents a row of the file already shows */
+  const shown = new Set<string>();
+  const task = (facts: TaskFacts, end: AgentFacts["end"], gone = false): Item<OmoTask, TaskFacts> => {
+    const lost = end === null && (gone || isLost(facts.start.at, session));
     const endAt = end?.at ?? (lost ? facts.start.at : null);
     return {
       facts, start: facts.start, endAt, running: end === null && !lost, lost,
@@ -734,10 +801,41 @@ function view(index: SessionIndex, session: PiSession): { tasks: Item<OmoTask, T
       },
     };
   };
-  const tasks = [...index.agents.values()].map((facts) => task(facts, facts.end));
-  for (const call of index.last?.open ?? []) tasks.push(task(call, null));
+  const tasks = [...index.agents.values()].map((facts) => {
+    const agent = live?.agents.get(facts.id);
+    if (agent) shown.add(facts.id);
+    if (!judged(facts.seen)) return task(facts, facts.end);
+    if (agent?.status === "running") {
+      // running again: a resume the file has not told (an @mention, an RPC one) starts at its live start
+      if (facts.end === null) return task(facts, null);
+      return agent.startedAt > facts.end.at ? task({ ...facts, start: { at: agent.startedAt, seq: facts.start.seq } }, null) : task(facts, facts.end);
+    }
+    if (facts.end !== null) return task(facts, facts.end);
+    // ended in pi, with no record in the file yet (or never: a /reload writes none); unknown to it: lost
+    if (agent) return task(facts, { status: LIVE_ENDED[agent.status], at: agent.endedAt ?? facts.start.at, seq: facts.start.seq, turns: null, toolCalls: agent.toolUses ?? null });
+    return task(facts, null, true);
+  });
+  const free = (): PiSubagentsLiveAgent[] => [...live?.agents.values() ?? []].filter((agent) => agent.status === "running" && !shown.has(agent.id));
+  const open = index.last?.open ?? [];
+  // keyed by its call: the running agent of its description (and type) is this call's, not a row of its own. A call
+  // without a description, matched after those with one, takes the free running agent of its type where exactly one fits
+  const matched = new Set<ForegroundCall>();
+  for (const described of [true, false]) for (const call of open) {
+    if ((call.title !== null) !== described) continue;
+    const fits = free().filter((candidate) => (call.type === null || candidate.type === call.type) && (!described || candidate.description === call.title));
+    const agent = described || fits.length === 1 ? fits[0] : undefined;
+    if (agent) { shown.add(agent.id); matched.add(call); }
+  }
+  for (const call of open) tasks.push(task(call, null, !matched.has(call) && idleLost(call.seen)));
+  // running in pi, not in the file yet: an RPC, scheduler or @mention spawn, or a result pi has not written
+  for (const agent of free()) {
+    const item = task({ id: agent.id, seen: 0, title: agent.description ?? null, type: agent.type ?? null, model: agent.model ?? null, start: { at: agent.startedAt, seq: Number.MAX_SAFE_INTEGER } }, null);
+    item.value.tool_calls = agent.toolUses ?? null;
+    item.value.tokens = agent.tokens ?? null;
+    tasks.push(item);
+  }
   const runs = [...index.runs.values()].map((run): Item<OmoRun, RunFacts> => {
-    const lost = run.end === null && isLost(run.start.at, session);
+    const lost = run.end === null && (isLost(run.start.at, session) || idleLost(run.seen));
     const endAt = run.end?.at ?? (lost ? run.start.at : null);
     return {
       facts: run, start: run.start, endAt, running: run.end === null && !lost, lost,

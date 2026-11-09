@@ -3,8 +3,8 @@ import { appendFileSync, mkdtempSync, readFileSync, rmSync, statSync, utimesSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import type { HerdrPane, OmoRun, OmoTask } from "../shared/protocol.ts";
-import { PiSubagentStatus, piSubagentPane, subagentList, type LocatedPiSession, type PiSubagentDeps } from "./pi-subagent-status.ts";
+import type { HerdrPane } from "../shared/protocol.ts";
+import { PiSubagentStatus, piSubagentPane, type LocatedPiSession, type PiSubagentDeps } from "./pi-subagent-status.ts";
 import { forgetPiSubagents } from "./pi-subagents.ts";
 
 const roots: string[] = [];
@@ -49,6 +49,7 @@ function tracker(deps: Partial<PiSubagentDeps> & Pick<PiSubagentDeps, "locate">)
     onChange: (...change) => { changes.push(change); },
     onReset: (paneId) => { resets.push(paneId); },
     processStart: () => null,
+    live: async () => null,
     now: () => NOW,
     ...deps,
   });
@@ -197,24 +198,5 @@ describe("piSubagentPane", () => {
   it("is null for a pane that does not run pi", async () => {
     expect(await piSubagentPane(pane("p1", "claude"))).toBeNull();
     expect(await piSubagentPane(pane("p1", null))).toBeNull();
-  });
-});
-
-describe("subagentList", () => {
-  const claudeTask: OmoTask = { id: "c1", title: "claude", category: null, model: null, status: "completed", started_at: null, ended_at: null, turns: null, tool_calls: null, tokens: null };
-  const piRun: OmoRun = { id: "wf_1", name: "review", status: "running", started_at: null, ended_at: null, waves: [] };
-  it("lists a live Claude session first, then Pi, then what a Claude session left behind", async () => {
-    const asked: string[] = [];
-    const pi = (found: boolean) => async () => { asked.push("pi"); return found ? { tasks: [], runs: [piRun] } : null; };
-    const claude = () => [claudeTask];
-    // Claude runs live: Pi is not asked
-    expect(await subagentList({ live: true }, pi(true), claude)).toEqual({ tasks: [claudeTask], runs: [] });
-    expect(asked).toEqual([]);
-    // the pane left Claude for Pi: its Pi work
-    expect(await subagentList({ live: false }, pi(true), claude)).toEqual({ tasks: [], runs: [piRun] });
-    // no Pi subagents pane: the Claude session left behind, else nothing
-    expect(await subagentList({ live: false }, pi(false), claude)).toEqual({ tasks: [claudeTask], runs: [] });
-    expect(await subagentList(null, pi(false), claude)).toEqual({ tasks: [], runs: [] });
-    expect(await subagentList(null, pi(true), claude)).toEqual({ tasks: [], runs: [piRun] });
   });
 });

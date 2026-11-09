@@ -1,5 +1,6 @@
 import { randomBytes, timingSafeEqual } from "node:crypto";
 import { appendFileSync, chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { readdir, rmdir, stat } from "node:fs/promises";
 import { connect as tcpConnect, createServer, type Socket } from "node:net";
 import { homedir, tmpdir } from "node:os";
 import { join, posix, win32 } from "node:path";
@@ -12,6 +13,33 @@ import { chunksOf } from "./remote-bundle.ts";
 export interface StreamInput { path: string; onProgress?(done: number): void; onUploaded?(): void }
 
 const WINDOWS = process.platform === "win32";
+/** Unix sockets (including OpenSSH's temporary control path) must fit even with a long TMPDIR. */
+const SSH_DIR_ROOT = WINDOWS ? tmpdir() : "/tmp";
+const SSH_DIR_PREFIX = "herdr-ssh-";
+
+/**
+ * Removes the empty connection folders an earlier server left behind: a connection that was
+ * created and never started or closed, before the folder came only with start(). Thousands of
+ * them fill a tmpfs /tmp's inodes. Only an empty folder older than `maxAgeMs` goes: a started
+ * connection's folder holds its sockets, and rmdir refuses a folder that is not empty.
+ */
+export async function sweepSshDirs(root = SSH_DIR_ROOT, maxAgeMs = 60 * 60_000, now = Date.now()): Promise<number> {
+  let removed = 0;
+  let names: string[];
+  try { names = await readdir(root); } catch { return 0; }
+  for (const name of names) {
+    if (!name.startsWith(SSH_DIR_PREFIX)) continue;
+    const path = join(root, name);
+    try {
+      const info = await stat(path);
+      if (!info.isDirectory() || now - info.mtimeMs < maxAgeMs) continue;
+      if (process.getuid && info.uid !== process.getuid()) continue;
+      await rmdir(path);
+      removed++;
+    } catch {} // not empty, gone already, or not ours: left as it is
+  }
+  return removed;
+}
 
 /**
  * A local path as the value of an ssh option. OpenSSH splits option values like a shell and
@@ -152,9 +180,9 @@ export function decodeClixml(stderr: string): string {
  * receives a prompt's first line, not the fingerprint below it.
  */
 export class SshConnection {
-  // Unix sockets (including OpenSSH's temporary control path) must fit even with a long TMPDIR.
-  private dir = mkdtempSync(join(WINDOWS ? tmpdir() : "/tmp", "herdr-ssh-"));
-  private control = join(this.dir, "control");
+  /** made by start(), removed by close(): a connection that never starts leaves nothing behind */
+  private dir = "";
+  private get control(): string { return join(this.dir, "control"); }
   private client = sshClient();
   private master: Subprocess | null = null;
   private children = new Set<Subprocess>();
@@ -179,8 +207,14 @@ export class SshConnection {
   onOutput: ((text: string) => void) | null = null;
 
   constructor(readonly target: SshTarget, readonly stateDir: string, readonly keyPath?: string, readonly keyOnly = false, readonly multiplexed = !WINDOWS) {
-    chmodSync(this.dir, 0o700);
     mkdirSync(stateDir, { recursive: true, mode: 0o700 });
+  }
+  private makeDir(): string {
+    if (!this.dir) {
+      this.dir = mkdtempSync(join(SSH_DIR_ROOT, SSH_DIR_PREFIX));
+      chmodSync(this.dir, 0o700);
+    }
+    return this.dir;
   }
   /**
    * The options ssh and sftp share; the port flag differs (`-p` is sftp's preserve-times).
@@ -223,6 +257,8 @@ export class SshConnection {
     return timingSafeEqual(Buffer.from(token), Buffer.from(this.askToken));
   }
   async start(challenge?: (prompt: string, hostKey: boolean) => Promise<string>): Promise<void> {
+    if (this.closed) throw new Error("Connection cancelled");
+    this.makeDir();
     // a named pipe on Windows, where node:net cannot listen on a file path
     this.askPath = WINDOWS ? `\\\\.\\pipe\\herdr-askpass-${randomBytes(16).toString("hex")}` : join(this.dir, "ask");
     this.askServer.on("connection", (socket) => {
@@ -351,10 +387,11 @@ export class SshConnection {
     if (answer !== "yes") throw new Error("Host key verification failed.");
     appendFileSync(this.knownHosts(), learned + "\n", { mode: 0o600 });
   }
-  async run(script: string, input?: Uint8Array | StreamInput, timeout = 90_000): Promise<string> {
+  /** `maxOutput`: bytes its stdout and its stderr may each send; past that the command is stopped and fails */
+  async run(script: string, input?: Uint8Array | StreamInput, timeout = 90_000, maxOutput?: number): Promise<string> {
     if (this.closed) throw new Error("SSH connection closed");
     // BatchMode prevents an expired master from unexpectedly opening a new password prompt.
-    return this.exec([...(this.multiplexed ? [...this.base(), "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=yes"] : this.direct()), "-T", this.target.destination, "sh -c " + shellQuote(script)], input, timeout);
+    return this.exec([...(this.multiplexed ? [...this.base(), "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=yes"] : this.direct()), "-T", this.target.destination, "sh -c " + shellQuote(script)], input, timeout, maxOutput);
   }
   /**
    * A script for a Windows host. OpenSSH there hands the command to cmd or PowerShell,
@@ -425,7 +462,7 @@ export class SshConnection {
       await Bun.sleep(100);
     }
   }
-  private async exec(args: string[], input?: Uint8Array | StreamInput, timeout = 30_000): Promise<string> {
+  private async exec(args: string[], input?: Uint8Array | StreamInput, timeout = 30_000, maxOutput?: number): Promise<string> {
     const stream = input !== undefined && !(input instanceof Uint8Array) ? input : undefined;
     const proc = Bun.spawn(args, { stdin: stream ? "pipe" : input ? new Blob([new Uint8Array(input as Uint8Array)]) : "ignore", stdout: "pipe", stderr: "pipe", env: this.askEnv() });
     this.children.add(proc);
@@ -444,7 +481,19 @@ export class SshConnection {
       stream.onUploaded?.();
     })().then(() => null, (error: unknown) => error) : Promise.resolve(null);
     try {
-      const [out, err, code, fed] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited, feed]);
+      // a capped stream is read only up to its cap: past it the command is stopped, and nothing it sent is taken
+      const read = async (stream: ReadableStream<Uint8Array>): Promise<string> => {
+        if (maxOutput === undefined) return new Response(stream).text();
+        const chunks: Uint8Array[] = [];
+        let size = 0;
+        for await (const chunk of stream) {
+          size += chunk.length;
+          if (size > maxOutput) { proc.kill(); throw new Error(`The PC sent more output than expected (over ${maxOutput} bytes); it was not read`); }
+          chunks.push(chunk);
+        }
+        return Buffer.concat(chunks).toString("utf8");
+      };
+      const [out, err, code, fed] = await Promise.all([read(proc.stdout), read(proc.stderr), proc.exited, feed]);
       if (this.closed) throw new Error("Connection cancelled");
       // the remote side's own words say more than a broken pipe on this side
       if (code !== 0) throw new Error(err.trim().slice(-4096) || `SSH command failed (${code})`);
@@ -463,6 +512,6 @@ export class SshConnection {
     for (const socket of this.askSockets) socket.destroy();
     this.askServer.close();
     this.typed.clear(); this.answers.clear();
-    rmSync(this.dir, { recursive: true, force: true });
+    if (this.dir) rmSync(this.dir, { recursive: true, force: true });
   }
 }

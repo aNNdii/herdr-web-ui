@@ -9,6 +9,7 @@ import { matchHerdrWidths } from "./terminalWidths.ts";
 import { paneStorageId } from "../../shared/machines.ts";
 import { PendingMessageStore, pendingMessages } from "./pendingMessages.ts";
 import { paneLifetimes } from "./paneLifetime.ts";
+import { composerDrafts } from "./composerDraft.ts";
 import { useComposerSends, type ComposerSendsDeps } from "./useComposerSends.ts";
 import type { HerdrSocket, SubmitDelivery, SubmitResult } from "./ws.ts";
 import { currentWaitingSends, forgetWaitingSends, settleWaitingSends, waitingKey } from "./sentWaiting.ts";
@@ -34,7 +35,7 @@ function sends(pane: string, answer: SubmitResult, shown: string[], extra: Parti
       socketRef: { current: { connected: true } as HerdrSocket }, sessionRef: { current: null }, pendingScopeRef: { current: "scope" },
       heldRef: { current: false }, secretRef: { current: null }, observeRef: { current: false }, draftHeldForRef: { current: null },
       stillOpenRef: { current: null }, stillOpenNotedRef: { current: false }, chatNavigation: { current: 0 }, setChatLocalSend: () => {},
-      ended: false, heldByOpenQueue: false, answering: null, pendingAnswer: null, settings: { autoSendQueued: false },
+      ended: false, heldByOpenQueue: false, answering: null, answerPending: false, pendingAnswer: null, settings: { autoSendQueued: false },
       knownOutcomes: () => [], inputRowNow: () => "ready", showSentCommand: (_pane, text) => { shown.push(text); },
       submitComposerMessage: () => Promise.resolve(answer),
       ...extra,
@@ -49,6 +50,27 @@ function sends(pane: string, answer: SubmitResult, shown: string[], extra: Parti
 const waiting = "Waiting for 2 background agents to finish";
 const idleBox = ["─".repeat(40), "❯", "─".repeat(40)];
 const closedClaude = readFileSync(new URL("../../server/fixtures/claude-rewind-2.1.304-closed-40.txt", import.meta.url), "utf8");
+
+it("refuses composer choices and confirmation while the answered card waits for its next read", async () => {
+  const prompt: InteractivePrompt = {
+    id: "answered", agent: "claude", kind: "question", title: "Question", question: "Which store?",
+    body: null, options: [{ label: "Redis", description: null }], multi_select: false, custom_option_index: null,
+  };
+  const answers: unknown[] = [], picks: unknown[] = [], messages: string[] = [];
+  const actions = sends("answered-pane", { ok: true }, [], {
+    answering: prompt, answerPending: true,
+    pendingAnswer: { pane: "answered-pane", promptId: prompt.id, answer: { option_index: 0 } },
+    answerPanePrompt: async (answer) => { answers.push(answer); },
+    setPendingAnswer: (pick) => { picks.push(pick); },
+    submitComposerMessage: (text) => { messages.push(text); return Promise.resolve({ ok: true }); },
+    t: (key) => key,
+  });
+  expect(await actions.composerSend("1")).not.toBe(true);
+  expect(actions.waitingAnswer).toBeNull();
+  expect(answers).toEqual([]);
+  expect(picks).toEqual([]);
+  expect(messages).toEqual([]);
+});
 
 for (const autoSendQueued of [false, true]) {
   it.each([
@@ -121,10 +143,11 @@ it.each([
 
 it.each([
   ["unconfirmed", { ok: true, unconfirmed: true } as const],
-  ["confirmed", { ok: true } as const],
+  ["confirmed", { ok: true, typedNow: true } as const],
+  ["replayed", { ok: true } as const],
 ])("Send now of a held copy the bridge answered %s removes its recovery row only on a receipt", async (kind, answer) => {
   const saved = savedStorage();
-  const pane = `legacy-held-${kind}`, owner = paneStorageId("local", pane), shown: string[] = [];
+  const pane = `legacy-held-${kind}`, owner = paneStorageId("local", pane), key = waitingKey("local", pane), shown: string[] = [];
   const message = { id: `held-${kind}`, request_id: 1, text: "held follow-up", state: "held" as const, created_at: "2026-10-28T00:00:00Z" };
   try {
     // a copy kept since a connection that held it: this one sends it again by its id
@@ -135,11 +158,17 @@ it.each([
       expect(pendingMessages.read(owner)).toMatchObject([{ id: message.id, text: "held follow-up", state: "uncertain", error: { code: "submit_unconfirmed" } }]);
       expect(new PendingMessageStore(() => saved.storage).read(owner)).toMatchObject([{ id: message.id, state: "uncertain" }]);
       expect(shown).toEqual([]);
+      expect(currentWaitingSends(key)).toEqual([]);
     } else {
       expect(pendingMessages.read(owner)).toEqual([]);
       expect(shown).toEqual(["held follow-up"]);
+      // the row went: the chat shows the message as waiting until its turn is read; a replay of a
+      // send another connection made typed nothing now, and its turn may be read already
+      if (kind === "confirmed") expect(currentWaitingSends(key)).toMatchObject([{ text: "held follow-up" }]);
+      else expect(currentWaitingSends(key)).toEqual([]);
     }
   } finally {
+    forgetWaitingSends(key);
     pendingMessages.removeCopy(owner, message.id);
     saved.restore();
   }
@@ -171,6 +200,40 @@ it("records a confirmed send for its original pane after navigation without foll
     expect(await result).toBe(true);
     expect(currentWaitingSends(key)).toMatchObject([{ text: "from original pane" }]);
     expect(follow).toBe(0);
+  } finally { forgetWaitingSends(key); }
+});
+
+// the bridge types a queued follow-up at once when the turn ended before it arrived: its receipt
+// names no pending row, and the box lets the message go as for a send at once
+it("a queued follow-up the bridge typed at once waits in the chat and follows it, as a send at once", async () => {
+  const pane = "queued-typed-at-once", key = waitingKey("local", pane), shown: string[] = [];
+  let follows = 0;
+  const actions = sends(pane, { ok: true, typedNow: true }, shown, {
+    agentStatus: "working", inputAtRest: () => false, settings: { autoSendQueued: true },
+    setChatLocalSend: () => { follows++; },
+    submitComposerMessage: (_text, delivery) => { expect(delivery).toBe("queue"); return Promise.resolve({ ok: true, typedNow: true }); },
+  });
+  try {
+    expect(await actions.composerSend("then list the tests")).toBe(true);
+    expect(currentWaitingSends(key)).toMatchObject([{ text: "then list the tests" }]);
+    expect(follows).toBe(1);
+    expect(shown).toEqual(["then list the tests"]);
+  } finally { forgetWaitingSends(key); }
+});
+
+// an ok with no row also answers a replayed id, or a row sent or discarded since: nothing was typed now
+it("a queued follow-up answered ok with no row and no typed-now mark is no waiting message", async () => {
+  const pane = "queued-replayed", key = waitingKey("local", pane), shown: string[] = [];
+  let follows = 0;
+  const actions = sends(pane, { ok: true }, shown, {
+    agentStatus: "working", inputAtRest: () => false, settings: { autoSendQueued: true },
+    setChatLocalSend: () => { follows++; },
+  });
+  try {
+    expect(await actions.composerSend("discarded follow-up")).toBe(true);
+    expect(currentWaitingSends(key)).toEqual([]);
+    expect(follows).toBe(0);
+    expect(shown).toEqual([]);
   } finally { forgetWaitingSends(key); }
 });
 
@@ -217,4 +280,141 @@ it("Send it sends the named draft over itself, only at once and never as an answ
   expect(await sends("send-it", { ok: true }, shown, { t, agentStatus: "working", inputAtRest: () => false, submitComposerMessage })
     .composerSend("my new message", "fix the tests")).toBe(true);
   expect(calls).toEqual([["fix the tests", "immediate", "fix the tests"], ["my new message", "hold", undefined]]);
+});
+
+// Alt+Enter: held in the queued list for its row's Send now, whatever automatic sending says and also at rest;
+// the socket refuses it on a PC that cannot hold one, never queuing it to go on its own
+it.each([
+  ["working, automatic sending on", { agentStatus: "working", inputAtRest: (): boolean => false, settings: { autoSendQueued: true } }, "queue"],
+  ["working, automatic sending off", { agentStatus: "working", inputAtRest: (): boolean => false, settings: { autoSendQueued: false } }, "hold"],
+  ["idle", { agentStatus: "idle", settings: { autoSendQueued: true } }, "immediate"],
+  ["working with Claude's box at rest", { agentStatus: "working", inputAtRest: (): boolean => true, settings: { autoSendQueued: true } }, "immediate"],
+] as const)("a hold while %s goes as held, never queued or sent at once", async (_name, extra, plain) => {
+  const calls: unknown[][] = [];
+  const submitComposerMessage = ((...args: unknown[]) => { calls.push(args); return Promise.resolve({ ok: true } as const); }) as ComposerSendsDeps["submitComposerMessage"];
+  const deps: Partial<ComposerSendsDeps> = { ...extra, submitComposerMessage };
+  expect(await sends("hold-pane", { ok: true }, [], deps).composerSend("for later", undefined, false, false, false, true)).toBe(true);
+  // control: Enter keeps its own delivery
+  expect(await sends("hold-pane", { ok: true }, [], deps).composerSend("for later")).toBe(true);
+  expect(calls.map((call) => [call[1], call[2], call[7]])).toEqual([["hold", undefined, true], [plain, undefined, false]]);
+});
+
+it("a hold is never an answer to an open menu, nor stopped by a screen a peek left open, since nothing is typed", async () => {
+  const calls: unknown[][] = [], answers: unknown[] = [];
+  const prompt: InteractivePrompt = {
+    id: "menu", agent: "claude", kind: "question", title: "Question", question: "?", body: null,
+    options: [{ label: "Yes", description: null }], multi_select: false, custom_option_index: null,
+  };
+  const submitComposerMessage = ((...args: unknown[]) => { calls.push(args); return Promise.resolve({ ok: true } as const); }) as ComposerSendsDeps["submitComposerMessage"];
+  const open = { pane: "hold-open", agent: "claude", command: "/usage", named: true, history: undefined };
+  expect(await sends("hold-open", { ok: true }, [], { answering: prompt, answerPanePrompt: async (answer) => { answers.push(answer); }, submitComposerMessage, t: (text) => text })
+    .composerSend("1", undefined, false, false, false, true)).toBe(true);
+  expect(await sends("hold-open", { ok: true }, [], { stillOpenRef: { current: open }, stillOpenNote: () => "still open", submitComposerMessage })
+    .composerSend("after the peek", undefined, false, false, false, true)).toBe(true);
+  expect(answers).toEqual([]);
+  expect(calls.map((call) => [call[0], call[1], call[7]])).toEqual([["1", "hold", true], ["after the peek", "hold", true]]);
+});
+
+it("a hold a PC too old to hold refuses keeps the draft with the reason", async () => {
+  const result = await sends("hold-old", { ok: false, code: "pending_hold_unsupported", message: "Update this PC to hold messages. Nothing was sent." }, [], { agentStatus: "working", settings: { autoSendQueued: true } })
+    .composerSend("for later", undefined, false, false, false, true);
+  expect(result).toBe("Update this PC to hold messages. Your draft stayed here.");
+});
+
+// #2596: Ctrl+Enter queues the message as Enter does, then sends that same row now, as its Send now
+it.each([[true, ["steer"]], [false, []]] as const)("a queued send with now=%p steers its own row", async (now, expected) => {
+  const saved = savedStorage();
+  const pane = `send-now-${now}`, owner = paneStorageId("local", pane), actions: string[] = [];
+  const pending = { id: `row-${now}`, request_id: 1, text: "stop and run the tests", state: "held" as const, created_at: "2026-11-05T00:00:00Z" };
+  const socket = {
+    connected: true,
+    on: () => () => {},
+    pendingAction: (paneId: string, id: string, action: string) => {
+      if (paneId === pane && id === pending.id) actions.push(action);
+      return Promise.resolve({ ok: true });
+    },
+  } as unknown as HerdrSocket;
+  const { promise: steered, resolve: settled } = Promise.withResolvers<void>();
+  try {
+    const result = await sends(pane, { ok: true }, [], {
+      agentStatus: "working", inputAtRest: () => false, socketRef: { current: socket },
+      // as useTerminalSends does before it answers: the receipt's row is in the list first
+      submitComposerMessage: () => { pendingMessages.accept(owner, pending, "scope"); return Promise.resolve({ ok: true, pending }); },
+      submitRetention: { retain: () => () => { settled(); } } as unknown as ComposerSendsDeps["submitRetention"],
+    }).composerSend(pending.text, undefined, false, false, now);
+    expect(result).toBe(true);
+    if (now) await steered;
+    expect(actions).toEqual([...expected]);
+  } finally {
+    pendingMessages.removeCopy(owner, pending.id);
+    saved.restore();
+  }
+});
+
+// Alt+Enter's row stays held as its receipt left it: nothing steers it, with automatic sending on; only its Send now does
+it("a hold leaves its held row waiting for Send now, then Send now sends it", async () => {
+  const saved = savedStorage();
+  const pane = "hold-row", owner = paneStorageId("local", pane), actions: string[] = [], deliveries: unknown[] = [];
+  const pending = { id: "held-row", request_id: 1, text: "after this turn", state: "held" as const, created_at: "2026-11-09T00:00:00Z" };
+  const socket = {
+    connected: true,
+    on: () => () => {},
+    pendingAction: (_paneId: string, id: string, action: string) => { actions.push(`${action}:${id}`); return Promise.resolve({ ok: true }); },
+  } as unknown as HerdrSocket;
+  try {
+    const actionsHook = sends(pane, { ok: true }, [], {
+      agentStatus: "working", inputAtRest: () => false, settings: { autoSendQueued: true }, socketRef: { current: socket },
+      submitComposerMessage: (_text, delivery) => { deliveries.push(delivery); pendingMessages.accept(owner, pending, "scope"); return Promise.resolve({ ok: true, pending }); },
+    });
+    expect(await actionsHook.composerSend(pending.text, undefined, false, false, false, true)).toBe(true);
+    expect(deliveries).toEqual(["hold"]);
+    expect(actions).toEqual([]);
+    expect(pendingMessages.read(owner)).toMatchObject([{ id: pending.id, state: "held", serverOwned: true }]);
+    await actionsHook.actOnPending(pending.id, "steer");
+    expect(actions).toEqual(["steer:held-row"]);
+  } finally {
+    pendingMessages.removeCopy(owner, pending.id);
+    saved.restore();
+  }
+});
+
+// #511: Send now of a saved copy of a message for an agent alone sends it again as one
+it("sends a held copy of an agent-only message again as agent-only", async () => {
+  const saved = savedStorage();
+  const pane = "held-agent-only", owner = paneStorageId("local", pane), calls: unknown[][] = [];
+  const message = { id: "held-only", request_id: 1, text: "> q\nc", state: "held" as const, created_at: "2026-10-28T00:00:00Z", agent_only: true as const };
+  const submitComposerMessage = ((...args: unknown[]) => { calls.push(args); return Promise.resolve({ ok: true } as const); }) as ComposerSendsDeps["submitComposerMessage"];
+  try {
+    new PendingMessageStore(() => saved.storage).accept(owner, message, "earlier");
+    await sends(pane, { ok: true }, [], { pendingScopeRef: { current: "now" }, submitComposerMessage }).actOnPending(message.id, "steer");
+    expect(calls.map((call) => call[6])).toEqual([true]);
+  } finally {
+    pendingMessages.removeCopy(owner, message.id);
+    saved.restore();
+  }
+});
+
+// #511: Edit puts a held message for an agent alone back in the box as one
+it("puts an edited agent-only message back in the box agent-only", async () => {
+  const saved = savedStorage();
+  const pane = "edit-agent-only", owner = paneStorageId("local", pane), key = `ovis:composer-draft:${owner}`;
+  const listeners = new Set<(frame: unknown) => void>();
+  const socket = {
+    connected: true,
+    on: (listener: (frame: unknown) => void) => { listeners.add(listener); return () => { listeners.delete(listener); }; },
+    pendingAction: () => {
+      for (const listener of listeners) listener({ type: "pending-messages", pane_id: pane, messages: [], removed: [{ id: "srv-only", outcome: "discarded" }] });
+      return Promise.resolve({ ok: true });
+    },
+  } as unknown as HerdrSocket;
+  pendingMessages.accept(owner, { id: "srv-only", request_id: 1, text: "> q\nc", state: "held", created_at: "2026-10-28T00:00:00Z", agent_only: true }, "scope");
+  try {
+    await sends(pane, { ok: true }, [], { socketRef: { current: socket }, pendingScopeRef: { current: "scope" } }).actOnPending("srv-only", "edit");
+    expect(composerDrafts.read(key).text).toBe("> q\nc");
+    expect(composerDrafts.isAgentOnly(key)).toBe(true);
+  } finally {
+    composerDrafts.set(key, "");
+    pendingMessages.removeCopy(owner, "srv-only");
+    saved.restore();
+  }
 });

@@ -10,10 +10,10 @@ type ConversationProof = { source: ConversationResponse["source"] | undefined; h
 
 function finalAnswer(conversation: ConversationProof): ConversationTurn | undefined {
   let index = conversation.turns.length - 1;
-  // These Claude notices do not start another model turn. Runtime wakes and real prompts do.
+  // These Claude notices, and an OmO goal's wait, do not start another model turn. Runtime wakes and real prompts do.
   while (index >= 0) {
     const turn = conversation.turns[index];
-    if (turn?.role !== "user" || turn.parts.length === 0 || !turn.parts.every((part) =>
+    if (turn?.role !== "user" || turn.parts.length === 0 || !turn.parts.every((part) => part.kind === "goal_wait" ||
       part.kind === "notice" && (part.source === "informational" || part.source === "local-command"))) break;
     index--;
   }
@@ -102,9 +102,9 @@ export class ConversationFinishEvidence {
 export const conversationFinishEvidence = new ConversationFinishEvidence();
 
 /** Retained phone siblings keep their suggestions, but invisible content covers no pane. */
-export function paneCovered(): boolean {
-  return [...document.querySelectorAll(PANE_COVER_SELECTOR)].some((node) =>
-    !node.closest('[hidden],[inert],[aria-hidden="true"],.is-hidden')
+export function paneCovered(exclude?: string, selector = PANE_COVER_SELECTOR): boolean {
+  return [...document.querySelectorAll(selector)].some((node) =>
+    (!exclude || !node.matches(exclude)) && !node.closest('[hidden],[inert],[aria-hidden="true"],.is-hidden')
       && node.getClientRects().length > 0 && getComputedStyle(node).visibility === "visible");
 }
 

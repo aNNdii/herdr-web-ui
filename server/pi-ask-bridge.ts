@@ -14,10 +14,9 @@
  * steps' answers here until the last one is given, as OpenCode's form does (prompt.ts).
  */
 import { existsSync, lstatSync, realpathSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import {
   PI_ASK_BRIDGE_DIRECTORY,
-  type PiAskBridgeState,
   type PiAskFlow,
   type PiAskQuestion,
   type PiAskRemoteAnswer,
@@ -28,9 +27,8 @@ import type { PromptAnswer } from "../shared/protocol.ts";
 import { finishPrompt, own, type ParsedPrompt, type PromptDraft } from "./dialogs/shared.ts";
 import { paneProcessInfo } from "./herdr/client.ts";
 import { badRequest, jsonResponse } from "./http.ts";
-import { piPaneAgentDirs, piTranscriptPath } from "./pi.ts";
+import { bridgeState, ownSocket, piPaneAgentDirs, piTranscriptPath } from "./pi.ts";
 
-const STATE_READ_MS = 1_000;
 /** The extension gives pi-ask 3 s to confirm; this covers that and the socket round trip. */
 const SUBMIT_MS = 4_000;
 const MAX_QUESTIONS = 20;
@@ -86,34 +84,8 @@ function sameFlow(live: PiAskFlow | null, read: PiAskFlow): boolean {
     && (live.title ?? null) === (read.title ?? null) && JSON.stringify(live.questions) === JSON.stringify(read.questions);
 }
 
-/**
- * Only a socket this user owns, in a directory only this user can enter, speaks for a pi: a
- * PI_CODING_AGENT_DIR another user can write to must not let them show a card or read its answer.
- */
-function ownSocket(socket: string): boolean {
-  const uid = process.getuid?.();
-  if (uid === undefined) return false;
-  try {
-    const directory = lstatSync(dirname(socket));
-    const file = lstatSync(socket);
-    return directory.isDirectory() && directory.uid === uid && (directory.mode & 0o077) === 0 && file.isSocket() && file.uid === uid;
-  } catch { return false; }
-}
-
 function sameFile(left: string, right: string): boolean {
   try { return realpathSync(left) === realpathSync(right); } catch { return false; }
-}
-
-async function bridgeState(socket: string, signal?: AbortSignal): Promise<PiAskBridgeState | null> {
-  try {
-    const timeout = AbortSignal.timeout(STATE_READ_MS);
-    const response = await fetch("http://localhost/v1/state", { unix: socket, signal: signal ? AbortSignal.any([signal, timeout]) : timeout });
-    if (!response.ok) return null;
-    const state = await response.json() as PiAskBridgeState;
-    return typeof state === "object" && state !== null && state.version === 1 && Array.isArray(state.flows) ? state : null;
-  } catch {
-    return null; // no extension listening (a socket a crashed pi left), or too slow: the terminal
-  }
 }
 
 /** pi-ask's reply, or null when it is not known whether pi took the answer. */
@@ -259,10 +231,11 @@ export function piAskUserPrompt(paneId: string, transcript: string, bound: Bound
       custom_option_index: custom,
       steps: flow.questions.length > 1
         ? flow.questions.map((step, index) => ({ label: step.label || own("Question {n}", { n: index + 1 }), answered: Object.hasOwn(draft.answers, step.id), current: index === stepIndex,
-          // every question answerPiAskUser lets the card reach: any earlier one, and an answered later one
-          ...(index !== stepIndex && (index < stepIndex || Object.hasOwn(draft.answers, step.id)) ? { can_navigate: true } : {}) }))
+          // Native moveTab cycles every question, including unanswered later ones.
+          ...(index !== stepIndex ? { can_navigate: true } : {}) }))
         : undefined,
       can_step_back: stepIndex > 0,
+      can_step_next: stepIndex < flow.questions.length - 1,
       default_option_index: !multi && indices.length === 1 ? indices[0]! : null,
       default_option_indices: multi && indices.length ? indices : undefined,
       default_custom_text: saved?.customText,
@@ -312,14 +285,13 @@ export async function answerPiAskUser(paneId: string, parsed: ParsedPrompt, body
   if (!draft || draft.flowId !== form.flow.flowId || draft.revision !== form.revision) return done(changed());
   const question = form.flow.questions[form.stepIndex]!;
 
-  if (body.step_back === true || body.step_index !== undefined) {
-    if (body.option_index !== undefined || body.option_indices !== undefined || body.custom_text !== undefined || (body.step_back === true && body.step_index !== undefined)) {
+  if (body.step_back === true || body.step_next === true || body.step_index !== undefined) {
+    if (body.option_index !== undefined || body.option_indices !== undefined || body.custom_text !== undefined
+      || [body.step_back === true, body.step_next === true, body.step_index !== undefined].filter(Boolean).length !== 1) {
       return done(invalid("Exactly one supported navigation action is required."));
     }
-    const target = body.step_index ?? form.stepIndex - 1;
-    // back to any earlier question, or forward to one already answered (the card's step buttons)
-    const reachable = Number.isInteger(target) && target >= 0 && target < form.flow.questions.length && target !== form.stepIndex
-      && (target < form.stepIndex || Object.hasOwn(draft.answers, form.flow.questions[target]!.id));
+    const target = body.step_index ?? form.stepIndex + (body.step_next === true ? 1 : -1);
+    const reachable = Number.isInteger(target) && target >= 0 && target < form.flow.questions.length && target !== form.stepIndex;
     if (!reachable) return done(invalid("Invalid question to navigate to."));
     if (body.draft !== undefined) {
       if (typeof body.draft !== "object" || body.draft === null || !Array.isArray(body.draft.option_indices) || typeof body.draft.custom_text !== "string") return done(invalid("Invalid draft."));

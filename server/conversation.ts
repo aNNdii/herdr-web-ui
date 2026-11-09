@@ -34,40 +34,51 @@
  * integration and lives in paneTranscript.
  */
 
-import { createHash, randomUUID } from "node:crypto";
-import { closeSync, fstatSync, openSync, readFileSync, readSync, realpathSync, statSync } from "node:fs";
+import { createHash, randomUUID, type Hash } from "node:crypto";
+import { closeSync, constants, fstatSync, lstatSync, openSync, readFileSync, readSync, realpathSync, statSync, type Stats } from "node:fs";
+import { open as openHandle, type FileHandle } from "node:fs/promises";
+import { readStatuslineContext } from "./statusline.ts";
+import { transcriptReader, type TranscriptFile } from "./transcript-reader.ts";
 import nodePath, { basename, dirname, relative, sep, type PlatformPath } from "node:path";
+import { isDshProcess, resolveDshTranscript, dshConversation, dshToolOutput, type DshTranscript } from "./dsh.ts";
+import { isKiroChatProcess, resolveKiroTranscript, kiroConversation, kiroToolOutput, type KiroTranscript } from "./kiro.ts";
 import { authorizedTranscript } from "./transcript-store.ts";
 
 import type { ConversationMetadata, ConversationTurn, HerdrPane, SessionSnapshot } from "../shared/protocol.ts";
-import { herdrRpc, paneProcessInfo, paneRead, paneScrollInfo, sessionSnapshot, type ProcessInfo } from "./herdr/client.ts";
+import { herdrRpc, herdrSocketPath, paneProcessInfo, paneRead, paneScrollInfo, sessionSnapshot, type ProcessInfo } from "./herdr/client.ts";
 import { resolveAgent } from "./pane-context.ts";
-import { codexFreshSession, codexHistorySegments, createCodexTranscriptParser, codexOutputText, codexTranscriptPath, defaultCodexHome, forgetAllCodexState, forgetCodexStateFor, paneCodexHome, parseCodexTranscript, readRange } from "./codex.ts";
-import { CODEX_IMAGE_REF, CODEX_TOOL_IMAGE_REF, codexOutputPicture, codexTranscriptImage, DataUrlPictureScan, finish, finishAsync, forgetOmpBlobTypes, InlinePictureScan, MAX_IMAGE_BYTES, ompBlobAnchor, ompBlobDigest, ompBlobPictureSteps, type Steps } from "./codex-images.ts";
+import { codexFreshSession, codexHistorySegments, createCodexTranscriptParser, type HistorySegment, codexOutputText, codexTranscriptPath, defaultCodexHome, forgetAllCodexState, forgetCodexStateFor, paneCodexHomePlaced, parseCodexTranscript, readRange } from "./codex.ts";
+import { awaited, CODEX_IMAGE_REF, CODEX_TOOL_IMAGE_REF, codexOutputPicture, codexTranscriptImage, DataUrlPictureScan, finish, finishAsync, forgetOmpBlobTypes, InlinePictureScan, MAX_IMAGE_BYTES, ompBlobAnchor, ompBlobDigest, ompBlobPictureSteps, type Steps } from "./codex-images.ts";
 import { type Held, heldOpenPlatform, openHeldDirectory } from "./held-open.ts";
-import { AmbiguousClaudeStore, claudeAttachSession, claudeProcessSession, claudeTranscriptFile, defaultClaudeConfigDir, forgetClaudeSessionFile, forgetClaudeSessions, isClaudeProcess, processClaudeConfigDir } from "./claude-store.ts";
-import { forgetGjcPane, forgetGjcState, gjcPidUnderShell, gjcTranscriptForPane, isGjcProcess, storeRelative } from "./gjc-runtime.ts";
+import { AmbiguousClaudeStore, claudeAttachSession, claudeProcessSession, claudeTranscriptFile, darwinProcess, defaultClaudeConfigDir, forgetClaudeSessionFile, forgetClaudeSessions, isClaudeProcess, jobClaude, processClaudeConfigDir, windowsShellClaude } from "./claude-store.ts";
+import { coreSocket } from "./herdr-core/discovery.ts";
+import { coreSocketPath, servingCore } from "./herdr-core/runtime.ts";
+import { forgetGjcPane, forgetGjcState, gjcPidUnderShell, gjcTranscriptFileForPane, isGjcProcess, storeRelative } from "./gjc-runtime.ts";
 import { isOmoProcess, omoProcessIdentity, omoSessionForPane, processEnviron } from "./omo.ts";
 import { processAlive, processStartedAtAsync } from "./process-start.ts";
-import { ompBlobStore, ompPaneRoute, ompRouteOwns, ompRouteStore, ompRouteTranscript } from "./omp.ts";
+import { ompBlobStore, ompHeldOpen, ompPaneRoute, ompRouteOwns, ompRouteStore, ompRouteTranscript } from "./omp.ts";
 import { forgetOpencodeRead, forgetOpencodeState, OPENCODE_IMAGE_REF, opencodeConversation, opencodeDatabasePath, opencodeImage, opencodeReadKey, opencodeSessionId, opencodeToolOutput } from "./opencode.ts";
 import { piTranscriptPath, unwrittenSession } from "./pi.ts";
 import { cmdTranscriptPath } from "./cmd.ts";
 import { defaultDevinDbPath, DevinHistoryUnavailable, devinConversation, forgetDevinState } from "./devin.ts";
-import { forgetGrokState, grokProjection, grokToolOutput, parseGrokTranscript, GrokUnavailable } from "./grok.ts";
+import { forgetGrokState, GROK_IMAGE_REF, grokImage, grokProjection, grokToolOutput, parseGrokTranscript, GrokUnavailable } from "./grok.ts";
 import { resolveGrokStore } from "./grok-store.ts";
-import { AgyUnavailable, agyCatalog, agyToolOutput, forgetAgyState, parseAgyTranscript, withAgyHistory, type AgyProjection } from "./agy.ts";
+import { AgyUnavailable, agyCatalogOffThread, agyToolOutput, forgetAgyState, parseAgyTranscript, withAgyHistory, type AgyProjection } from "./agy.ts";
 import { resolveAgyStore, sameAgyStore, type AgyStore } from "./agy-store.ts";
+import { FileBusyError } from "./file-pool.ts";
 import { museSession, museToolOutput, MuseUnavailable, parseMuseTranscript } from "./muse.ts";
 import { resolveMuseSession } from "./muse-store.ts";
 import { LettaUnavailable, lettaToolOutput, parseLettaTranscript } from "./letta.ts";
-import { resolveLettaTranscript } from "./letta-store.ts";
+import { programName } from "./agent-identity.ts";
+import { lettaLocalSettings, resolveLettaTranscript } from "./letta-store.ts";
+import { followKimiUndo, kimiToolOutput, kimiTranscriptPathForPane, parseKimiTranscript, type KimiUndo } from "./kimi.ts";
 import { withinRetentionBudget } from "./retention-budget.ts";
 import { forgetAllPiIndexes, forgetPiIndex, piAbandonedTurns, piBranchRecords, piBranchSegments } from "./pi-tree.ts";
-import { copilotOffsetOutput, copilotOutput, copilotRootRecord, parseCopilotTranscript } from "./copilot.ts";
-import { copilotExplicitResume, copilotHandoffSession, copilotProcessSession, copilotTranscriptFile, copilotUnwrittenSession, openCopilotFile } from "./copilot-store.ts";
+import { COPILOT_IMAGE_REF, copilotImage, copilotOffsetOutput, copilotOutput, copilotRootRecord, parseCopilotTranscript } from "./copilot.ts";
+import { copilotApiTranscript, copilotExplicitResume, copilotHandoffSession, copilotProcessSession, copilotTranscriptFile, copilotUnwrittenSession, openCopilotFile, readCopilotProcessSession } from "./copilot-store.ts";
+import { forgetCopilotForeground, readCopilotForeground } from "./copilot-foreground.ts";
 import { claudeSetting, parseConversationMetadata } from "./conversation-metadata.ts";
-import { answerVersion, ConversationNotStarted, ConversationReadPending, ConversationUnavailable, type ConversationPage, HistoryChanged, type RecognizedConversation, type StreamSource, TRANSCRIPT_WINDOW_BYTES } from "./conversation-shared.ts";
+import { answerVersion, bindFile, boundSteps, checkBoundFile, ConversationNotStarted, ConversationReadPending, ConversationUnavailable, copilotRecoverable, type FileIdentity, openBound, readBound, type ConversationPage, HistoryChanged, type RecognizedConversation, type StreamSource, TRANSCRIPT_WINDOW_BYTES } from "./conversation-shared.ts";
 import { forgetHermesTranscriptState, hermesConversationPage, hermesToolOutput, hermesTranscriptForPane } from "./hermes.ts";
 
 import { createOmpTranscriptParser, isContextClear, MAX_TURNS, omoTaskResults, parseOmpTranscript, PI_IMAGE_REF, PI_PROMPT_IMAGE_REF, piImageBlock, piMessage, piNotice, piPromptImages, piResults, type TranscriptParser } from "./transcript-records.ts";
@@ -79,8 +90,10 @@ import { launchedAgents } from "./launched-agents.ts";
 import { readsStartScreen, startScreenMetadata } from "./start-screen.ts";
 import { commandTranscriptRecords, PI_EVIDENCE_TYPES, type CommandTranscriptRecord } from "./outcome.ts";
 import { type ClaudeBranch, claudeForks, followClaudeBranch, type PromptChain, turnStarts } from "./transcript-turns.ts";
-import { devinSessionForPane, isDevinProcess } from "./devin-session.ts";
+import { copilotSetAside } from "./copilot.ts";
+import { DevinLockMissing, devinLockProof, devinSessionForPane, isDevinProcess, type DevinLockProof } from "./devin-session.ts";
 import { userHome } from "./user-home.ts";
+import { kiroCodexProcess } from "./kiro-terminal.ts";
 
 export { isOmoProcess } from "./omo.ts";
 export { devinSessionForPane, isDevinProcess } from "./devin-session.ts";
@@ -100,6 +113,12 @@ export const DEFAULT_PAGE_PROMPTS = MAX_PAGE_PROMPTS;
 
 /** A single turn longer than a window still gets a page of its own, up to this. */
 const MAX_PAGE_BYTES = 16 * 1024 * 1024;
+/**
+ * How far back a Copilot page reaches for the start of its turn: Copilot interns every picture of a
+ * turn in it as base64 (`session.binary_asset`), so one turn with a few pictures passes a window
+ * (#2478). Its pages widen to the turn's start, the newest one too, up to this.
+ */
+const COPILOT_PAGE_BYTES = 4 * MAX_PAGE_BYTES;
 
 /** The prompts a page keeps for this read: the reader's choice, inside the server's own bounds. */
 function pagePrompts(page: ConversationPage): number {
@@ -122,13 +141,13 @@ const cache = new Map<string, { source: RecognizedConversation["source"]; signat
 
 /** A restart may parse the same files differently: its answers never match an earlier ETag. */
 const PROCESS_VERSION = randomUUID();
-const copilotBindings = new Map<string, { identity: string; prefix: string }>();
+const copilotBindings = new Map<string, { identity: string; prefix: string; session: string }>();
 
-function copilotPrefix(paneId: string, identity: string): string {
+function copilotPrefix(paneId: string, identity: string, path: string): string {
   const previous = copilotBindings.get(paneId);
   if (previous?.identity === identity) return previous.prefix;
   const prefix = `cp${createHash("sha256").update(`${PROCESS_VERSION}\0${paneId}\0${identity}\0${randomUUID()}`).digest("hex").slice(0, 16)}.`;
-  remember(copilotBindings, paneId, { identity, prefix }, PANE_READS_MAX);
+  remember(copilotBindings, paneId, { identity, prefix, session: nodePath.basename(nodePath.dirname(path)) }, PANE_READS_MAX);
   return prefix;
 }
 
@@ -139,7 +158,10 @@ function copilotHistoryIdentity(path: string): string {
       const stat = fstatSync(fd);
       return `${stat.dev}:${stat.ino}${transcriptGeneration(path, stat)}`;
     } finally { closeSync(fd); }
-  } catch { throw new ConversationUnavailable("transcript_missing"); }
+  } catch (error) {
+    if (error instanceof ConversationReadPending) throw error;
+    throw new ConversationUnavailable("transcript_missing");
+  }
 }
 
 function copilotPage(page: ConversationPage, prefix: string): ConversationPage {
@@ -179,18 +201,220 @@ interface TranscriptStream {
   floor: number;
   promptStarts?: number[];
   fd?: number;
+  /** the shared reader's lease on the one file the stream is (a Claude image read): its bytes come by async positional reads (streamBytes) */
+  file?: TranscriptFile;
   /** byte ranges a Claude rewind left off the session's branch (claudeBranch): read as blank lines */
   hidden?: [number, number][];
+  /** A cooperative image scan publishes only while its file snapshot is current. */
+  current?: () => Steps<boolean>;
+  /** the history boundary a private (`apart`) scan of this stream published to clearScans, so a rejected image read can take it back */
+  published?: { scan: object; through: number };
+  /** what the history boundary scan read, from `from` to the stream's end, digested a window at a time, when an image read keeps it */
+  seen?: { from: number; digest: bigint };
+  /** where the boundary scan found the Claude records that hold pictures (PictureIndex) */
+  pictures?: PictureIndex;
+  /**
+   * a Claude transcript's version as this read found it (identity, size and times), and when the read
+   * began: performance.now(), and Date.now() to set beside the file's times (vouchedPictureSteps)
+   */
+  version?: { key: string; mtimeMs: number; ctimeMs: number; began: number; wall: number };
 }
 
 // In-place rewrites keep the inode. Change the cursor generation when observed,
 // invalidating settled turns and incremental parsers as well as the response cache.
-const transcriptRevisions = new Map<string, { identity: string; size: number; changed: string; generation: string; window?: { start: number; end: number; digests: BigUint64Array } }>();
-function transcriptGeneration(path: string, stat: { dev: number; ino: number; size: number; mtimeMs: number; ctimeMs: number }, checkWindow = false): string {
+// `hash` digests the first `hashed` bytes, fed only what each growth appends. `prefix` is the digest of
+// the first PREFIX_BYTES (or all) of the `at` bytes the last reading call saw. `forced`: the generation
+// was given to a growth no digest checked; until a read checks the digests kept from before it, a growth
+// no digest checks keeps it.
+interface TranscriptRevision { identity: string; size: number; changed: string; generation: string; hash?: Hash; hashed: number; prefix?: { digest: string; at: number }; window?: { start: number; end: number; digests: BigUint64Array }; forced?: true }
+const transcriptRevisions = new Map<string, TranscriptRevision>();
+const PREFIX_BYTES = 64 * 1024;
+type RevisionStat = { dev: number; ino: number; size: number; mtimeMs: number; ctimeMs: number };
+// `read` false (a leased image read, whose bytes come asynchronously) never reads the file here: the
+// digest stays as it was, for the next read to extend, and a touch it sees counts as a rewrite.
+function transcriptGeneration(path: string, stat: RevisionStat, checkWindow = false, read = true): string {
+  const reads = revisionReads;
+  const deferred = read && reads.mode === "deferred" ? reads : null;
+  let wanted = false as boolean;
+  const opened: RevisionOpen = deferred === null ? openRevisionNow : function* () { wanted = true; throw new Error("left to settleTranscriptRevision"); };
+  const { previous, next: found } = finish(transcriptRevisionSteps(path, stat, checkWindow, read && reads.mode !== "none", opened));
+  let next = found;
+  // a revision it could not check: the read stops here, before it parses anything, records nothing, and
+  // readSettled settles again off the loop
+  if (deferred !== null && wanted) {
+    deferred.unsettled = true;
+    throw new Error("transcript revision left to settleTranscriptRevision");
+  }
+  // A growth no digest checked (the last settle reads nothing) may be a rewrite that also grew. It is
+  // pending once, for the next poll to check; after that, or where no settle can read it (a link), it is
+  // another history, never the one before it.
+  // That history then stays while the writes go on (`forced`), and keeps the digests from before it, so
+  // the read that can check them finds the first bytes of a rewrite, and an append extends them.
+  if (read && reads.mode === "none" && next.forced !== true && previous?.identity === next.identity && next.generation === previous.generation && previous.size > 0 && next.size > (next.prefix?.at ?? previous.size)) {
+    if (reads.verifiable && !uncheckedGrowths.has(path)) {
+      remember(uncheckedGrowths, path, true, 64);
+      throw new RevisionUnchecked();
+    }
+    // a link's digests are never checked: its next growth is measured from here
+    next = reads.verifiable ? { ...next, generation: randomUUID(), forced: true } : { ...next, generation: randomUUID(), hash: undefined, hashed: 0, prefix: undefined };
+  }
+  if (read) uncheckedGrowths.delete(path);
+  remember(transcriptRevisions, path, next, 64);
+  return next.generation ? `-${next.generation}` : "";
+}
+
+/**
+ * How a synchronous page read's revision check reads the transcript: on the event loop (anywhere
+ * readSettled is not running one); "deferred", where any read it needs marks it `unsettled` instead, for
+ * readSettled to settle again off the loop; or "none", reading nothing (a touch then counts as a rewrite, and
+ * a growth is pending once where a later settle can check it, `verifiable`, and another history otherwise).
+ */
+let revisionReads: { mode: "inline" } | { mode: "deferred"; unsettled: boolean } | { mode: "none"; verifiable: boolean } = { mode: "inline" };
+
+/** Transcripts whose last read was pending on a growth no digest checked: their next one answers. */
+const uncheckedGrowths = new Map<string, true>();
+
+/** A read pending on a growth no digest checked: no other file is involved, so nothing is recovered for it. */
+class RevisionUnchecked extends ConversationReadPending {}
+
+/** What settleTranscriptRevision brings up to date, and whether its reader still wants it recorded (`live`). */
+interface RevisionTarget { path: string; checkWindow: boolean; live?: () => boolean }
+
+/**
+ * The file `path` names as its caller authorized it, taken in the same turn of the event loop, before
+ * anything awaits. The page readers follow a link, and so does this; `link` says the settle refuses it,
+ * as its open does wherever an open can (O_NOFOLLOW; not Windows).
+ */
+function authorizedFile(path: string): { dev: number; ino: number; link: boolean } | null {
+  try {
+    const own = lstatSync(path);
+    const stat = own.isSymbolicLink() ? statSync(path) : own;
+    return stat.isFile() ? { dev: stat.dev, ino: stat.ino, link: own.isSymbolicLink() && constants.O_NOFOLLOW !== undefined } : null;
+  } catch { return null; }
+}
+
+/** Whether `path` still names the file `authorized` (authorizedFile). */
+function stillAuthorized(path: string, authorized: ReturnType<typeof authorizedFile>): boolean {
+  if (authorized === null) return false;
+  try {
+    const now = statSync(path);
+    return now.dev === authorized.dev && now.ino === authorized.ino;
+  } catch { return false; }
+}
+
+/**
+ * Brings a transcript's revision up to date with reads through the thread pool, so the page read that
+ * follows finds its digests current and reads nothing for them on the event loop. Only `authorized` is
+ * read, through one handle: a folder on the way swapped since names another file, which is refused, and
+ * bytes whose size or mtime changed while they were read record nothing. A read that recorded the
+ * transcript meanwhile keeps its own result; a change after this is the page read's (readSettled).
+ */
+async function settleTranscriptRevision({ path, checkWindow, live }: RevisionTarget, authorized = authorizedFile(path)): Promise<void> {
+  // what this settle builds on: a read that recorded the transcript while its stat was awaited saw it
+  // later, and an older stat checked against that newer revision would take an append for a shrink
+  const start = transcriptRevisions.get(path);
+  if (authorized === null || authorized.link) return;
+  let handle: FileHandle;
+  try { handle = await openHandle(path, REVISION_FLAGS); } catch { return; }
+  try {
+    const stat = await handle.stat();
+    if (!stat.isFile() || stat.dev !== authorized.dev || stat.ino !== authorized.ino || transcriptRevisions.get(path) !== start) return;
+    const file: RevisionFile = {
+      stat: () => awaited(handle.stat()),
+      *read(into, length, position) { return (yield* awaited(handle.read(into, 0, length, position))).bytesRead; },
+      *close() { /* the handle is this settle's, closed below */ },
+    };
+    const { previous, next } = await finishAsync(transcriptRevisionSteps(path, stat, checkWindow, true, function* () { return file; }));
+    const after = await handle.stat();
+    if (after.size !== stat.size || after.mtimeMs !== stat.mtimeMs) return;
+    if (transcriptRevisions.get(path) === previous && (live?.() ?? true)) remember(transcriptRevisions, path, next, 64);
+  } catch { /* a stat that fails digests nothing */ } finally { await handle.close().catch(() => {}); }
+}
+
+/**
+ * The transcript a readSettled page read reads, opened once as authorized: readStream reads it through this
+ * handle. The other files a page holds (a Codex rollout before the live one) are opened bound (openBound).
+ */
+let pageFile: { path: string; fd: number } | null = null;
+// a link is followed, as the page readers do; O_NONBLOCK: a FIFO put there is not waited on
+const PAGE_FLAGS = constants.O_RDONLY | (constants.O_NONBLOCK ?? 0);
+
+/**
+ * How many times readSettled settles a transcript before its read takes what it finds without reading;
+ * a transcript reached through a link, which no settle opens, takes it at once.
+ */
+const REVISION_SETTLES = 3;
+
+/**
+ * `read`, a synchronous read of `target.path`, with the digests its revision check needs read through
+ * the thread pool first (settleTranscriptRevision), from the file authorized as this is called. A change
+ * the read meets after that is settled again, REVISION_SETTLES times at most, and the last read reads
+ * nothing for its revision. Null when, after a settle, the reader no longer wants it (`live`). The read
+ * answers only while the path names the authorized file before and after it. Any other file there (one
+ * renamed over it, even from its own folder, or a folder on the way swapped since) may be another
+ * session's, and is never read: that read is pending, for the next poll to authorize afresh. A path that
+ * named no file to authorize is transcript_missing.
+ */
+async function readSettled<T>(target: RevisionTarget, read: () => T): Promise<{ value: T } | null> {
+  const authorized = authorizedFile(target.path);
+  const refuse = () => authorized === null ? new ConversationUnavailable("transcript_missing") : new ConversationReadPending();
+  for (let settles = 1; ; settles++) {
+    await settleTranscriptRevision(target, authorized);
+    if (!(target.live?.() ?? true)) return null;
+    const reads = settles < REVISION_SETTLES && authorized?.link !== true ? { mode: "deferred" as const, unsettled: false } : { mode: "none" as const, verifiable: authorized?.link !== true };
+    revisionReads = reads;
+    try {
+      if (authorized === null || !stillAuthorized(target.path, authorized)) throw refuse();
+      // the page's bytes come through one handle, the authorized file's: an open of the path itself could
+      // meet a folder swapped in around that open alone, which the checks around the read never see
+      let fd: number;
+      try { fd = openSync(target.path, PAGE_FLAGS); } catch { throw refuse(); }
+      let value: T;
+      try {
+        const opened = fstatSync(fd);
+        if (opened.dev !== authorized.dev || opened.ino !== authorized.ino) throw refuse();
+        pageFile = { path: target.path, fd };
+        // any other open of it (a branch index, a projection) is held to the same file (openBound)
+        value = readBound([[target.path, authorized]], read);
+      } finally { pageFile = null; closeSync(fd); }
+      if (!stillAuthorized(target.path, authorized)) throw refuse();
+      if (reads.mode === "none" || !reads.unsettled) return { value };
+    } catch (error) {
+      // a read that met an unsettled revision answered from a stale one: its failure says nothing
+      if (reads.mode === "none" || !reads.unsettled) throw error;
+    } finally { revisionReads = { mode: "inline" }; }
+  }
+}
+
+function* transcriptRevisionSteps(path: string, stat: RevisionStat, checkWindow: boolean, read: boolean, opened: RevisionOpen): Steps<{ previous: TranscriptRevision | undefined; next: TranscriptRevision }> {
   const identity = `${stat.dev}:${stat.ino}`;
   const changed = `${stat.mtimeMs}:${stat.ctimeMs}`;
   const previous = transcriptRevisions.get(path);
-  let rewritten = previous !== undefined && previous.identity === identity && (stat.size < previous.size || (stat.size === previous.size && changed !== previous.changed));
+  const same = previous !== undefined && previous.identity === identity;
+  let rewritten = same && stat.size < previous.size;
+  let hash = same && !rewritten ? previous.hash : undefined;
+  let hashed = hash ? previous!.hashed : 0;
+  // Same size, new timestamps: a rewrite, or only a touch (Claude Code sets its open session's
+  // times about hourly, bytes untouched). The digest of the bytes digested before tells them apart;
+  // bytes that cannot be read count as a rewrite.
+  if (same && stat.size === previous.size && changed !== previous.changed) {
+    const now = read && hash ? (yield* hashRange(opened, path, stat, createHash("sha256"), 0, hashed)) : undefined;
+    if (!now || now.copy().digest("base64") !== hash!.copy().digest("base64")) rewritten = true;
+  }
+  // A growth of the same inode is taken for an append, and `hash` is only extended by it. Its first
+  // bytes must still be the ones read before (an earlier rewrite while growing would otherwise keep
+  // the generation, and a same-size restore later match the extended digest). ponytail: only the first
+  // 64 KiB, a growing read stays about as cheap as before; a rewrite past them while growing still
+  // passes. A leased read leaves `prefix` at the size it checked, for the next read to check.
+  let prefix = same && !rewritten ? previous.prefix : undefined;
+  let head: Hash | undefined;
+  if (read && prefix && stat.size > prefix.at) {
+    head = yield* hashRange(opened, path, stat, createHash("sha256"), 0, Math.min(PREFIX_BYTES, prefix.at));
+    if (!head || head.copy().digest("base64") !== prefix.digest) { rewritten = true; head = undefined; }
+  }
+  // a growth no digest of its first bytes vouches for (none was kept: a link, or a read that failed) may be a
+  // rewrite; an empty file had none to rewrite
+  if (read && same && !rewritten && prefix === undefined && previous.size > 0 && stat.size > previous.size) rewritten = true;
   // Muse: a rewrite that also grew keeps the inode and passes the checks above, so the window last
   // read must still hold the bytes it held. One read from its start checks it and digests the new
   // window, each chunk once. A growth past the whole window shares no bytes with it, so it counts as
@@ -203,37 +427,110 @@ function transcriptGeneration(path: string, stat: { dev: number; ino: number; si
     if (window !== undefined && window.end <= start) rewritten = true;
     const check = rewritten ? undefined : window;
     const from = check?.start ?? start;
-    const bytes = windowBytes(path, from, stat.size);
+    const bytes = yield* windowBytes(opened, path, stat, from);
     const digests = bytes && chunkDigests(bytes);
     if (check && (!digests || !sameOverlap(check, from, bytes!, digests))) rewritten = true;
     // an empty log keeps no window: it has no bytes to check
     const kept = digests?.slice((start - from) / WINDOW_CHUNK_BYTES);
     window = kept?.length ? { start, end: stat.size, digests: kept } : undefined;
   }
+  // A first read (or one after a rewrite) digests the whole file, a growth only what it appended.
+  // Only a log within one window keeps a digest, so no read goes past the transcript budget; a
+  // larger log's touch counts as a rewrite, as before.
+  if (rewritten || stat.size > TRANSCRIPT_WINDOW_BYTES) { hash = undefined; hashed = 0; }
+  if (read && stat.size <= TRANSCRIPT_WINDOW_BYTES && (hash === undefined || hashed < stat.size)) {
+    hash = yield* hashRange(opened, path, stat, hash?.copy() ?? createHash("sha256"), hash === undefined ? 0 : hashed, stat.size);
+    hashed = hash ? stat.size : 0;
+  }
+  if (rewritten) { prefix = undefined; head = undefined; }
+  if (read && prefix?.at !== stat.size) {
+    const checked = head ? Math.min(PREFIX_BYTES, prefix!.at) : 0;
+    const to = Math.min(PREFIX_BYTES, stat.size);
+    head = checked === to ? head : yield* hashRange(opened, path, stat, head ?? createHash("sha256"), checked, to);
+    prefix = head ? { digest: head.digest("base64"), at: stat.size } : undefined;
+  }
   const generation = rewritten ? randomUUID() : previous?.identity === identity ? previous.generation : "";
-  remember(transcriptRevisions, path, { identity, size: stat.size, changed, generation, window }, 64);
-  return generation ? `-${generation}` : "";
+  // only a read that checked nothing leaves a forced generation as it was
+  const forced = !read && same && !rewritten && previous.forced === true;
+  return { previous, next: forced ? { identity, size: stat.size, changed, generation, hash, hashed, prefix, window, forced } : { identity, size: stat.size, changed, generation, hash, hashed, prefix, window } };
 }
 
-/** Bytes `from` to `to` of a file, or null when they cannot all be read. */
-function windowBytes(path: string, from: number, to: number): Buffer | null {
+/** The revision check's file: read on the event loop (finish) or through the thread pool (finishAsync). */
+interface RevisionFile {
+  stat(): Steps<Stats>;
+  read(into: Buffer, length: number, position: number): Steps<number>;
+  close(): Steps<void>;
+}
+type RevisionOpen = (path: string) => Steps<RevisionFile>;
+// O_NOFOLLOW: a link put in the transcript's place is refused, as the other transcript readers do;
+// O_NONBLOCK: a FIFO put there is not waited on
+const REVISION_FLAGS = constants.O_RDONLY | (constants.O_NONBLOCK ?? 0) | (constants.O_NOFOLLOW ?? 0);
+function* openRevisionNow(path: string): Steps<RevisionFile> {
+  const fd = openSync(path, REVISION_FLAGS);
+  return {
+    *stat() { return fstatSync(fd); },
+    *read(into, length, position) { return readSync(fd, into, 0, length, position); },
+    *close() { closeSync(fd); },
+  };
+}
+
+/**
+ * `hash` fed bytes `from` to `to` of a file a chunk at a time, or undefined when they cannot all be read
+ * or the path no longer names the regular file `stat` saw, holding at least `to` bytes, before and after
+ * the read (an append meanwhile leaves them alone).
+ */
+function* hashRange(opened: RevisionOpen, path: string, stat: { dev: number; ino: number }, hash: Hash, from: number, to: number): Steps<Hash | undefined> {
+  const unchanged = (now: Stats): boolean => now.isFile() && now.dev === stat.dev && now.ino === stat.ino && now.size >= to;
   try {
-    const fd = openSync(path, "r");
+    const file = yield* opened(path);
     try {
-      const bytes = Buffer.allocUnsafe(to - from);
-      return readSync(fd, bytes, 0, bytes.length, from) === bytes.length ? bytes : null;
-    } finally { closeSync(fd); }
+      if (!unchanged(yield* file.stat())) return undefined;
+      // 64 KiB at a time: a check, not a page read, so a page read's failure is its own
+      const chunk = Buffer.allocUnsafe(Math.min(Math.max(to - from, 0), 64 * 1024));
+      for (let at = from; at < to;) {
+        const read = yield* file.read(chunk, Math.min(chunk.length, to - at), at);
+        if (read <= 0) return undefined;
+        hash.update(chunk.subarray(0, read));
+        at += read;
+      }
+      return unchanged(yield* file.stat()) ? hash : undefined;
+    } finally { yield* file.close(); }
+  } catch { return undefined; }
+}
+
+/**
+ * Bytes `from` to `stat.size` of a file, or null when they cannot all be read or the path no longer names
+ * the regular file `stat` saw, holding at least that many bytes, before and after the read.
+ */
+function* windowBytes(opened: RevisionOpen, path: string, stat: { dev: number; ino: number; size: number }, from: number): Steps<Buffer | null> {
+  const unchanged = (now: Stats): boolean => now.isFile() && now.dev === stat.dev && now.ino === stat.ino && now.size >= stat.size;
+  try {
+    const file = yield* opened(path);
+    try {
+      if (!unchanged(yield* file.stat())) return null;
+      const bytes = Buffer.allocUnsafe(stat.size - from);
+      for (let got = 0; got < bytes.length;) {
+        const read = yield* file.read(bytes.subarray(got), bytes.length - got, from + got);
+        if (read <= 0) return null;
+        got += read;
+      }
+      return unchanged(yield* file.stat()) ? bytes : null;
+    } finally { yield* file.close(); }
   } catch { return null; }
 }
 
-function transcriptStream(source: StreamSource, path: string, stat: { dev: number; ino: number; size: number; mtimeMs: number; ctimeMs: number }, codexHome: string, agy?: AgyProjection, fd?: number): TranscriptStream {
+function transcriptStream(source: StreamSource, path: string, stat: { dev: number; ino: number; size: number; mtimeMs: number; ctimeMs: number }, codexHome: string, agy?: AgyProjection, fd?: number, leased = false): TranscriptStream {
   // (a chain whose parent was archived since comes back shorter: codexHistorySegments;
   // a pi branch skips the side paths a /tree left behind: piBranchSegments)
   const grok = source === "grok-transcript" ? grokProjection(path, stat) : null;
   const branch = (source === "pi-transcript" || source === "cmd-transcript") ? piBranchSegments(path, stat.size) : null;
   if ((source === "pi-transcript" || source === "cmd-transcript") && branch === null) throw new ConversationUnavailable("branch_unreadable");
   const segments: { path: string; start: number; end: number }[] = source === "codex-transcript"
-    ? codexHistorySegments(path, codexHome).map((segment) => ({ path: segment.path, start: 0, end: segment.end }))
+    ? codexHistorySegments(path, codexHome).map((segment) => {
+      // each earlier rollout is read as the file it was when its chain was resolved (readStream)
+      if (segment.identity) bindFile(segment.path, segment.identity);
+      return { path: segment.path, start: 0, end: segment.end };
+    })
     : grok !== null ? grok.segments.map((segment) => ({ path, ...segment }))
     : agy ? agy.segments.map((segment) => ({ path, ...segment }))
     : branch !== null ? branch.map((segment) => ({ path, start: segment.start, end: segment.end }))
@@ -272,7 +569,30 @@ function transcriptStream(source: StreamSource, path: string, stat: { dev: numbe
     });
     chain = earlier.length === 0 ? "" : `-${createHash("sha256").update(earlier.join("\n")).digest("base64url").slice(0, 10)}`;
   }
-  return { id: `${stat.dev.toString(36)}-${stat.ino.toString(36)}${chain}${transcriptGeneration(path, stat, source === "muse-transcript")}`, files, length: stream, floor: 0, promptStarts: grok?.promptStarts ?? agy?.promptStarts, fd };
+  const version = source === "claude-transcript"
+    ? { key: `${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeMs}:${stat.ctimeMs}`, mtimeMs: stat.mtimeMs, ctimeMs: stat.ctimeMs, began: performance.now(), wall: Date.now() } : undefined;
+  return { id: `${stat.dev.toString(36)}-${stat.ino.toString(36)}${chain}${transcriptGeneration(path, stat, source === "muse-transcript", !leased)}`, files, length: stream, floor: 0, promptStarts: grok?.promptStarts ?? agy?.promptStarts, fd, version };
+}
+
+/** readStream's bytes in `into`, which holds them until the caller reads into it again: no buffer is allocated. */
+function readStreamInto(stream: TranscriptStream, from: number, to: number, into: Buffer): Buffer {
+  let length = 0;
+  for (const file of stream.files) {
+    const low = Math.max(from, file.start);
+    const high = Math.min(to, file.start + file.length);
+    if (low >= high) continue;
+    const held = stream.fd ?? (pageFile?.path === file.path ? pageFile.fd : undefined);
+    const fd = held ?? openBound(file.path);
+    try { length += readSync(fd, into, length, high - low, file.offset + (low - file.start)); }
+    finally { if (held === undefined) closeSync(fd); }
+  }
+  const bytes = into.subarray(0, length);
+  for (const [start, end] of stream.hidden ?? []) {
+    const low = Math.max(start, from) - from;
+    const high = Math.min(end, to, from + bytes.length) - from;
+    for (let index = low; index < high; index += 1) if (bytes[index] !== 0x0a) bytes[index] = 0x20;
+  }
+  return bytes;
 }
 
 function readStream(stream: TranscriptStream, from: number, to: number): Buffer {
@@ -281,15 +601,60 @@ function readStream(stream: TranscriptStream, from: number, to: number): Buffer 
     const low = Math.max(from, file.start);
     const high = Math.min(to, file.start + file.length);
     if (low >= high) continue;
-    const fd = stream.fd ?? openSync(file.path, "r");
+    const held = stream.fd ?? (pageFile?.path === file.path ? pageFile.fd : undefined);
+    const fd = held ?? openBound(file.path);
     try {
       const buffer = Buffer.alloc(high - low);
       chunks.push(buffer.subarray(0, readSync(fd, buffer, 0, buffer.length, file.offset + (low - file.start))));
     } finally {
-      if (stream.fd === undefined) closeSync(fd);
+      if (held === undefined) closeSync(fd);
     }
   }
-  const bytes = chunks.length === 1 ? chunks[0]! : Buffer.concat(chunks);
+  return hideOffBranch(stream, chunks.length === 1 ? chunks[0]! : Buffer.concat(chunks), from, to);
+}
+
+/**
+ * readStream in steps: a lease's bytes (`stream.file`) are waited for (awaited), never read on the
+ * event loop. What one window holds comes in the lease's own buffer, not a new one: it holds only
+ * until the next read of the stream, and every reader here takes it in (decodes, copies or digests
+ * it) before it reads on.
+ */
+function* streamBytes(stream: TranscriptStream, from: number, to: number): Steps<Buffer> {
+  const file = stream.file;
+  if (file === undefined) return readStream(stream, from, to);
+  const within = stream.files.filter((segment) => Math.max(from, segment.start) < Math.min(to, segment.start + segment.length));
+  if (within.length === 1 && to - from <= LEASE_WINDOW_BYTES) {
+    const [segment] = within;
+    const low = Math.max(from, segment!.start);
+    const bytes = yield* awaited(file.window(segment!.offset + (low - segment!.start), Math.min(to, segment!.start + segment!.length) - low));
+    // the lease's buffer: valid until the next read on this lease, so the caller takes it in first
+    return hideOffBranch(stream, bytes, from, to);
+  }
+  return yield* awaited((async () => {
+    const chunks: Buffer[] = [];
+    for (const segment of stream.files) {
+      const low = Math.max(from, segment.start);
+      const high = Math.min(to, segment.start + segment.length);
+      if (low >= high) continue;
+      // as readSync fills it: a window at a time, what a short read leaves at the end cut off. Each is read
+      // straight into its place, not into the lease's window to be copied out (a range of 16 MiB was copied whole)
+      const buffer = Buffer.allocUnsafe(high - low);
+      let got = 0;
+      while (got < buffer.length) {
+        const length = Math.min(LEASE_WINDOW_BYTES, buffer.length - got);
+        const read = await file.read(segment.offset + (low - segment.start) + got, length, buffer.subarray(got, got + length));
+        got += read.length;
+        if (read.length < length) break;
+      }
+      chunks.push(buffer.subarray(0, got));
+    }
+    return hideOffBranch(stream, chunks.length === 1 ? chunks[0]! : Buffer.concat(chunks), from, to);
+  })());
+}
+/** The most one read of a lease takes (TranscriptFile.window). */
+const LEASE_WINDOW_BYTES = 1024 * 1024;
+
+function hideOffBranch(stream: TranscriptStream, bytes: Buffer, from: number, to: number): Buffer {
   // a line off the branch keeps its place, so every offset still names the same bytes, and reads as blank
   for (const [start, end] of stream.hidden ?? []) {
     const low = Math.max(start, from) - from;
@@ -305,14 +670,181 @@ function readStream(stream: TranscriptStream, from: number, to: number): Buffer 
  * changes between the head and newest page are otherwise never read. */
 const SETTING_TYPES = ['"model_change"', '"thinking_level_change"'];
 const COPILOT_SETTING_TYPES = ['"session.model_change"', '"session.resume"'];
-type SettingType = "model_change" | "thinking_level_change" | "copilot_model" | "copilot_effort";
+const KIMI_SETTING_TYPES = ['"llm.request"'];
+type SettingType = "model_change" | "thinking_level_change" | "copilot_model" | "copilot_effort" | "kimi_request";
 /**
  * Claude names its model and effort on every answer, and a /rewind can leave any of them off the
  * branch, so each field keeps every record that set it since the last clear (where it lies, as
  * `branch.answers` does) and a small line that sets the same value again, shared while it repeats.
  */
 type ClaudeSettings = Record<"model" | "effort", { line: string; start: number; end: number }[]>;
-const clearScans = new Map<string, { id: string; scanned: number; floor: number; tail: string; settings: Partial<Record<SettingType, { offset: number; end: number; line: string }>>; branch?: ClaudeBranch; claude?: ClaudeSettings }>();
+const clearScans = new Map<string, { id: string; scanned: number; floor: number; tail: string; settings: Partial<Record<SettingType, { offset: number; end: number; line: string }>>; branch?: ClaudeBranch; claude?: ClaudeSettings; pictures?: PictureIndex; undo?: KimiUndo }>();
+
+/**
+ * Where a Claude transcript's pictures are, as the boundary scan reads past them, so a lookup goes
+ * straight to the record a ref names instead of searching the transcript for it. `at` holds a user
+ * record with a picture by its uuid, only when it is the first record since the last /clear with
+ * that uuid: then it is the record claudePictureSteps' search would find first. A uuid seen before
+ * (on a record the branch follows, in `ends`, or on one it does not, in `loose`) is left out, and so
+ * is every record after `blind`, where a record too long to follow starts: those are searched for.
+ * `unread` holds the records since the /clear the endpoint may not judge (mayBeUnread): the search
+ * refuses at one that names what it looks for, so a lookup with one before its record or its call
+ * searches as well.
+ *
+ * `bytes` digests what it was built from, so a scan kept from before an in-place rewrite of any of it
+ * is found out (vouchedPictureSteps), and `vouched` is the file's version a read of those bytes last
+ * matched, with when that read began (performance.now(), and Date.now()).
+ */
+interface PictureIndex { at: Map<string, IndexedPicture>; loose: UuidMarks; blind: number | null; unread: [number, number][]; bytes: PictureBytes; vouched: ({ key: string } & PictureRead) | null }
+/** a read of a file's bytes: when it began, by performance.now(), and by Date.now() to set beside the file's times */
+interface PictureRead { began: number; wall: number }
+/**
+ * The bytes an index was built from, [from, through): chained xxHash3 digests of PICTURE_DIGEST_BYTES
+ * pieces at fixed offsets up to `hashed` (the first piece starts at `from`), and what comes after, kept
+ * as it is until its piece is whole, so a scan that goes on later digests the same pieces.
+ */
+interface PictureBytes { from: number; hashed: number; digest: bigint; pending: Uint8Array; through: number }
+const PICTURE_DIGEST_BYTES = 64 * 1024;
+/** a record the index holds: where it starts and where it ends (at its newline) */
+interface IndexedPicture { start: number; end: number }
+
+/**
+ * The uuids of records the branch does not follow (a sidechain's, most of all), by a 32-bit digest
+ * each. A scan appends each to `log`, which costs about what hashing it does; a picture's record looks
+ * them up in `table` (open addressing, kept at most half full, 0 is no uuid) and then through what is
+ * logged. The log is folded into the table once lookups have read it MARKS_FOLD_AFTER times over, so
+ * a file of few pictures never builds the table, and one of many lookups does not read a long log
+ * each time. Two uuids with one digest read as seen, which only sends a lookup to the search.
+ * Past MARKS_LIMIT marks since the /clear none is kept (`full`): every uuid would read as seen, so
+ * the scan indexes no more records (notePicture).
+ */
+interface UuidMarks { table: Uint32Array; count: number; log: Uint32Array; logged: number; read: number; full: boolean }
+const MARKS_FOLD_AFTER = 64;
+/**
+ * The most marks kept: a log of 512 KiB, or a table of 1 MiB at most half full. 128 Ki records the
+ * branch does not follow since a /clear is about 25 MB of sidechain records at the least (each is
+ * some 200 bytes); past them a picture's record is searched for, as main searches for every one.
+ */
+const MARKS_LIMIT = 128 * 1024;
+const uuidMark = (uuid: string): number => Bun.hash.xxHash32(uuid) || 1;
+function marked(marks: UuidMarks, mark: number): boolean {
+  const last = marks.table.length - 1;
+  for (let slot = mark & last; marks.table.length > 0 && marks.table[slot] !== 0; slot = (slot + 1) & last) if (marks.table[slot] === mark) return true;
+  if (marks.logged === 0) return false;
+  const seen = marks.log.subarray(0, marks.logged).includes(mark);
+  marks.read += marks.logged;
+  if (marks.read >= MARKS_FOLD_AFTER * marks.logged) {
+    for (const logged of marks.log.subarray(0, marks.logged)) putMark(marks, logged);
+    marks.logged = 0;
+    marks.read = 0;
+  }
+  return seen;
+}
+function markUuid(marks: UuidMarks, mark: number): void {
+  if (marks.full) return;
+  if (marks.logged + marks.count >= MARKS_LIMIT) {
+    Object.assign(marks, { table: new Uint32Array(0), count: 0, log: new Uint32Array(0), logged: 0, read: 0, full: true });
+    return;
+  }
+  if (marks.logged === marks.log.length) {
+    const log = new Uint32Array(Math.min(MARKS_LIMIT, Math.max(1024, marks.log.length * 2)));
+    log.set(marks.log);
+    marks.log = log;
+  }
+  marks.log[marks.logged++] = mark;
+}
+function putMark(marks: UuidMarks, mark: number): void {
+  if ((marks.count + 1) * 2 > marks.table.length) {
+    const old = marks.table;
+    marks.table = new Uint32Array(Math.max(1024, old.length * 2));
+    marks.count = 0;
+    for (const kept of old) if (kept !== 0) putMark(marks, kept);
+  }
+  const last = marks.table.length - 1;
+  let slot = mark & last;
+  for (; marks.table[slot] !== 0; slot = (slot + 1) & last) if (marks.table[slot] === mark) return;
+  marks.table[slot] = mark;
+  marks.count += 1;
+}
+/** an index of no pictures, of the bytes from `from` on, which the read `stream` makes now */
+const noPictures = (from: number, stream: TranscriptStream): PictureIndex => ({
+  at: new Map(), loose: { table: new Uint32Array(0), count: 0, log: new Uint32Array(0), logged: 0, read: 0, full: false }, blind: null, unread: [],
+  bytes: { from, hashed: from, digest: 0n, pending: new Uint8Array(0), through: from },
+  vouched: stream.version ? { key: stream.version.key, began: performance.now(), wall: Date.now() } : null,
+});
+/** the end of the digest piece `at` is in (PictureBytes) */
+const pieceEnd = (at: number): number => (Math.floor(at / PICTURE_DIGEST_BYTES) + 1) * PICTURE_DIGEST_BYTES;
+/** Digests what of `data`, the bytes at `at` on, lies past what `bytes` holds (a scan reads some of them again). */
+function digestPictureBytes(bytes: PictureBytes, data: Uint8Array, at: number): void {
+  const skip = bytes.through - at;
+  if (skip >= data.length) return;
+  // a gap would leave bytes undigested: what follows it is never vouched for
+  if (skip < 0) { bytes.through = Number.POSITIVE_INFINITY; return; }
+  let rest = data.subarray(skip);
+  let pending = bytes.pending;
+  for (let need = pieceEnd(bytes.hashed) - bytes.hashed - pending.length; rest.length >= need; need = PICTURE_DIGEST_BYTES) {
+    bytes.digest = Bun.hash.xxHash3(pending.length > 0 ? Buffer.concat([pending, rest.subarray(0, need)]) : rest.subarray(0, need), bytes.digest);
+    bytes.hashed = pieceEnd(bytes.hashed);
+    pending = new Uint8Array(0);
+    rest = rest.subarray(need);
+  }
+  bytes.pending = Buffer.concat([pending, rest]);
+  bytes.through = bytes.hashed + bytes.pending.length;
+}
+
+/**
+ * Whether the endpoint may not judge this record (recordShapeSteps' UNREAD, or a call id callIdSteps
+ * does not read): its shape can pass SHAPE_MAX_BYTES, or it is long enough to hold a string past
+ * PICTURE_TEXT_BYTES. The shape keeps each string's first SHAPE_STRING_BYTES and at most an escape
+ * more, then a mark of under 60 bytes in place of the rest, so a string of `length` bytes adds at most
+ * SHAPE_STRING_BYTES + 64 - length to it, and the record's own length is the rest.
+ */
+function mayBeUnread(line: Buffer): boolean {
+  if (line.length > PICTURE_TEXT_BYTES) return true;
+  const longest = SHAPE_STRING_BYTES + 64;
+  if (line.length * (longest / SHAPE_STRING_BYTES) <= SHAPE_MAX_BYTES) return false;
+  let shape = line.length;
+  // the strings as recordShapeSteps reads them: a backslash takes the byte after it, and a \u four more
+  let slash = line.indexOf(0x5c);
+  for (let open = line.indexOf(0x22); open !== -1; open = line.indexOf(0x22, open)) {
+    let at = open + 1;
+    for (;;) {
+      const quote = line.indexOf(0x22, at);
+      // a string the line does not close keeps what is left of it whole
+      if (quote === -1) return shape > SHAPE_MAX_BYTES;
+      if (slash !== -1 && slash < at) slash = line.indexOf(0x5c, at);
+      if (slash === -1 || quote < slash) { at = quote; break; }
+      at = slash + (line[slash + 1] === 0x75 ? 6 : 2);
+    }
+    const length = at - open - 1;
+    if (length >= SHAPE_STRING_BYTES) shape += longest - length;
+    open = at + 1;
+  }
+  return shape > SHAPE_MAX_BYTES;
+}
+
+function holdsPicture(block: unknown): boolean {
+  const part = block as { type?: unknown; content?: unknown } | null;
+  return part?.type === "image" || (part?.type === "tool_result" && Array.isArray(part.content) && part.content.some((inner) => (inner as { type?: unknown } | null)?.type === "image"));
+}
+
+/** Index the record followClaudeBranch just read (`line`, [start, newline)), when it holds a picture; `known` is how many uuids `ends` held before it. */
+function notePicture(index: PictureIndex, ends: Map<string, number>, known: number, parsed: unknown, line: Buffer, start: number, newline: number): void {
+  // past MARKS_LIMIT no mark is kept and every uuid reads as seen: no record is indexed, and none is hashed
+  if (index.loose.full) return;
+  const entry = parsed as TranscriptEntry | null | undefined;
+  if (entry === null || typeof entry !== "object" || typeof entry.uuid !== "string") return;
+  const followed = ends.get(entry.uuid) === newline + 1;
+  // the uuid is hashed only when it is kept or a picture's record asks: most records are neither
+  const picture = index.blind === null && entry.type === "user" && !entry.isMeta && !entry.isCompactSummary
+    && Array.isArray(entry.message?.content) && entry.message.content.some(holdsPicture);
+  if (followed && !picture) return;
+  const mark = uuidMark(entry.uuid);
+  const before = picture && ((followed ? ends.size === known : ends.has(entry.uuid)) || marked(index.loose, mark));
+  if (!followed) markUuid(index.loose, mark);
+  if (!picture || before) return;
+  index.at.set(entry.uuid, { start, end: newline });
+}
 
 function keepClaudeSetting(settings: ClaudeSettings, entry: unknown, start: number, end: number): void {
   const set = claudeSetting(entry);
@@ -352,23 +884,30 @@ function applyHistoryBoundary(path: string, stream: TranscriptStream, source: Re
  * applyHistoryBoundary in steps a window apart (Steps). With `apart`, the scan works on its own copy of
  * what is kept and puts it back when it ends, so a page read between its steps never sees half of it.
  */
-function* applyHistoryBoundarySteps(path: string, stream: TranscriptStream, source: RecognizedConversation["source"], apart: boolean): Steps<void> {
+function* applyHistoryBoundarySteps(path: string, stream: TranscriptStream, source: RecognizedConversation["source"], apart: boolean, fresh = false): Steps<void> {
   if (source === "codex-transcript" || source === "grok-transcript" || source === "agy-transcript" || source === "muse-transcript" || source === "letta-transcript") return;
-  let scan = clearScans.get(path);
-  if (!scan || scan.id !== stream.id || scan.scanned > stream.length || bytesBefore(stream, scan.scanned) !== scan.tail) {
-    scan = { id: stream.id, scanned: 0, floor: 0, tail: "", settings: {}, ...(source === "claude-transcript" ? { branch: { last: null, ends: new Map(), answers: [], forks: [] }, claude: { model: [], effort: [] } } : {}) };
+  const previous = clearScans.get(path);
+  const previousScanned = previous?.scanned;
+  // a file rewritten since a boundary was kept can still end in the tail that boundary is checked by
+  let scan = fresh ? undefined : previous;
+  if (!scan || scan.id !== stream.id || scan.scanned > stream.length || (yield* bytesBeforeSteps(stream, scan.scanned)) !== scan.tail) {
+    scan = { id: stream.id, scanned: 0, floor: 0, tail: "", settings: {}, ...(source === "claude-transcript" ? { branch: { last: null, ends: new Map(), answers: [], forks: [] }, claude: { model: [], effort: [] }, pictures: noPictures(0, stream) } : {}), ...(source === "kimi-transcript" ? { undo: { anchors: [], undone: [] } } : {}) };
   } else if (apart) scan = structuredClone(scan);
   const branch = scan.branch;
   let position = scan.scanned;
   let carry = Buffer.alloc(0);
   let skipping = false;
+  let judged = 0;
+  if (stream.seen) stream.seen = { from: position, digest: 0n };
   const isClear = (line: Buffer): boolean => {
     if (!line.includes(source === "claude-transcript" ? "/clear" : "context_clear")) return false;
     try { return isContextClear(JSON.parse(line.toString("utf8")), source); } catch { return false; }
   };
   while (position < stream.length) {
     const end = Math.min(stream.length, position + TRANSCRIPT_WINDOW_BYTES);
-    const bytes = Buffer.concat([carry, readStream(stream, position, end)]);
+    const read = yield* streamBytes(stream, position, end);
+    if (stream.seen) stream.seen.digest = Bun.hash.xxHash3(read, stream.seen.digest);
+    const bytes = Buffer.concat([carry, read]);
     const base = position - carry.length;
     let offset = 0;
     for (let newline = bytes.indexOf(0x0a); newline !== -1; newline = bytes.indexOf(0x0a, offset)) {
@@ -376,8 +915,10 @@ function* applyHistoryBoundarySteps(path: string, stream: TranscriptStream, sour
       if (!skipping && isClear(line)) {
         scan.floor = base + offset;
         if (scan.claude) scan.claude = { model: [], effort: [] };
+        // what lies before the /clear is never judged
+        if (scan.pictures) scan.pictures = noPictures(base + offset, stream);
       }
-      else if (!skipping && source !== "claude-transcript" && (source === "copilot-transcript" ? COPILOT_SETTING_TYPES : SETTING_TYPES).some((type) => line.includes(type))) {
+      else if (!skipping && source !== "claude-transcript" && (source === "copilot-transcript" ? COPILOT_SETTING_TYPES : source === "kimi-transcript" ? KIMI_SETTING_TYPES : SETTING_TYPES).some((type) => line.includes(type))) {
         try {
           const entry: unknown = JSON.parse(line.toString("utf8"));
           const type = entry !== null && typeof entry === "object" && "type" in entry ? entry.type : null;
@@ -392,6 +933,9 @@ function* applyHistoryBoundarySteps(path: string, stream: TranscriptStream, sour
                 if ("reasoningEffort" in data) scan.settings.copilot_effort = setting;
               }
             }
+          } else if (source === "kimi-transcript") {
+            // Kimi names the model and effort on each request; a compaction's own request is not the chat's
+            if (type === "llm.request" && (entry as { kind?: unknown }).kind !== "compaction") scan.settings.kimi_request = { offset: base + offset, end: base + newline, line: line.toString("utf8") };
           } else if (type === "model_change" || type === "thinking_level_change") {
             scan.settings[type] = { offset: base + offset, end: base + newline, line: line.toString("utf8") };
           }
@@ -400,27 +944,54 @@ function* applyHistoryBoundarySteps(path: string, stream: TranscriptStream, sour
       if (branch) {
         if (skipping) branch.last = null;
         else {
+          const known = branch.ends.size;
           const entry = followClaudeBranch(branch, line, base + offset, base + newline + 1, scan.floor);
           if (entry !== undefined && scan.claude) keepClaudeSetting(scan.claude, entry, base + offset, base + newline);
+          if (entry !== undefined && scan.pictures) notePicture(scan.pictures, branch.ends, known, entry, line, base + offset, base + newline);
         }
       }
+      if (!skipping && scan.undo) followKimiUndo(scan.undo, line, base + offset, base + newline + 1);
+      if (!skipping && scan.pictures && mayBeUnread(line)) scan.pictures.unread.push([base + offset, base + newline]);
       skipping = false;
       offset = newline + 1;
       scan.scanned = base + offset;
+      if (++judged % RECORDS_PER_STEP === 0) yield;
     }
+    if (scan.pictures) digestPictureBytes(scan.pictures.bytes, bytes, base);
     carry = bytes.subarray(offset);
     // An oversized data record cannot be a native clear control envelope; a Claude prompt that is a
     // screenshot can still be where the session's branch forks
-    if (carry.length > (branch ? CLAUDE_CARRY_BYTES : METADATA_HEAD_BYTES)) { carry = Buffer.alloc(0); skipping = true; }
+    if (carry.length > (branch ? CLAUDE_CARRY_BYTES : METADATA_HEAD_BYTES)) {
+      if (scan.pictures && scan.pictures.blind === null) scan.pictures.blind = base + offset;
+      // a user's message (Kimi names a record's type and a message's role first) may be a prompt: an
+      // /undo counting back over it would take back another
+      if (scan.undo && carry.subarray(0, 512).includes('"context.append_message"') && carry.subarray(0, 512).includes('"role":"user"')) scan.undo.anchors = [];
+      carry = Buffer.alloc(0);
+      skipping = true;
+    }
     position = end;
     if (position < stream.length) yield;
   }
-  scan.tail = bytesBefore(stream, scan.scanned);
-  remember(clearScans, path, scan, 32);
+  scan.tail = yield* bytesBeforeSteps(stream, scan.scanned);
+  stream.pictures = scan.pictures;
+  // A page read can advance the same cached object while this private copy is paused, also while
+  // the file's check is on its way: what is kept is checked again once it answers.
+  const kept = () => clearScans.get(path) === previous && previous?.scanned === previousScanned;
+  if (!apart || (kept() && (stream.current === undefined || ((yield* stream.current()) && kept())))) {
+    remember(clearScans, path, scan, 32);
+    if (apart) stream.published = { scan, through: scan.scanned };
+  }
   // A valid final JSON object is visible before its newline; rescan it on append.
   stream.floor = !skipping && carry.length > 0 && isClear(carry) ? stream.length - carry.length : scan.floor;
   if (stream.floor > 0) stream.id += `-clear-${stream.floor.toString(36)}`;
-  const forks = branch ? claudeForks(branch) : [];
+  // what a Kimi /undo took back reads as off the branch too, the final record's before its newline
+  let undone = scan.undo?.undone ?? [];
+  if (scan.undo && !skipping && carry.length > 0) {
+    const final = { anchors: [...scan.undo.anchors], undone: [...undone] };
+    followKimiUndo(final, carry, stream.length - carry.length, stream.length);
+    undone = final.undone;
+  }
+  const forks = branch ? claudeForks(branch) : undone;
   const hidden = forks.filter(([, end]) => end > stream.floor);
   if (hidden.length > 0) {
     stream.hidden = hidden;
@@ -434,22 +1005,36 @@ function* applyHistoryBoundarySteps(path: string, stream: TranscriptStream, sour
  * line that opens a turn, at `floor` (a held start) or at the very beginning. An
  * older page is read once, so for a turn longer than a window it reaches further
  * back, a new chunk at a time, up to MAX_PAGE_BYTES. The newest page is read on
- * every append, so it never does: with no turn start in its window it starts
- * mid-turn, at a whole line.
+ * every append, so it never does, but for Copilot's (COPILOT_PAGE_BYTES): with no turn
+ * start in its window it starts mid-turn, at a whole line.
  */
 function pageBefore(stream: TranscriptStream, source: StreamSource, to: number, { floor = stream.floor, widen, prompts }: { floor?: number; widen: boolean; prompts: number }): { start: number; bytes: Buffer } {
   let from = Math.max(floor, to - TRANSCRIPT_WINDOW_BYTES);
-  let bytes = readStream(stream, from, to);
+  const bytes = readStream(stream, from, to);
+  // the bytes searched for turn starts: the window, then each chunk widening adds before it
+  let searched = bytes;
   for (;;) {
-    const starts = stream.promptStarts ? stream.promptStarts.filter((at) => at >= from && at < to).map((at) => at - from) : turnStarts(bytes, source, undefined, turnBlobs(stream, source));
+    const starts = stream.promptStarts ? stream.promptStarts.filter((at) => at >= from && at < from + searched.length).map((at) => at - from) : turnStarts(searched, source, undefined, turnBlobs(stream, source));
     const keep = starts.length > prompts ? starts[starts.length - prompts] : from === floor ? 0 : starts[0];
-    if (keep !== undefined) return { start: from + keep, bytes: bytes.subarray(keep) };
-    if (!widen || to - from >= MAX_PAGE_BYTES) {
+    // a start found while widening is read from once, not built up a chunk at a time
+    if (keep !== undefined) return searched === bytes ? { start: from + keep, bytes: bytes.subarray(keep) } : { start: from + keep, bytes: readStream(stream, from + keep, to) };
+    if (!widen || to - from >= (source === "copilot-transcript" ? COPILOT_PAGE_BYTES : MAX_PAGE_BYTES)) {
       const firstLine = bytes.indexOf(0x0a) + 1;
-      return { start: from + firstLine, bytes: bytes.subarray(firstLine) };
+      return { start: to - bytes.length + firstLine, bytes: bytes.subarray(firstLine) };
     }
+    // no start in what was searched: only the new chunk can hold one, and the line it cuts ends past it
     const next = Math.max(floor, from - TRANSCRIPT_WINDOW_BYTES);
-    bytes = Buffer.concat([readStream(stream, next, from), bytes]);
+    const pieces = [readStream(stream, next, from)];
+    for (let at = from; at < to;) {
+      const piece = readStream(stream, at, Math.min(to, at + IMAGE_SEARCH_WINDOW));
+      // a file cut short since its size was taken reads nothing more: what was read is searched
+      if (piece.length === 0) break;
+      const lineEnd = piece.indexOf(0x0a);
+      pieces.push(lineEnd === -1 ? piece : piece.subarray(0, lineEnd + 1));
+      if (lineEnd !== -1) break;
+      at += piece.length;
+    }
+    searched = Buffer.concat(pieces);
     from = next;
   }
 }
@@ -500,6 +1085,10 @@ function bytesBefore(stream: TranscriptStream, offset: number): string {
   return readStream(stream, Math.max(0, offset - 64), offset).toString("latin1");
 }
 
+function* bytesBeforeSteps(stream: TranscriptStream, offset: number): Steps<string> {
+  return (yield* streamBytes(stream, Math.max(0, offset - 64), offset)).toString("latin1");
+}
+
 function remember<T>(map: Map<string, T>, key: string, value: T, limit: number): void {
   map.delete(key);
   map.set(key, value);
@@ -540,6 +1129,25 @@ function rememberPaneDevin(paneId: string, sessionId: string, cwd: string, dbPat
   reads.devin.set(key, { sessionId, cwd, dbPath });
   remember(paneReads, paneId, reads, PANE_READS_MAX);
 }
+
+/**
+ * The transcript each pane was last resolved to, numbered: a resolution naming another one than the last
+ * takes a new number, and a forgotten pane has none. A read that awaited after its resolution compares
+ * the number it was resolved under with the pane's (rebound), so it learns whether the pane was seen bound
+ * elsewhere meanwhile without asking herdr again.
+ */
+let bindingCount = 0;
+const paneBindings = new Map<string, { key: string; generation: number }>();
+const resolvedGenerations = new WeakMap<object, number>();
+function noteBinding<T extends NativeTranscript>(paneId: string, resolved: T): T {
+  const key = `${resolved.source}\0${resolved.path}`;
+  const previous = paneBindings.get(paneId);
+  const generation = previous?.key === key ? previous.generation : ++bindingCount;
+  remember(paneBindings, paneId, { key, generation }, PANE_READS_MAX);
+  resolvedGenerations.set(resolved, generation);
+  return resolved;
+}
+const rebound = (paneId: string, resolved: NativeTranscript): boolean => paneBindings.get(paneId)?.generation !== resolvedGenerations.get(resolved);
 
 /** Pi retains at most four small parsed pages per cache; oversized pages remain readable uncached. */
 function rememberPage<T extends { source: RecognizedConversation["source"] }>(map: Map<string, T>, key: string, value: T, limit: number): void {
@@ -584,6 +1192,61 @@ function newestPage(path: string, stream: TranscriptStream, source: StreamSource
   return start === undefined ? null : { start, starts };
 }
 
+/**
+ * The newest Copilot turn that has outgrown its window (#2478), kept between polls: where it starts,
+ * how far it was read and the bytes just before that, and its complete lines, a picture record as its
+ * length only (copilotSetAside). A poll reads only what was appended since; another history, a file
+ * whose bytes before the read point changed, a new prompt, or a turn grown a window past the cap is
+ * read afresh. Like liveScans it trusts Copilot to append: an earlier line rewritten in place, with
+ * the bytes before the read point kept and the file grown, is not noticed.
+ */
+interface CopilotTurnScan { id: string; start: number; scanned: number; tail: string; lines: { at: number; line: string }[]; bytes: number }
+const copilotTurnScans = new Map<string, CopilotTurnScan>();
+/** What every kept turn's lines may come to together: one turn as far as a page reaches before it is found afresh. */
+const COPILOT_TURN_SCAN_BYTES = COPILOT_PAGE_BYTES + TRANSCRIPT_WINDOW_BYTES;
+
+function forgetCopilotTurns(path: string): void {
+  for (const key of copilotTurnScans.keys()) if (key.startsWith(`${path}\0`)) copilotTurnScans.delete(key);
+}
+
+/** The newest Copilot page that begins before its window: its start, its complete lines and the last line still being written. */
+function copilotNewestTurn(path: string, stream: TranscriptStream, prompts: number): { start: number; lines: CopilotTurnScan["lines"]; partial: string } {
+  const key = `${path}\0${prompts}`;
+  let scan = copilotTurnScans.get(key);
+  let bytes: Buffer | null = null;
+  // a turn grown a window past the cap is found afresh, so a page still ends up at most about the cap
+  if (scan && scan.id === stream.id && scan.scanned <= stream.length && stream.length - scan.start <= COPILOT_PAGE_BYTES + TRANSCRIPT_WINDOW_BYTES
+    && bytesBefore(stream, scan.scanned) === scan.tail) {
+    bytes = readStream(stream, scan.scanned, stream.length);
+    // a prompt appended since starts a newer turn: the page is found afresh from it
+    if (turnStarts(bytes.subarray(0, bytes.lastIndexOf(0x0a) + 1), "copilot-transcript", undefined, null).length > 0) bytes = null;
+  }
+  if (scan === undefined || bytes === null) {
+    const whole = pageBefore(stream, "copilot-transcript", stream.length, { widen: true, prompts });
+    scan = { id: stream.id, start: whole.start, scanned: whole.start, tail: "", lines: [], bytes: 0 };
+    bytes = whole.bytes;
+  }
+  let at = 0;
+  for (let newline = bytes.indexOf(0x0a); newline !== -1; newline = bytes.indexOf(0x0a, at)) {
+    const line = copilotSetAside(bytes.subarray(at, newline).toString("utf8"));
+    scan.lines.push({ at: scan.scanned + at, line });
+    scan.bytes += Buffer.byteLength(line);
+    at = newline + 1;
+  }
+  scan.scanned += at;
+  scan.tail = bytesBefore(stream, scan.scanned);
+  remember(copilotTurnScans, key, scan, 4);
+  // kept by bytes too, least recently read first out, and never a turn past the whole budget
+  let kept = 0;
+  for (const entry of copilotTurnScans.values()) kept += entry.bytes;
+  for (const [other, entry] of copilotTurnScans) {
+    if (kept <= COPILOT_TURN_SCAN_BYTES) break;
+    copilotTurnScans.delete(other);
+    kept -= entry.bytes;
+  }
+  return { start: scan.start, lines: scan.lines, partial: bytes.subarray(at).toString("utf8") };
+}
+
 /** Only native notification records name metadata files; quoted tool output names none. */
 function collectSubagentIds(text: string, ids: Set<string>): void {
   if (!text.includes("<task-notification>")) return;
@@ -606,6 +1269,7 @@ function parseTurns(source: RecognizedConversation["source"], path: string, text
     }
   }
   if (source === "agy-transcript") return parseAgyTranscript(text, path);
+  if (source === "kimi-transcript") return parseKimiTranscript(text);
   if (source === "muse-transcript") {
     try { return parseMuseTranscript(text, museSession(path)); } catch (error) {
       if (error instanceof MuseUnavailable) throw new ConversationUnavailable("transcript_missing");
@@ -624,12 +1288,12 @@ function parseTurns(source: RecognizedConversation["source"], path: string, text
       : parseOmpTranscript(text, Infinity, { ...ompReading(source, path, taskTitles), subagentCards: source === "pi-transcript" ? piSubagentCards(path, text) : undefined });
 }
 
-/** How the omp record fold reads a source, the same for a one-shot parse and a live one: pi keeps a
- * picture inline and omp in its blob store, and the image endpoint answers both; omo and gjc are read
- * the same way but would carry image refs nothing answers, so they name none. gjc's tool parts carry
- * their call ids, which the chat matches gjc's rewrites by */
+/** How the omp record fold reads a source, the same for a one-shot parse and a live one: pi and omo keep a
+ * picture inline (an omo tool's display() or image read, #3420) and omp in its blob store, and the image
+ * endpoint answers all three; gjc is read the same way but would carry image refs nothing answers, so it
+ * names none. gjc's tool parts carry their call ids, which the chat matches gjc's rewrites by */
 function ompReading(source: RecognizedConversation["source"], path: string, taskTitles?: Map<string, string>) {
-  return { images: source === "pi-transcript" || source === "cmd-transcript" || source === "omp-transcript", blobs: source === "omp-transcript" ? ompBlobStore(path) : null, callIds: source === "gjc-transcript", taskTitles };
+  return { images: source === "pi-transcript" || source === "cmd-transcript" || source === "omp-transcript" || source === "omo-transcript", blobs: source === "omp-transcript" ? ompBlobStore(path) : null, callIds: source === "gjc-transcript", taskTitles };
 }
 
 /** The blob store of the omp transcript a stream reads (ompBlobStore), for its turn scan; null for any other agent. */
@@ -833,8 +1497,21 @@ export function liveTurnCacheUsage(): { paths: string[]; withinBudget: boolean }
   return { paths: [...liveTranscriptTurns.keys()], withinBudget };
 }
 
+/**
+ * Forgets so far, and the last one of each pane or of every pane (the floor): a read that awaited sees
+ * whether its pane was forgotten meanwhile (forgottenSince). A pane's mark pushed out by newer ones
+ * raises the floor, so a read of that pane in flight still sees it (and one of another pane takes it
+ * for its own, and fails once).
+ */
+let forgets = 0;
+let forgottenFloor = 0;
+const forgottenPanes = new Map<string, number>();
+const forgottenSince = (paneId: string, at: number): boolean => forgottenFloor > at || (forgottenPanes.get(paneId) ?? 0) > at;
+
 /** Forget every scan and parse kept between polls (tests compare against a cold read). */
 export function forgetTranscriptState(): void {
+  forgottenFloor = ++forgets;
+  forgottenPanes.clear();
   launchedAgents.clear();
   cache.clear();
   commandTranscripts.clear();
@@ -846,12 +1523,17 @@ export function forgetTranscriptState(): void {
   forgetOpencodeState();
   forgetOmpBlobTypes();
   liveScans.clear();
+  copilotTurnScans.clear();
   settledTurns.clear();
   liveTranscriptTurns.clear();
   transcriptRevisions.clear();
+  uncheckedGrowths.clear();
   clearScans.clear();
+  pictureChecks.clear();
   paneReads.clear();
+  paneBindings.clear();
   copilotBindings.clear();
+  forgetCopilotForeground();
   forgetAllCodexState();
   forgetAllPiIndexes();
   forgetGrokState();
@@ -868,8 +1550,16 @@ export function forgetTranscriptState(): void {
  * of a live pane re-derives it, and a file nobody reads again costs nothing to forget.
  */
 export function forgetPaneTranscriptState(paneId: string): void {
+  forgottenPanes.delete(paneId);
+  forgottenPanes.set(paneId, ++forgets);
+  for (const [oldest, at] of forgottenPanes) {
+    if (forgottenPanes.size <= PANE_READS_MAX) break;
+    forgottenPanes.delete(oldest);
+    forgottenFloor = Math.max(forgottenFloor, at);
+  }
   const reads = paneReads.get(paneId);
   paneReads.delete(paneId);
+  paneBindings.delete(paneId);
   copilotBindings.delete(paneId);
   launchedAgents.forget(paneId);
   forgetGjcPane(paneId);
@@ -885,8 +1575,10 @@ export function forgetPaneTranscriptState(paneId: string): void {
     if (shared((other) => other.paths, path)) continue;
     for (const key of [...cache.keys()]) if (key.startsWith(`${path}\0`)) cache.delete(key);
     transcriptRevisions.delete(path);
+    uncheckedGrowths.delete(path);
     commandTranscripts.delete(path);
     liveScans.delete(path);
+    forgetCopilotTurns(path);
     for (const key of [...settledTurns.keys()]) if (key.startsWith(`${path}\0`)) settledTurns.delete(key);
     liveTranscriptTurns.delete(path);
     clearScans.delete(path);
@@ -914,10 +1606,15 @@ function parseCursor(stream: TranscriptStream, cursor: string): number {
 }
 
 /** gjc's resolver answers null; the chat lens reports why it fell back to scrollback. */
-export async function gjcTranscriptPath(paneId: string, cwd: string, home?: string): Promise<string> {
-  const path = await gjcTranscriptForPane(paneId, cwd, home);
-  if (!path) throw new ConversationUnavailable("no_session_path");
-  return path;
+export async function gjcTranscriptPath(paneId: string, cwd: string, home?: string, known?: KnownProcesses): Promise<string> {
+  return (await gjcTranscriptFile(paneId, cwd, home, known)).path;
+}
+
+/** gjcTranscriptPath, with the exact dev:ino of the file the resolver proved (`identity`). */
+async function gjcTranscriptFile(paneId: string, cwd: string, home?: string, known?: KnownProcesses): Promise<{ path: string; identity: string }> {
+  const found = known === undefined ? await gjcTranscriptFileForPane(paneId, cwd, home) : await gjcTranscriptFileForPane(paneId, cwd, home, { known });
+  if (!found) throw new ConversationUnavailable("no_session_path");
+  return found;
 }
 
 /**
@@ -948,9 +1645,6 @@ export async function paneRunsOmo(paneId: string, known?: KnownProcesses): Promi
     }, "", home) !== null,
   );
 }
-
-/** A program's name in a process listing: its path's last part, without a Windows or script extension. */
-const programName = (word: string): string => nodePath.posix.basename(word.replace(/\\/g, "/")).replace(/\.(?:exe|cmd|js|mjs|cjs)$/i, "");
 
 /**
  * The script an agent's npm package runs as its `bin`, which bunx and npx start under bun or node: omp's is
@@ -1003,7 +1697,7 @@ export async function paneProcessRoots(paneId: string, agent: string | null | un
     ...(typeof candidate.name === "string" ? { name: candidate.name } : {}),
     cwd: typeof candidate.cwd === "string" ? candidate.cwd : "",
   }));
-  const matched = agent && ["claude", "codex", "omp", "gjc", "pi", "opencode", "devin", "grok", "hermes", "agy", "copilot"].includes(agent)
+  const matched = agent && ["claude", "codex", "omp", "gjc", "pi", "opencode", "devin", "grok", "hermes", "agy", "copilot", "letta"].includes(agent)
     ? agentProcesses(foreground, agent)[0] ?? null : null;
   // the omo process that holds a session wins over an omo-looking one listed before it (omo's bundled
   // Claude SDK binary under /omo-ai/, a helper script): typing follows the held one
@@ -1065,19 +1759,72 @@ export async function labelOmoPanes(snapshot: SessionSnapshot): Promise<SessionS
   };
 }
 
-/** The Claude processes in a pane's foreground (`known`: herdr's answer already read); none when herdr cannot say. */
-async function claudeProcesses(paneId: string, known?: KnownProcesses): Promise<{ pid: number; name?: string; argv0?: string; argv?: string[] }[]> {
-  if (known !== undefined) {
-    return (known?.foreground_processes ?? []).map(({ pid, name, argv0, argv }) => ({
-      pid, name, ...(typeof argv0 === "string" ? { argv0 } : {}), ...(Array.isArray(argv) ? { argv } : {}),
-    })).filter(isClaudeProcess);
+/**
+ * The local terminal an `hc attach <t>` in front shows, by the address hc itself reports for it: the
+ * word typed must be that address, never a name hc resolves to another terminal, nor another
+ * machine's terminal (whose pids name nothing here).
+ */
+function hcAttachWord(argv: readonly string[] | null | undefined): string | null {
+  if (!argv || argv.length !== 3 || argv[1] !== "attach") return null;
+  const program = programName(argv[0]!);
+  return (program === "hc" || program === "herdr-core") && /^[A-Za-z0-9]+$/.test(argv[2]!) ? argv[2]! : null;
+}
+
+/** A process's environment as it started (Linux /proc, macOS sysctl), the first value of each name; null when it cannot be read. */
+function startEnvironment(pid: number): Record<string, string> | null {
+  const entries = process.platform === "linux" ? processEnviron(pid) : process.platform === "darwin" ? darwinProcess.environment(pid)?.split("\0") ?? null : null;
+  const env: Record<string, string> = {};
+  for (const entry of entries ?? []) {
+    const at = entry.indexOf("=");
+    if (at > 0 && !Object.hasOwn(env, entry.slice(0, at))) env[entry.slice(0, at)] = entry.slice(at + 1);
   }
-  try {
-    const processInfo = await herdrRpc<{ process_info?: { foreground_processes?: { pid: number; name?: string; argv0?: string; argv?: string[] }[] } }>(
-      "pane.process_info", { pane_id: paneId },
-    );
-    return processInfo.process_info?.foreground_processes?.filter(isClaudeProcess) ?? [];
-  } catch { return []; /* herdr busy: the default store */ }
+  // an environment read empty is a process gone or not ours to read
+  return Object.keys(env).length === 0 ? null : env;
+}
+
+/**
+ * Whether an `hc attach` client reaches the core this server serves: a client goes to whatever core its
+ * own environment names (HC_SOCKET, HC_SESSION, its runtime and config folders), where the terminal
+ * numbers (t1, t2...) repeat. Its socket, found from that environment as hc finds it, must be this
+ * server's core's; an environment that cannot be read follows nothing.
+ */
+function reachesOwnCore(client: number): boolean {
+  const env = startEnvironment(client);
+  if (env === null) return false;
+  const theirs = coreSocket({ env }).path;
+  const ours = coreSocketPath();
+  if (theirs === ours) return true;
+  try { return realpathSync(theirs) === realpathSync(ours); } catch { return false; }
+}
+
+/**
+ * The Claude processes in a pane's foreground (`known`: herdr's answer already read); none when herdr cannot say.
+ * On Windows herdr and herdr-core name only the shell in front, even while Claude runs in it, and
+ * herdr-core reports no session for it: the Claude below the shell is taken from the process table (#2896).
+ * Elsewhere herdr-core names only the first process of the foreground job, where herdr names them all: the one
+ * Claude below it in the job (a launcher's child), or, in a tab running `hc attach <t>`, the Claude of the
+ * terminal it shows (#3009). `viewed`: the terminal such a tab shows, which is followed no further.
+ */
+async function claudeProcesses(paneId: string, known?: KnownProcesses, viewed = false): Promise<{ pid: number; name?: string; argv0?: string; argv?: string[] }[]> {
+  let info: KnownProcesses;
+  if (known !== undefined) info = known;
+  else {
+    try {
+      info = (await herdrRpc<{ process_info?: ProcessInfo }>("pane.process_info", { pane_id: paneId })).process_info ?? null;
+    } catch { return []; /* herdr busy: the default store */ }
+  }
+  const front = (info?.foreground_processes ?? []).map(({ pid, name, argv0, argv }) => ({
+    pid, name, ...(typeof argv0 === "string" ? { argv0 } : {}), ...(Array.isArray(argv) ? { argv } : {}),
+  })).filter(isClaudeProcess);
+  if (viewed && info?.pane_id !== paneId) return [];
+  if (front.length > 0) return front;
+  const shell = info?.shell_pid;
+  if (process.platform === "win32") return typeof shell === "number" ? (await windowsShellClaude(shell).catch(() => null)) ?? [] : [];
+  const leader = info?.foreground_processes?.[0];
+  if (!servingCore() || leader === undefined || typeof leader.pid !== "number") return [];
+  const word = viewed ? null : hcAttachWord(leader.argv);
+  if (word !== null) return reachesOwnCore(leader.pid) ? claudeProcesses(word, undefined, true) : [];
+  return (await jobClaude(leader.pid)) ?? [];
 }
 
 /** The pid of the one Claude process in a pane's foreground, or null. */
@@ -1093,7 +1840,7 @@ export async function claudePanePid(pane: HerdrPane): Promise<number | null> {
  * finds it, names the session it shows, never the hook's. `onProcess` learns that process, and
  * whether it is such an attach client.
  */
-async function claudeTranscriptPath(paneId: string, cwds: readonly (string | null | undefined)[], onProcess?: (pid: number, attach: boolean) => void, known?: KnownProcesses): Promise<string> {
+async function claudeTranscriptPath(paneId: string, cwds: readonly (string | null | undefined)[], onProcess?: (pid: number, attach: boolean) => void, known?: KnownProcesses, proofs?: Map<string, string>): Promise<string> {
   const info = await herdrRpc<{ agent: { agent_session?: { value?: unknown } } }>("agent.get", { target: paneId });
   let session = info.agent.agent_session?.value;
   const home = userHome();
@@ -1124,7 +1871,7 @@ async function claudeTranscriptPath(paneId: string, cwds: readonly (string | nul
     session = live;
   }
   if (typeof session !== "string" || !SESSION_ID.test(session)) throw new ConversationUnavailable("no_session_id");
-  const path = await claudeTranscriptFile(home, session, cwds, configDir, live);
+  const path = await claudeTranscriptFile(home, session, cwds, configDir, live, proofs);
   // Claude writes the file with its first message: until then the session it reports holds nothing
   if (!path) throw new ConversationNotStarted(session, "claude-transcript");
   return path;
@@ -1214,12 +1961,16 @@ function ompBlobIdentity({ path, root, identity }: { path: string; root: string;
   } catch { return null; } finally { for (const entry of held) entry.close(); }
 }
 
-export async function ompTranscriptPath(paneId: string, cwd: string): Promise<{ path: string; blobs: string | null }> {
+/** `identity`: the authorized file's exact dev:ino (authorizedTranscript), so later reads can be held to it. */
+export async function ompTranscriptPath(paneId: string, cwd: string, known?: KnownProcesses): Promise<{ path: string; blobs: string | null; identity?: string }> {
   const info = await herdrRpc<{ agent: { agent_session?: { kind?: unknown; value?: unknown } } }>("agent.get", { target: paneId });
   const session = info.agent.agent_session;
   const path = session?.kind === "path" && typeof session.value === "string" ? session.value : null;
   const home = userHome();
-  const route = process.platform === "win32" ? null : await ompPaneRoute(paneId);
+  let route = process.platform === "win32" ? null : await ompPaneRoute(paneId, known);
+  // the caller's read named no omp (none in front, only the shell, or one gone since): an omp started after it may
+  // keep another store than the session herdr still reports, so the pane is asked again
+  if (route === null && known != null && process.platform !== "win32") route = await ompPaneRoute(paneId);
   // an omp whose store nothing proves, or two keeping different ones
   if (route === "unproved") throw new ConversationUnavailable("no_session_path");
   const store = route === null ? ompSessionStore(path, home) : path === null ? null : ompRouteStore(route, path);
@@ -1229,18 +1980,18 @@ export async function ompTranscriptPath(paneId: string, cwd: string): Promise<{ 
     if (unwritten !== null) throw new ConversationNotStarted(unwritten.id, "omp-transcript", unwritten.path);
     // the check above is lexical: a link out of the store is no transcript of this pane
     const inStore = authorizedTranscript(path, store);
-    if (inStore !== null && (route === null || ompRouteOwns(route, inStore.path, cwd))) return ompAuthorizedTranscript(inStore);
+    if (inStore !== null && (route === null || ompRouteOwns(route, inStore.path, cwd))) return { ...ompAuthorizedTranscript(inStore), identity: inStore.identity };
     if (route === null) throw new ConversationUnavailable("no_session_path");
   }
   // herdr names no session of this store (or another agent's): the pane's omp process does
-  const held = route === null ? null : ompRouteTranscript(route, cwd);
+  const held = route === null ? null : ompRouteTranscript(await ompHeldOpen(route, servingCore()), cwd);
   if (held === null) throw new ConversationUnavailable("no_session_path");
   // the held transcript is the pane's own, in the store its process keeps: authorized there, and read so
   const authorized = authorizedTranscript(held, route!.layout.sessions);
-  return authorized === null ? { path: held, blobs: null } : ompAuthorizedTranscript(authorized);
+  return authorized === null ? { path: held, blobs: null } : { ...ompAuthorizedTranscript(authorized), identity: authorized.identity };
 }
 
-/** A process-owned lifecycle registration, or a trusted report plus a unique held marker. */
+/** The process's live API selection, lifecycle registration, or trusted report plus a unique held marker. */
 async function copilotTranscriptPath(pane: HerdrPane, panes: readonly HerdrPane[], previousClaims?: ReadonlySet<string>, peerInfo?: Map<string, Awaited<ReturnType<typeof paneProcessInfo>> | null>): Promise<{ path: string; binding: string; peerClaims: ReadonlySet<string> }> {
   const report = pane.agent_session;
   // A request shares its peer snapshot across the read; the pane's own process
@@ -1248,10 +1999,11 @@ async function copilotTranscriptPath(pane: HerdrPane, panes: readonly HerdrPane[
   // With `peerInfo`, peers' processes come from (and fill) that cache, while their
   // lifecycle logs are read again here, after this pane's own binding.
   let peerClaims: Promise<ReadonlySet<string>> | undefined = previousClaims === undefined ? undefined : Promise.resolve(previousClaims);
+  // Peers are asked at once: each API read may wait out its own deadline, and they must not add up.
   const gatherPeerClaims = async (): Promise<Set<string>> => {
     const claims = new Set<string>();
-    for (const peer of panes) {
-      if (peer.pane_id === pane.pane_id || peer.agent !== "copilot") continue;
+    await Promise.all(panes.map(async (peer) => {
+      if (peer.pane_id === pane.pane_id || peer.agent !== "copilot") return;
       const cached = peerInfo?.has(peer.pane_id) === true;
       const info = cached ? peerInfo!.get(peer.pane_id) : await paneProcessInfo(peer.pane_id).catch(() => null);
       peerInfo?.set(peer.pane_id, info ?? null);
@@ -1259,29 +2011,65 @@ async function copilotTranscriptPath(pane: HerdrPane, panes: readonly HerdrPane[
       // A cached peer process that has exited may have been replaced by one we never asked about.
       if (cached && processes.some((entry) => typeof entry.pid === "number" && !processAlive(entry.pid))) throw new ConversationUnavailable("no_session_path", undefined, "copilot_peer_process_replaced");
       if (processes.length === 1 && typeof processes[0]?.pid === "number") {
+        const api = await readCopilotForeground(processes[0].pid);
+        if (api.state === "selected") {
+          claims.add(api.sessionId);
+          return;
+        }
+        // A peer whose API cannot answer still has its lifecycle log and report: one unreadable peer does not take Chat from this pane.
         const live = copilotProcessSession(processEnviron(processes[0].pid), processes[0].argv ?? [], processes[0].pid);
         if (live?.logged) {
           claims.add(live.sessionId);
-          continue;
+          return;
         }
       }
       if (peer.agent_session?.agent === "copilot" && peer.agent_session.kind === "id" && typeof peer.agent_session.value === "string") claims.add(peer.agent_session.value);
-    }
+    }));
     return claims;
   };
   const claimedByPeer = async (session: string): Promise<boolean> => (await (peerClaims ??= gatherPeerClaims())).has(session);
-  if (pane.agent !== "copilot" || (report != null && (report.agent !== "copilot" || report.kind !== "id"
-    || report.source !== "herdr:copilot" || typeof report.value !== "string" || !SESSION_ID.test(report.value)))) {
+  if (pane.agent !== "copilot") {
     throw new ConversationUnavailable("no_session_id", undefined, "copilot_report_invalid");
   }
   // A failed RPC does not prove an ownership change. Retry that read once; an answered
   // empty/conflicting process set still fails closed, as does a failed retry.
-  const info = await paneProcessInfo(pane.pane_id).catch(() => paneProcessInfo(pane.pane_id)).catch(() => null);
+  // Nor does a process herdr lists without its argv: herdr (0.9.3) leaves that out while the process is
+  // in uninterruptible sleep or exiting, so the set is asked for once more. A set still unread cannot
+  // say which processes are Copilot or which store their arguments name, so it fails closed.
+  const ask = () => paneProcessInfo(pane.pane_id).catch(() => paneProcessInfo(pane.pane_id)).catch(() => null);
+  const unread = (answer: Awaited<ReturnType<typeof ask>>) => answer?.foreground_processes?.some((entry) => !entry.argv?.length) === true;
+  const first = await ask();
+  const info = unread(first) ? await ask() : first;
   if (info === null) throw new ConversationUnavailable("no_session_path", undefined, "copilot_process_lookup_failed");
+  if (unread(info)) throw new ConversationUnavailable("no_session_path", undefined, "copilot_process_set_unproved");
   const processes = agentProcesses(info?.foreground_processes ?? [], "copilot");
   const foreground = processes[0];
   if (process.platform !== "linux" || ![1, 2].includes(processes.length) || typeof foreground?.pid !== "number") {
     throw new ConversationUnavailable("no_session_path", undefined, "copilot_process_set_unproved");
+  }
+  if (processes.length === 1) {
+    const api = await readCopilotForeground(foreground.pid);
+    if (api.state === "selected") {
+      const path = copilotApiTranscript(api.sessionId, processEnviron(foreground.pid), foreground.argv ?? []);
+      if (path === null) throw new ConversationUnavailable("no_session_path", undefined, "copilot_api_transcript_unproved");
+      // API checks yield: peers are read after this pane's selection, not from the pre-read snapshot,
+      // and this pane's selection is read once more after them.
+      peerClaims = undefined;
+      if (await claimedByPeer(api.sessionId)) throw new ConversationUnavailable("no_session_path", undefined, "copilot_peer_conflict");
+      const current = await readCopilotForeground(foreground.pid);
+      if (current.state !== "selected" || current.binding !== api.binding || current.sessionId !== api.sessionId) {
+        throw new ConversationUnavailable("no_session_path", undefined, "copilot_api_foreground_changed");
+      }
+      return { path, binding: `api:${foreground.pid}:${api.binding}`, peerClaims: await peerClaims! };
+    }
+    if (api.diagnostic !== "not_opted_in") throw new ConversationUnavailable("no_session_path", undefined, `copilot_api_${api.diagnostic}`);
+  }
+  // Copilot's API answered that it was started without --ui-server; with it, Chat would ask it which
+  // session it shows rather than prove that from files, so any failure below may be helped by the flag.
+  const hint = processes.length === 1 ? "copilot_ui_server" as const : undefined;
+  if (report != null && (report.agent !== "copilot" || report.kind !== "id"
+    || report.source !== "herdr:copilot" || typeof report.value !== "string" || !SESSION_ID.test(report.value))) {
+    throw new ConversationUnavailable("no_session_id", undefined, "copilot_report_invalid", hint);
   }
   if (processes.length === 2) {
     if (report == null) throw new ConversationUnavailable("no_session_id", undefined, "copilot_report_invalid");
@@ -1302,15 +2090,17 @@ async function copilotTranscriptPath(pane: HerdrPane, panes: readonly HerdrPane[
   }
   const environment = processEnviron(foreground.pid);
   const argv = foreground.argv ?? [];
-  const selected = copilotProcessSession(environment, argv, foreground.pid);
+  const resolution = readCopilotProcessSession(environment, argv, foreground.pid);
+  const selected = resolution.session;
   const logged = selected?.logged ? selected : null;
-  if (logged !== null && !(await claimedByPeer(logged.sessionId))) {
+  const peerConflict = logged !== null && await claimedByPeer(logged.sessionId);
+  if (logged !== null && !peerConflict) {
     const path = copilotTranscriptFile(logged.sessionId, selected);
     if (path !== null && nodePath.basename(nodePath.dirname(path)) === logged.sessionId)
       return { path, binding: `${foreground.pid}:${logged.generation}`, peerClaims: await peerClaims! };
   }
   if (report != null) {
-    if (await claimedByPeer(report.value)) throw new ConversationUnavailable("no_session_id", undefined, "copilot_peer_conflict");
+    if (await claimedByPeer(report.value)) throw new ConversationUnavailable("no_session_id", undefined, "copilot_peer_conflict", hint);
     if (logged === null) {
       const path = copilotTranscriptFile(report.value, selected);
       if (path !== null && nodePath.basename(nodePath.dirname(path)) === report.value)
@@ -1322,23 +2112,41 @@ async function copilotTranscriptPath(pane: HerdrPane, panes: readonly HerdrPane[
     && !(await claimedByPeer(pending.sessionId))) {
     throw new ConversationNotStarted(pending.sessionId, "copilot-transcript", pending.path);
   }
+  const diagnostic = resolution.diagnostic ?? (peerConflict ? "copilot_peer_conflict"
+    : logged !== null ? "copilot_transcript_unreadable"
+    : report == null ? "copilot_report_missing"
+    : selected?.sessionId !== report.value ? "copilot_report_mismatch" : "copilot_transcript_unreadable");
   throw new ConversationUnavailable(copilotExplicitResume(argv) ? "copilot_resume_unknown" : report == null ? "no_session_id" : "no_session_path",
-    undefined, copilotExplicitResume(argv) ? "copilot_resume_unproved" : "copilot_foreground_unproved");
+    undefined, diagnostic, hint);
 }
 
 /** Where a pane's conversation is: a transcript file, or a session in OpenCode's database. */
 type ResolvedTranscript =
-  | ({ path: string; codexHome?: string; agy?: AgyStore; piAgentDir?: string | null; ompBlobs?: string | null } & (
+  | ({ path: string; codexHome?: string; agy?: AgyStore; piAgentDir?: string | null; ompBlobs?: string | null;
+    /** omp: the exact dev:ino of the file its resolver authorized (ompTranscriptPath) */
+    ompFile?: string;
+    /** pi: the exact dev:ino of the file its resolver authorized (piTranscriptPath) */
+    piFile?: string;
+    /** gjc: the exact dev:ino of the file whose header its resolver read (gjcTranscriptFileForPane) */
+    gjcFile?: string;
+    /** omo: the exact dev:ino of the session file its lookup read (omoSessionForPane) */
+    omoFile?: string;
+    /** claude: the exact dev:ino of the file whose tail its resolver read (claudeTranscriptFile, #3402) */
+    claudeFile?: string;
+    /** codex: the exact dev:ino of the rollout its process holds open, where its resolver proved one (#3402) */
+    codexFile?: string; letta?: { store: string; agent: string; conversation: string } } & (
     | { source: Exclude<StreamSource, "copilot-transcript"> }
     | { source: "copilot-transcript"; binding: string; peerClaims: ReadonlySet<string> }
   ))
   | { source: "opencode-transcript"; path: string; session: string }
-  | { source: "hermes-transcript"; path: string; sessionId: string };
+  | { source: "hermes-transcript"; path: string; sessionId: string }
+  | ({ source: "dsh-transcript" } & DshTranscript)
+  | ({ source: "kiro-transcript" } & KiroTranscript);
 
 /** A native file or database session, resolved without parsing conversation turns. */
 export type NativeTranscript =
   | ResolvedTranscript
-  | { source: "devin-transcript"; path: string; session: string; cwd: string };
+  | { source: "devin-transcript"; path: string; session: string; cwd: string; binding?: string };
 
 /**
  * The store a pane's transcript lives in. herdr's agent label follows the
@@ -1359,20 +2167,38 @@ async function resolveTranscript(pane: HerdrPane, cwd: string, codexHome?: strin
     const info = known !== undefined ? { process_info: known ?? undefined } : await herdrRpc<{ process_info?: { shell_pid?: number; foreground_processes?: { argv?: unknown }[] } }>(
       "pane.process_info", { pane_id: paneId },
     ).catch(() => null);
-    const running = (info?.process_info?.foreground_processes ?? []).some((process) =>
+    const foreground = info?.process_info?.foreground_processes ?? [];
+    const running = foreground.some((process) =>
       isGjcProcess(Array.isArray(process.argv) ? process.argv.map(String) : []),
     );
+    // Preserve GJC's route even when it runs a dsh child in the same foreground group.
     if (running || await gjcPidUnderShell(info?.process_info?.shell_pid)) agent = "gjc";
+    // a dsh TUI that does not report to herdr (dsh-tui-pi): its launcher in front, read from this same
+    // probe, which the dsh binding then reuses; the lock that process holds still picks the session
+    else if (foreground.some((process) => Array.isArray(process.argv) && isDshProcess(process.argv))) {
+      agent = "dsh";
+      if (known === undefined) known = (info?.process_info as KnownProcesses) ?? null;
+    }
+    // herdr labels Kiro from its screen: before that shows, its chat TUI in front says the same
+    else if (foreground.some((process) => Array.isArray(process.argv) && isKiroChatProcess(process.argv))) {
+      agent = "kiro";
+      if (known === undefined) known = (info?.process_info as KnownProcesses) ?? null;
+    }
+    else if (await kiroCodexProcess(info?.process_info as ProcessInfo | undefined) !== null) agent = "codex";
   }
-  // a Muse or Letta pane's processes are asked for once, for omo and for its own binding
-  if ((agent === "muse" || agent === "letta") && known === undefined) known = (await paneProcessInfo(paneId).catch(() => undefined)) ?? null;
+  // a Muse, Letta, dsh or Kiro pane's processes are asked for once, for omo and for its own binding
+  if ((agent === "muse" || agent === "letta" || agent === "dsh" || agent === "dsh-tui" || agent === "kiro") && known === undefined) known = (await paneProcessInfo(paneId).catch(() => undefined)) ?? null;
   if (await paneRunsOmo(paneId, known)) {
-    return { source: "omo-transcript", path: await omoTranscriptPath(paneId, cwd, panes) };
+    const found = await omoTranscriptPath(paneId, cwd, panes);
+    return { source: "omo-transcript", path: found.path, ...(found.identity === undefined ? {} : { omoFile: found.identity }) };
   }
   // omp and GJC can change their own cwd without changing the pane's shell directory; their
   // session headers name the one they run in
   const sessionCwd = typeof pane.foreground_cwd === "string" && pane.foreground_cwd.length > 0 ? pane.foreground_cwd : cwd;
   try {
+    // dsh-tui reports itself to herdr as `dsh-tui`; the other dsh TUIs are found by their process above
+    if (agent === "dsh" || agent === "dsh-tui") return { source: "dsh-transcript", ...await resolveDshTranscript(known) };
+    if (agent === "kiro") return { source: "kiro-transcript", ...await resolveKiroTranscript(known) };
     if (agent === "copilot") return { source: "copilot-transcript", ...await copilotTranscriptPath(pane, panes ?? [pane]) };
     if (agent === "grok") {
       const found = await resolveGrokStore(pane, grokHome);
@@ -1389,7 +2215,7 @@ async function resolveTranscript(pane: HerdrPane, cwd: string, codexHome?: strin
       // no file yet is no proof the conversation has no turns (one begun elsewhere): Terminal stands in
       const found = await resolveLettaTranscript(pane, panes ?? [pane], known);
       if (found === null) throw new ConversationUnavailable("no_session_path");
-      return { source: "letta-transcript", path: found.path };
+      return { source: "letta-transcript", path: found.path, letta: { store: found.store, agent: found.agent, conversation: found.conversation } };
     }
     if (agent === "agy") {
       const found = await resolveAgyStore(pane);
@@ -1398,34 +2224,42 @@ async function resolveTranscript(pane: HerdrPane, cwd: string, codexHome?: strin
       try { transcriptExists = !!statSync(found.path, { throwIfNoEntry: false }); }
       catch { throw new ConversationUnavailable("transcript_missing"); }
       if (!transcriptExists) {
-        if (agyCatalog(found.path).size !== 0 || !sameAgyStore(found, await resolveAgyStore(pane))) throw new ConversationUnavailable("transcript_missing");
+        if ((await agyCatalogOffThread(found.path)).size !== 0 || !sameAgyStore(found, await resolveAgyStore(pane))) throw new ConversationUnavailable("transcript_missing");
         throw new ConversationNotStarted(found.session, "agy-transcript", found.path);
       }
       return { source: "agy-transcript", path: found.path, agy: found };
     }
     if (agent === "codex") {
       // the pane's own store: the rollout, its history and its images are all read from there
-      const home = await paneCodexHome(paneId, codexHome);
-      const path = await codexTranscriptPath(paneId, cwd, home, panes);
+      const { home, placed } = await paneCodexHomePlaced(paneId, codexHome, known);
+      // a store chosen while no Codex process of the pane was seen is checked against the one the lookup proves
+      const proofs = new Map<string, string>();
+      const path = await codexTranscriptPath(paneId, cwd, home, panes, !placed, placed && !codexHome, proofs);
       if (!path) throw new ConversationUnavailable("no_session_path");
-      return { source: "codex-transcript", path, codexHome: home };
+      const codexFile = proofs.get(path);
+      return { source: "codex-transcript", path, codexHome: home, ...(codexFile === undefined ? {} : { codexFile }) };
     }
     // Claude's project is the directory it started in, the process's own cwd more often than the pane's
     if (agent === "claude") {
-      const path = await claudeTranscriptPath(paneId, [cwd, pane.foreground_cwd], undefined, known);
-      return { source: "claude-transcript", path };
+      const proofs = new Map<string, string>();
+      const path = await claudeTranscriptPath(paneId, [cwd, pane.foreground_cwd], undefined, known, proofs);
+      const claudeFile = proofs.get(path);
+      return { source: "claude-transcript", path, ...(claudeFile === undefined ? {} : { claudeFile }) };
     }
     if (agent === "omp") {
-      const authorized = await ompTranscriptPath(paneId, sessionCwd);
-      return { source: "omp-transcript", path: authorized.path, ompBlobs: authorized.blobs };
+      const authorized = await ompTranscriptPath(paneId, sessionCwd, known);
+      return { source: "omp-transcript", path: authorized.path, ompBlobs: authorized.blobs, ompFile: authorized.identity };
     }
-    if (agent === "gjc") return { source: "gjc-transcript", path: await gjcTranscriptPath(paneId, sessionCwd) };
+    if (agent === "gjc") {
+      const found = await gjcTranscriptFile(paneId, sessionCwd, undefined, known);
+      return { source: "gjc-transcript", path: found.path, gjcFile: found.identity };
+    }
     // pi's own label only routes pi: an omo pane was taken above, by its process tree.
     if (agent === "pi") {
       const found = await piTranscriptPath(paneId, undefined, known === undefined ? {} : { processes: known?.foreground_processes ?? [] });
       if (found === null) throw new ConversationUnavailable("no_session_path");
       if ("unwritten" in found) throw new ConversationNotStarted(found.unwritten.id, "pi-transcript", found.unwritten.path);
-      return { source: "pi-transcript", path: found.path, piAgentDir: found.agentDir };
+      return { source: "pi-transcript", path: found.path, piAgentDir: found.agentDir, piFile: found.identity };
     }
     if (agent === "cmd") {
       const found = await cmdTranscriptPath(paneId);
@@ -1445,19 +2279,27 @@ async function resolveTranscript(pane: HerdrPane, cwd: string, codexHome?: strin
       const resolved = await hermesTranscriptForPane(pane, cwd, hermesHome);
       return { source: "hermes-transcript", path: resolved.dbPath, sessionId: resolved.sessionId };
     }
+    // Kimi's label, not a report an earlier agent left behind: the binding needs a process the pane owns
+    if ((agent === "kimi" || agent === "kimi-code") && pane.agent === "kimi") {
+      const path = await kimiTranscriptPathForPane(pane);
+      if (path === null) throw new ConversationUnavailable("no_session_path");
+      return { source: "kimi-transcript", path };
+    }
     throw new ConversationUnavailable("no_recognized_transcript");
   } catch (error) {
     if (error instanceof AgyUnavailable) throw new ConversationUnavailable("transcript_missing");
     if (!(error instanceof ConversationUnavailable) || !(await paneRunsOmo(paneId, known))) throw error;
-    return { source: "omo-transcript", path: await omoTranscriptPath(paneId, cwd, panes) };
+    const found = await omoTranscriptPath(paneId, cwd, panes);
+    return { source: "omo-transcript", path: found.path, ...(found.identity === undefined ? {} : { omoFile: found.identity }) };
   }
 }
 
-async function omoTranscriptPath(paneId: string, cwd: string, panes?: HerdrPane[]): Promise<string> {
+/** `identity`: the exact dev:ino of the session file omo's lookup read its header through. */
+async function omoTranscriptPath(paneId: string, cwd: string, panes?: HerdrPane[]): Promise<{ path: string; identity?: string }> {
   const session = await omoSessionForPane(paneId, cwd, panes ?? (await sessionSnapshot()).panes);
   if (session.pending !== null) throw new ConversationNotStarted(session.pending);
   if (!session.path) throw new ConversationUnavailable("no_session_path");
-  return session.path;
+  return { path: session.path, ...(session.identity === undefined ? {} : { identity: session.identity }) };
 }
 
 /**
@@ -1465,6 +2307,7 @@ async function omoTranscriptPath(paneId: string, cwd: string, panes?: HerdrPane[
  * `pane.process_info` for this pane that the caller read for this same look, so it is not asked again.
  */
 export async function paneTranscript(paneId: string, codexHome?: string, snapshot?: SessionSnapshot, devinDbPath?: string, opencodeDb?: string, hermesHome?: string, grokHome?: string, museData?: string, known?: KnownProcesses): Promise<NativeTranscript> {
+  const socket = herdrSocketPath();
   const panes = (snapshot ?? await sessionSnapshot()).panes;
   const pane = panes.find((candidate) => candidate.pane_id === paneId);
   if (pane === undefined) throw new ConversationUnavailable("pane_not_found");
@@ -1474,9 +2317,10 @@ export async function paneTranscript(paneId: string, codexHome?: string, snapsho
   if (pane.agent === "devin" && !(await paneRunsOmo(paneId, known))) {
     const cwd = pane.foreground_cwd || pane.cwd;
     const storePath = devinDbPath ?? defaultDevinDbPath();
-    const info = known !== undefined ? { process_info: known ?? undefined } : await herdrRpc<{ process_info?: { foreground_processes?: { argv?: unknown }[] } }>(
+    const info = known !== undefined ? { process_info: known ?? undefined } : await herdrRpc<{ process_info?: { foreground_processes?: { pid?: number; argv?: unknown }[] } }>(
       "pane.process_info", { pane_id: paneId },
     ).catch(() => null);
+    if (herdrSocketPath() !== socket) throw new ConversationUnavailable("no_session_id");
     const processes = (info?.process_info?.foreground_processes ?? []).filter((process) =>
       Array.isArray(process.argv) && process.argv.every((arg) => typeof arg === "string") &&
       isDevinProcess(process.argv as string[]) && process.argv[1] !== "acp",
@@ -1485,12 +2329,27 @@ export async function paneTranscript(paneId: string, codexHome?: string, snapsho
     // No Devin runs under the label: what does run is resolved below, as it was before this
     // reader (an omo is found by its process tree, whatever herdr calls the pane).
     if (processes.length === 1) {
-      const session = devinSessionForPane(pane, panes, processes[0]!.argv as string[]);
-      return { source: "devin-transcript", path: storePath, session, cwd };
+      const foreground = processes[0]!;
+      // the live lock names a fresh session; where there is no lock to read (no session_locks in an
+      // older Devin, a symlinked store, no lock taken yet) an explicitly named session reads as
+      // before. Evidence that is read and does not hold up (two locks, a foreign owner) refuses, and
+      // so does a lock naming another session than the pane names (devinSessionForPane)
+      let proof: DevinLockProof | undefined;
+      if (process.platform === "linux" && typeof foreground.pid === "number") {
+        try { proof = devinLockProof(foreground.pid, storePath); } catch (error) {
+          if (!(error instanceof DevinLockMissing)) throw error;
+        }
+      }
+      const session = devinSessionForPane(pane, panes, foreground.argv as string[], proof?.session);
+      if (proof !== undefined) {
+        const again = devinLockProof(foreground.pid!, storePath);
+        if (again.session !== proof.session || again.binding !== proof.binding) throw new ConversationUnavailable("no_session_id");
+      }
+      return noteBinding(paneId, { source: "devin-transcript", path: storePath, session, cwd, binding: JSON.stringify([socket, proof?.binding ?? null]) });
     }
   }
 
-  return resolveTranscript(pane, pane.cwd, codexHome, panes, opencodeDb, hermesHome, grokHome, museData, known);
+  return noteBinding(paneId, await resolveTranscript(pane, pane.cwd, codexHome, panes, opencodeDb, hermesHome, grokHome, museData, known));
 }
 
 /**
@@ -1526,6 +2385,7 @@ async function bottomViewport(paneId: string): Promise<string> {
  * `opencodeDb` is OpenCode's store, unset where OpenCode itself would find it.
  */
 export async function paneConversation(paneId: string, codexHome?: string, page: ConversationPage = {}, devinDbPath?: string, opencodeDb?: string, hermesHome?: string, grokHome?: string, museData?: string): Promise<RecognizedConversation> {
+  const socket = herdrSocketPath();
   const snapshot = await sessionSnapshot();
   let resolved: NativeTranscript;
 
@@ -1548,9 +2408,11 @@ export async function paneConversation(paneId: string, codexHome?: string, page:
     if (writtenSessions.has(`${error.source}\0${error.identity}`)) throw new ConversationUnavailable("transcript_missing");
     // nothing comes before a conversation not begun: a cursor into it is another one's
     if (page.before !== undefined || page.since !== undefined || page.from !== undefined) throw new HistoryChanged();
-    // an agent at work on its first turn has written nothing yet, but its terminal shows the turn
+    // an agent at work on its first turn has written nothing yet, but its terminal shows the turn.
+    // Claude writes its file with the first message, so at work with none it has no turn yet: a
+    // /clear reports working for a moment (#2550)
     const status = snapshot.panes.find((pane) => pane.pane_id === paneId)?.agent_status;
-    if (status === "working" || status === "blocked") throw error;
+    if ((status === "working" && error.source !== "claude-transcript") || status === "blocked") throw error;
     // the chat says there is nothing yet; the session's first prompt writes the file and
     // the next refresh's history_id differs, so the chat takes it whole
     return notBegun(error.source, `unwritten:${error.sessionId}`);
@@ -1564,8 +2426,17 @@ export async function paneConversation(paneId: string, codexHome?: string, page:
     if (!(error instanceof ConversationUnavailable)) throw error;
     const pane = snapshot.panes.find((candidate) => candidate.pane_id === paneId);
     if (pane === undefined) { launchedAgents.forget(paneId); throw error; }
-    if (pane.agent === "copilot" && (page.before !== undefined || page.since !== undefined || page.from !== undefined)) throw new HistoryChanged();
-    if (pane.agent === "copilot") throw error;
+    if (pane.agent === "copilot") {
+      // A chat that names the history it shows may wait out a rejection that says nothing of that
+      // history's end, while herdr reports no other session than the one that history was read from
+      const shown = copilotBindings.get(paneId);
+      const reported = pane.agent_session?.value;
+      const moved = copilotRecoverable(error.diagnostic) && page.history_id !== undefined
+        && (shown === undefined || !page.history_id.startsWith(shown.prefix) || (reported != null && reported !== shown.session));
+      const waits = page.history_id !== undefined && copilotRecoverable(error.diagnostic) && !moved;
+      if ((page.before !== undefined || page.since !== undefined || page.from !== undefined) && !waits) throw new HistoryChanged();
+      throw moved ? new ConversationUnavailable(error.message, error.screen, "copilot_report_mismatch", error.hint) : error;
+    }
     // an agent this server started writes no session before its first message (launched-agents.ts)
     const launch = launchedAgents.notBegun(paneId, pane.agent_status);
     if (launch === null) {
@@ -1588,9 +2459,21 @@ export async function paneConversation(paneId: string, codexHome?: string, page:
     if (page.before !== undefined || page.since !== undefined || page.from !== undefined) throw new HistoryChanged();
     return await notBegun(launch.source, launch.historyId);
   }
+  if (resolved.source === "dsh-transcript") {
+    rememberPaneRead(paneId, resolved.path);
+    return await dshConversation(resolved, page);
+  }
+  if (resolved.source === "kiro-transcript") {
+    rememberPaneRead(paneId, resolved.path);
+    return await kiroConversation(resolved, page);
+  }
   if (resolved.source === "devin-transcript") {
     try {
+      if (herdrSocketPath() !== socket) throw new ConversationUnavailable("no_session_id");
       const answer = devinConversation(resolved.session, resolved.cwd, page, resolved.path);
+      const fresh = await paneTranscript(paneId, codexHome, undefined, devinDbPath, opencodeDb, hermesHome, grokHome, museData);
+      if (fresh.source !== "devin-transcript" || fresh.session !== resolved.session || fresh.path !== resolved.path
+        || fresh.cwd !== resolved.cwd || fresh.binding !== resolved.binding) throw new ConversationUnavailable("no_session_id");
       rememberPaneDevin(paneId, resolved.session, resolved.cwd, resolved.path);
       return answer;
     } catch (error) {
@@ -1620,17 +2503,38 @@ export async function paneConversation(paneId: string, codexHome?: string, page:
       throw error;
     }
   }
-  const identity = resolved.source === "agy-transcript" || resolved.source === "copilot-transcript" || resolved.source === "letta-transcript" ? resolved.path
-    : resolved.source === "claude-transcript" ? nodePath.basename(resolved.path, ".jsonl")
-    : resolved.source === "pi-transcript" || resolved.source === "cmd-transcript" || resolved.source === "omp-transcript" ? realpathSync(resolved.path) : null;
-  rememberPaneRead(paneId, resolved.path);
-  const history = resolved.source === "copilot-transcript" ? copilotHistoryIdentity(resolved.path) : null;
-  const prefix = history !== null && resolved.source === "copilot-transcript" ? copilotPrefix(paneId, `${resolved.binding}\0${history}`) : null;
+  // the page read below digests the transcript (transcriptGeneration): readSettled reads that off the
+  // event loop first. A pane closed meanwhile (forgetPaneTranscriptState) or a herdr session left is not
+  // read or recorded, and a pane bound to another transcript since is not answered (below)
+  const transcript = resolved;
+  const forgetsBefore = forgets;
+  const live = (): boolean => herdrSocketPath() === socket && !forgottenSince(paneId, forgetsBefore);
+  // set by the read below, in a closure the checker does not follow
+  let history = null as string | null;
+  let prefix = null as string | null;
   let answer: RecognizedConversation;
   try {
-    answer = transcriptPage(resolved.source, resolved.path, prefix === null ? page : copilotPage(page, prefix), resolved.codexHome ?? codexHome, resolved.piAgentDir);
+    const settled = await readSettled({ path: transcript.path, checkWindow: transcript.source === "muse-transcript", live }, () => {
+      rememberPaneRead(paneId, transcript.path);
+      if (transcript.source === "agy-transcript") return null;
+      history = transcript.source === "copilot-transcript" ? copilotHistoryIdentity(transcript.path) : null;
+      prefix = history !== null && transcript.source === "copilot-transcript" ? copilotPrefix(paneId, `${transcript.binding}\0${history}`, transcript.path) : null;
+      return transcriptPage(transcript.source, transcript.path, prefix === null ? page : copilotPage(page, prefix), transcript.codexHome ?? codexHome, transcript.piAgentDir);
+    });
+    if (settled === null) throw new ConversationUnavailable("no_session_id");
+    answer = settled.value ?? await agyTranscriptPage(resolved.path, page, resolved.codexHome ?? codexHome);
   } catch (error) {
-    if (resolved.source !== "copilot-transcript" || prefix === null || !(error instanceof ConversationUnavailable) || error.message !== "transcript_missing") throw error;
+    // a growth no digest checked is the same file: it is pending, with no recovery that would digest it here
+    const refused = (error instanceof ConversationReadPending && !(error instanceof RevisionUnchecked)) || (error instanceof ConversationUnavailable && error.message === "transcript_missing");
+    if (resolved.source !== "copilot-transcript" || !refused) throw error;
+    // refused before its read (readSettled: the path names another file than the one authorized, as
+    // after a replacement by rename): the history is the one the path names now, as a read beginning
+    // now would bind it, and a cursor from another one has changed history
+    if (prefix === null) {
+      try { history = copilotHistoryIdentity(resolved.path); } catch { throw error; }
+      prefix = copilotPrefix(paneId, `${resolved.binding}\0${history}`, resolved.path);
+      copilotPage(page, prefix);
+    }
     const paged = page.before !== undefined || page.since !== undefined || page.from !== undefined;
     // Unpaged refreshes otherwise carry no proof of which history is on screen: older
     // clients without it keep their fail-closed fallback, with no recheck to wait on.
@@ -1657,6 +2561,24 @@ export async function paneConversation(paneId: string, codexHome?: string, page:
     if (page.history_id !== undefined && !page.history_id.startsWith(prefix)) throw new HistoryChanged();
     throw new ConversationReadPending();
   }
+  // settling awaited after the transcript was resolved: a pane bound to another one since (a new session,
+  // another agent) has not this answer. A pane seen bound elsewhere meanwhile is refused at once; any
+  // other is resolved again (one more resolution per read), since nothing in Ovis may have looked at it,
+  // and that resolution's own failure or not-begun session is the answer. Copilot's binding is checked
+  // after its read below.
+  if (transcript.source !== "copilot-transcript") {
+    if (!live() || rebound(paneId, transcript)) throw new ConversationUnavailable("no_session_id");
+    let fresh: NativeTranscript;
+    try { fresh = await paneTranscript(paneId, codexHome, undefined, devinDbPath, opencodeDb, hermesHome, grokHome, museData); }
+    catch (error) {
+      if (error instanceof ConversationNotStarted) return await onNotStarted(error);
+      throw error;
+    }
+    if (fresh.source !== transcript.source || fresh.path !== transcript.path || !live()) throw new ConversationUnavailable("no_session_id");
+  }
+  const identity = resolved.source === "agy-transcript" || resolved.source === "copilot-transcript" || resolved.source === "letta-transcript" || resolved.source === "kimi-transcript" ? resolved.path
+    : resolved.source === "claude-transcript" ? nodePath.basename(resolved.path, ".jsonl")
+    : resolved.source === "pi-transcript" || resolved.source === "cmd-transcript" || resolved.source === "omp-transcript" ? realpathSync(resolved.path) : null;
   const status = snapshot.panes.find((pane) => pane.pane_id === paneId)?.agent_status;
   if (resolved.source === "grok-transcript" && answer.turns.length === 0 && page.before === undefined
     && (status === "working" || status === "blocked")) {
@@ -1667,6 +2589,15 @@ export async function paneConversation(paneId: string, codexHome?: string, page:
   }
   if (resolved.agy && !sameAgyStore(resolved.agy, await resolveAgyStore(snapshot.panes.find((pane) => pane.pane_id === paneId)!))) throw new ConversationUnavailable("no_session_path");
   if (identity !== null) { writtenSessions.add(`${resolved.source}\0${identity}`); rememberPaneSession(paneId, `${resolved.source}\0${identity}`); }
+  if (resolved.source === "claude-transcript" && identity !== null && answer.metadata.context) {
+    const window = readStatuslineContext(userHome(), identity, answer.metadata.model, resolved.path);
+    if (window !== null) return {
+      ...answer,
+      metadata: { ...answer.metadata, context: { ...answer.metadata.context, window } },
+      // A statusline capture can change without a transcript append.
+      version: answerVersion(answer.version, String(window)),
+    };
+  }
   if (resolved.source === "cmd-transcript") {
     // The pane's current model can change without a transcript append. Enrich a response,
     // never the shared transcript page, and include the live model in its ETag.
@@ -1676,6 +2607,18 @@ export async function paneConversation(paneId: string, codexHome?: string, page:
       ...answer,
       metadata: { ...answer.metadata, model },
       version: answerVersion(answer.version, model),
+    };
+  }
+  if (resolved.source === "letta-transcript" && resolved.letta) {
+    // Letta's transcript names no model, and /model writes no turn: its local store holds the
+    // setting (lettaLocalSettings). Enrich a response, never the shared transcript page, and include
+    // the setting in its ETag.
+    const { store, agent, conversation } = resolved.letta;
+    const settings = lettaLocalSettings(store, agent, conversation);
+    if (settings !== null && (settings.model !== null || settings.reasoning_effort !== null)) return {
+      ...answer,
+      metadata: { ...answer.metadata, ...settings },
+      version: answerVersion(answer.version, `${settings.model}\0${settings.reasoning_effort}`),
     };
   }
   if (resolved.source === "grok-transcript") {
@@ -1747,7 +2690,18 @@ export async function readCommandTranscript(paneId: string, codexHome?: string, 
   const { source, path } = resolved;
   if (source !== "claude-transcript" && source !== "codex-transcript" && source !== "pi-transcript"
     && source !== "omp-transcript" && source !== "omo-transcript" && source !== "gjc-transcript") return null;
-  const stat = statSync(path);
+  // one exact stat: a file the resolver itself authorized (omp, pi, gjc, omo) is the only one read, compared whole as
+  // Windows' file indexes need; omp's answer for a file it could not authorize names none, and is not read.
+  // The read below is held to this stat's exact file (#3398)
+  const exact = statSync(path, { bigint: true });
+  const authorized = resolved.source === "omp-transcript" ? resolved.ompFile : resolved.source === "pi-transcript" ? resolved.piFile
+    : resolved.source === "gjc-transcript" ? resolved.gjcFile : resolved.source === "omo-transcript" ? resolved.omoFile
+    // claude and codex: checked only where the resolver proved one (a non-branch tail; a held-open rollout). A
+    // branch, a screen match, or a remembered, reported or resumed rollout keeps the exact stat below (#3402)
+    : resolved.source === "claude-transcript" ? resolved.claudeFile
+    : resolved.source === "codex-transcript" ? resolved.codexFile : undefined;
+  if ((authorized !== undefined || source === "omp-transcript") && authorized !== `${exact.dev}:${exact.ino}`) return null;
+  const stat = { dev: exact.dev, ino: exact.ino, size: Number(exact.size), mtimeMs: Number(exact.mtimeNs) / 1e6 };
   const file = `${source}:${stat.dev}:${stat.ino}`;
   const signature = `${source}\0${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeMs}`;
   const cached = commandTranscripts.get(path);
@@ -1758,10 +2712,14 @@ export async function readCommandTranscript(paneId: string, codexHome?: string, 
   // Every byte is read over (a short read gives up), so it need not be zeroed first.
   const start = windowStart(stat.size);
   const bytes = Buffer.allocUnsafe(stat.size - start);
-  const fd = openSync(path, "r");
+  // read through the file the stat above named: another one swapped in for this open is no outcome (#3398)
   try {
-    if (readSync(fd, bytes, 0, bytes.length, start) !== bytes.length) return null;
-  } finally { closeSync(fd); }
+    const read = readBound([[path, stat]], () => {
+      const fd = openBound(path);
+      try { return readSync(fd, bytes, 0, bytes.length, start); } finally { closeSync(fd); }
+    });
+    if (read !== bytes.length) return null;
+  } catch (error) { if (error instanceof ConversationReadPending) return null; throw error; }
   let from = start;
   if (start > 0) {
     const newline = bytes.indexOf(0x0a);
@@ -1871,22 +2829,32 @@ function runsOnFromCut(leaf: string, path: readonly CommandTranscriptRecord[], f
  * One page of a resolved transcript (paneConversation's `page`). `piAgentDir` is the pane's pi
  * agent directory, whose catalogs state a pi model's context window (parseConversationMetadata).
  */
-export function transcriptPage(source: StreamSource, path: string, page: ConversationPage = {}, codexHome?: string, piAgentDir?: string | null): RecognizedConversation {
-  if (source === "copilot-transcript") {
-    let fd: number;
-    try { fd = openCopilotFile(path); }
-    catch { throw new ConversationUnavailable("transcript_missing"); }
-    try { return transcriptPageRead(source, path, page, codexHome, undefined, fd, piAgentDir); }
-    finally { closeSync(fd); }
-  }
-  if (source === "agy-transcript") {
-    try { return withAgyHistory(path, (projection, fd) => ({ ...transcriptPageRead(source, path, page, codexHome, projection, fd), activity: projection.activity })); }
-    catch (error) {
-      if (error instanceof HistoryChanged || error instanceof ConversationUnavailable) throw error;
-      throw new ConversationUnavailable("transcript_missing");
+export function transcriptPage(source: Exclude<StreamSource, "agy-transcript">, path: string, page: ConversationPage = {}, codexHome?: string, piAgentDir?: string | null): RecognizedConversation {
+  // the files the page opens are held to the ones it began with (transcriptPageRead binds them)
+  return readBound([], () => {
+    if (source === "copilot-transcript") {
+      let fd: number;
+      try { fd = openCopilotFile(path); }
+      catch (error) {
+        // another file than the one the read is bound to: pending, not a missing transcript
+        if (error instanceof ConversationReadPending) throw error;
+        throw new ConversationUnavailable("transcript_missing");
+      }
+      try { return transcriptPageRead(source, path, page, codexHome, undefined, fd, piAgentDir); }
+      finally { closeSync(fd); }
     }
+    return transcriptPageRead(source, path, page, codexHome, undefined, undefined, piAgentDir);
+  });
+}
+
+/** One page of an Agy ledger (transcriptPage), whose catalog is read on a file thread (#2706). */
+export async function agyTranscriptPage(path: string, page: ConversationPage = {}, codexHome?: string): Promise<RecognizedConversation> {
+  try { return await withAgyHistory(path, (projection, fd) => ({ ...transcriptPageRead("agy-transcript", path, page, codexHome, projection, fd), activity: projection.activity })); }
+  catch (error) {
+    // every file thread busy: worth another try soon (http.ts answers 503)
+    if (error instanceof HistoryChanged || error instanceof ConversationUnavailable || error instanceof FileBusyError) throw error;
+    throw new ConversationUnavailable("transcript_missing");
   }
-  return transcriptPageRead(source, path, page, codexHome, undefined, undefined, piAgentDir);
 }
 
 function transcriptPageRead(source: StreamSource, path: string, page: ConversationPage, codexHome?: string, agy?: AgyProjection, fd?: number, piAgentDir?: string | null): RecognizedConversation {
@@ -1900,14 +2868,16 @@ function transcriptPageRead(source: StreamSource, path: string, page: Conversati
   } catch {
     throw new ConversationUnavailable("transcript_missing");
   }
+  // every other open of it in this page is held to this file, unless the caller bound it already
+  bindFile(path, stat);
   let stream: TranscriptStream;
   try {
     stream = transcriptStream(source, path, stat, codexHome ?? defaultCodexHome(), agy, fd);
     applyHistoryBoundary(path, stream, source);
   } catch (error) {
     // a branch that cannot be walked says so; a file that went unreadable mid-read has
-    // one answer, and an unreadable branch has its own
-    if (error instanceof ConversationUnavailable) throw error;
+    // one answer, and an unreadable branch has its own; a revision left unchecked is pending
+    if (error instanceof ConversationUnavailable || error instanceof ConversationReadPending) throw error;
     throw new ConversationUnavailable("transcript_missing");
   }
   // an older page never changes while its file and the rollouts before it stay the same
@@ -1922,8 +2892,10 @@ function transcriptPageRead(source: StreamSource, path: string, page: Conversati
   const cached = cache.get(key);
   // the answer is a function of the page asked for and the file's state, so they name it
   const version = answerVersion(key, signature);
+  // the file's size as it was read (in `signature`): the newest page says it, an older one need not
+  const size = page.before === undefined ? { transcript_bytes: stat.size } : {};
   if (cached?.signature === signature) {
-    return { source, turns: cached.turns, metadata: cached.metadata, cursor: cached.cursor, abandoned: cached.abandoned, history_id: stream.id, version };
+    return { source, turns: cached.turns, metadata: cached.metadata, cursor: cached.cursor, abandoned: cached.abandoned, history_id: stream.id, version, ...size };
   }
 
   let start: number;
@@ -1947,27 +2919,42 @@ function transcriptPageRead(source: StreamSource, path: string, page: Conversati
       // page has moved past it, the chat gets the newest page and fetches the turns
       // in between with `before` + `since`: no poll reads more than a page.
       if (newest !== null) {
+        // a turn the window holds the start of again: a later one outgrowing it is found afresh
+        if (source === "copilot-transcript") forgetCopilotTurns(path);
         start = held !== null && held >= newest.start ? held : newest.start;
         live = liveTurns(path, stream, source, start, newest.starts, piAgentDir);
         text = "";
       } else {
-        // no turn starts in the window: the page begins mid-turn, read whole as before
-        const whole = pageBefore(stream, source, stream.length, { widen: false, prompts: pagePrompts(page) });
-        start = held !== null && held >= whole.start ? held : whole.start;
-        text = whole.bytes.subarray(start - whole.start).toString("utf8");
+        // no turn starts in the window: the page begins mid-turn, read whole as before; a Copilot
+        // page reaches back to its turn's start (COPILOT_PAGE_BYTES) and reads only what was appended since
+        if (source === "copilot-transcript") {
+          const turn = copilotNewestTurn(path, stream, pagePrompts(page));
+          start = held !== null && held >= turn.start ? held : turn.start;
+          text = turn.lines.filter(({ at }) => at >= start).map(({ line }) => `${line}\n`).join("") + turn.partial;
+        } else {
+          const whole = pageBefore(stream, source, stream.length, { widen: false, prompts: pagePrompts(page) });
+          start = held !== null && held >= whole.start ? held : whole.start;
+          text = whole.bytes.subarray(start - whole.start).toString("utf8");
+        }
       }
     }
     if (live === null && page.before === undefined && start > stream.floor) head = metadataHead(path, stream, source, start);
     cursor = formatCursor(stream, start);
   } catch (error) {
-    if (error instanceof HistoryChanged || error instanceof ConversationUnavailable) throw error;
+    // another file than one the page is bound to (openBound) is pending, not a missing transcript
+    if (error instanceof HistoryChanged || error instanceof ConversationUnavailable || error instanceof ConversationReadPending) throw error;
     throw new ConversationUnavailable("transcript_missing");
   }
 
   // the store decides the parser, not the pane's label: omo writes omp's
   // session shape while herdr may be calling that same pane `claude`. The page
   // bounds the turns, so none are cut: they must meet the next page exactly.
-  const turns = live?.turns ?? parseTurns(source, path, text, undefined, undefined, start);
+  // a page is parsed in stretches (before and after the newest turn start), and OmO's goal wait is
+  // only ever the conversation's last word: on an older page, or anywhere but the end, it is over
+  const parsed = live?.turns ?? parseTurns(source, path, text, undefined, undefined, start);
+  const turns = parsed.some((turn, index) => turn.parts[0]?.kind === "goal_wait" && (page.before !== undefined || index < parsed.length - 1))
+    ? parsed.filter((turn, index) => turn.parts[0]?.kind !== "goal_wait" || (page.before === undefined && index === parsed.length - 1))
+    : parsed;
   const metadata = live?.metadata ?? parseConversationMetadata(`${head}\n${text}`, source, undefined, piAgentDir);
   // Record the stat from BEFORE the read: an append during parsing must cause
   // another read on the next poll, not permanently cache a torn tail.
@@ -1976,7 +2963,7 @@ function transcriptPageRead(source: StreamSource, path: string, page: Conversati
   // straight line answers { count: 0 }, which is most sessions and costs the client nothing
   const abandoned = (source === "pi-transcript" || source === "cmd-transcript") ? piAbandonedTurns(path, stat.size) ?? undefined : undefined;
   rememberPage(cache, key, { source, signature, turns, metadata, cursor, abandoned }, 32);
-  return { source, turns, metadata, cursor, abandoned, history_id: stream.id, version };
+  return { source, turns, metadata, cursor, abandoned, history_id: stream.id, version, ...size };
 }
 
 /**
@@ -1988,30 +2975,55 @@ function transcriptPageRead(source: StreamSource, path: string, page: Conversati
  * picture a tool returned by its call (`codex-tool:<call id>:<nth picture>`); omp names its pictures
  * as pi does.
  */
-export async function conversationImage(paneId: string, ref: string, codexHome?: string, opencodeDb?: string): Promise<{ mediaType: string; bytes: Uint8Array<ArrayBuffer> } | null> {
-  if (!CLAUDE_IMAGE_REF.test(ref) && !CODEX_IMAGE_REF.test(ref) && !CODEX_TOOL_IMAGE_REF.test(ref) && !PI_IMAGE_REF.test(ref) && !PI_PROMPT_IMAGE_REF.test(ref) && !OPENCODE_IMAGE_REF.test(ref)) return null;
+export async function conversationImage(paneId: string, ref: string, codexHome?: string, opencodeDb?: string, grokHome?: string): Promise<{ mediaType: string; bytes: Uint8Array<ArrayBuffer> } | null> {
+  if (!CLAUDE_IMAGE_REF.test(ref) && !CODEX_IMAGE_REF.test(ref) && !CODEX_TOOL_IMAGE_REF.test(ref) && !PI_IMAGE_REF.test(ref) && !PI_PROMPT_IMAGE_REF.test(ref) && !OPENCODE_IMAGE_REF.test(ref) && !GROK_IMAGE_REF.test(ref) && !COPILOT_IMAGE_REF.test(ref)) return null;
   const snapshot = await sessionSnapshot();
   const pane = snapshot.panes.find((candidate) => candidate.pane_id === paneId);
   if (pane === undefined || typeof pane.cwd !== "string" || pane.cwd.length === 0) return null;
   let resolved: ResolvedTranscript;
-  try { resolved = await resolveTranscript(pane, pane.cwd, codexHome, snapshot.panes, opencodeDb); }
+  try { resolved = await resolveTranscript(pane, pane.cwd, codexHome, snapshot.panes, opencodeDb, undefined, grokHome); }
   catch (error) { if (error instanceof ConversationUnavailable) return null; throw error; }
   // OpenCode's store is read per request and keeps nothing for the pane to release
   if (resolved.source === "opencode-transcript") return opencodeImage(resolved.path, resolved.session, ref);
   rememberPaneRead(paneId, resolved.path);
   if (resolved.source === "codex-transcript") {
     if (CODEX_TOOL_IMAGE_REF.test(ref)) return codexToolImage(resolved.path, ref, resolved.codexHome ?? codexHome ?? defaultCodexHome());
-    return codexTranscriptImage(codexHistorySegments(resolved.path, resolved.codexHome ?? codexHome), ref, pane.cwd);
+    return codexPromptImage(resolved.path, ref, pane.cwd, resolved.codexHome ?? codexHome);
   }
-  if (resolved.source === "pi-transcript" || resolved.source === "cmd-transcript") return piTranscriptImage(resolved.path, ref);
+  if (resolved.source === "pi-transcript" || resolved.source === "cmd-transcript") return readAuthorized(resolved.path, () => piTranscriptImage(resolved.path, ref));
+  // omo writes its pictures inline and its page reads the file in one line, as omp's does (#3420): read so, held
+  // to the exact file its resolver proved where it proved one
+  if (resolved.source === "omo-transcript") {
+    const [dev, ino] = resolved.omoFile === undefined ? [] : resolved.omoFile.split(":").map(BigInt);
+    return ompTranscriptImage(resolved.path, ref, null, "omo-transcript", dev === undefined || ino === undefined ? undefined : { dev, ino });
+  }
+  // the update log the pane's own Grok holds (resolveGrokStore), read only over its active history
+  if (resolved.source === "grok-transcript") return grokImage(resolved.path, ref);
+  // the session file the pane's own process holds (copilotTranscriptPath), opened pinned as the page reads it
+  if (resolved.source === "copilot-transcript") return copilotImage(resolved.path, ref);
   // the store is held to the identity it had where the transcript was authorized (ompAuthorizedTranscript):
   // a path above it swapped since cannot move the read elsewhere
   if (resolved.source === "omp-transcript") return ompTranscriptImage(resolved.path, ref, resolved.ompBlobs ?? null);
-  return resolved.source === "claude-transcript" ? transcriptImage(resolved.path, ref) : null;
+  return resolved.source === "claude-transcript" ? transcriptImageAsync(resolved.path, ref) : null;
+}
+
+/**
+ * A picture a Codex prompt holds (codexTranscriptImage), over the history the live rollout names as the
+ * lookup begins: its chain is discovered with that rollout bound (another file at its path, swapped in around
+ * an open, names no parent), and every rollout is then read as the file it was then. Null otherwise.
+ */
+export async function codexPromptImage(path: string, ref: string, cwd: string, codexHome?: string): Promise<{ mediaType: string; bytes: Uint8Array<ArrayBuffer> } | null> {
+  const authorized = authorizedFile(path);
+  if (authorized === null) return null;
+  let segments: HistorySegment[];
+  try { segments = readBound([[path, authorized]], () => codexHistorySegments(path, codexHome)); } catch { return null; }
+  return codexTranscriptImage(segments.map((segment) => segment.path === path ? { ...segment, identity: authorized } : segment), ref, cwd);
 }
 
 /** How much of a transcript the image endpoint reads at a time while it looks for a ref's entry. */
 const IMAGE_SEARCH_WINDOW = 1024 * 1024;
+/** The first stretch before a tool's result its call is looked for in (answersDrawnCallSteps). */
+const CALL_SEARCH_START = 64 * 1024;
 
 /** The short escapes JSON has for some characters inside a string. */
 const JSON_SHORT_ESCAPES: Readonly<Record<string, string>> = { '"': '\\"', "\\": "\\\\", "/": "\\/", "\b": "\\b", "\f": "\\f", "\n": "\\n", "\r": "\\r", "\t": "\\t" };
@@ -2022,10 +3034,16 @@ const JSON_SHORT_ESCAPES: Readonly<Record<string, string>> = { '"': '\\"', "\\":
  * stretch of bytes it can match.
  */
 function jsonTextPattern(text: string): { pattern: RegExp; span: number } {
+  return finish(jsonTextPatternSteps(text));
+}
+
+function* jsonTextPatternSteps(text: string): Steps<{ pattern: RegExp; span: number }> {
   const literal = (bytes: string) => bytes.replace(/[\\^$.*+?()[\]{}|/-]/g, "\\$&");
   let source = "";
   let span = 0;
+  let characters = 0;
   for (const char of text) {
+    if (++characters % 1024 === 0) yield;
     const forms: string[] = [];
     if (char !== '"' && char !== "\\" && char.codePointAt(0)! >= 0x20) forms.push(literal(Buffer.from(char, "utf8").toString("latin1")));
     const short = JSON_SHORT_ESCAPES[char];
@@ -2042,28 +3060,28 @@ function jsonTextPattern(text: string): { pattern: RegExp; span: number } {
 /**
  * Where the lines `text` is in (as JSON writes it, jsonTextPattern) lie in [from, to) of the stream,
  * found a window at a time, so a transcript is searched and never held whole. A line off the branch
- * reads blank (readStream).
+ * reads blank (readStream). `head`: the first bytes from `from` on, read already (as streamBytes reads them).
  */
-function linesWith(stream: TranscriptStream, text: string, from: number, to: number): [number, number][] {
-  return finish(linesWithSteps(stream, text, from, to));
-}
-
-/** linesWith in steps a window apart (Steps). */
-function* linesWithSteps(stream: TranscriptStream, text: string, from: number, to: number): Steps<[number, number][]> {
-  const { pattern, span } = jsonTextPattern(text);
+function* linesWithSteps(stream: TranscriptStream, text: string, from: number, to: number, head?: Buffer): Steps<[number, number][]> {
+  const { pattern, span } = yield* jsonTextPatternSteps(text);
   const found: [number, number][] = [];
   let start = from;
   let hit = false;
   // the end of the line so far: text a window's edge cuts in two is still found
   let tail = "";
-  for (let position = from; position < to; position = Math.min(to, position + IMAGE_SEARCH_WINDOW)) {
-    const bytes = readStream(stream, position, Math.min(to, position + IMAGE_SEARCH_WINDOW)).toString("latin1");
+  let judged = 0;
+  for (let position = from, step = 0; position < to; position = Math.min(to, position + step)) {
+    const known = position === from && head !== undefined && head.length > 0 ? head.subarray(0, to - from) : undefined;
+    step = known?.length ?? IMAGE_SEARCH_WINDOW;
+    const bytes = (known ?? (yield* streamBytes(stream, position, Math.min(to, position + IMAGE_SEARCH_WINDOW)))).toString("latin1");
     for (let offset = 0; ;) {
       const newline = bytes.indexOf("\n", offset);
       if (!hit) {
-        const seen = tail + bytes.slice(offset, newline === -1 ? bytes.length : newline);
-        hit = pattern.test(seen);
-        tail = span > 1 ? seen.slice(-(span - 1)) : "";
+        const piece = bytes.slice(offset, newline === -1 ? bytes.length : newline);
+        // the piece alone, and text the window's edge cut in two (it starts in the tail, so it ends within
+        // `span` characters of the piece): a long line is not copied onto the tail to be searched
+        hit = pattern.test(piece) || (tail.length > 0 && pattern.test(tail + piece.slice(0, span)));
+        tail = span <= 1 ? "" : piece.length >= span - 1 ? piece.slice(-(span - 1)) : (tail + piece).slice(-(span - 1));
       }
       if (newline === -1) break;
       if (hit) found.push([start, position + newline]);
@@ -2071,8 +3089,10 @@ function* linesWithSteps(stream: TranscriptStream, text: string, from: number, t
       hit = false;
       tail = "";
       offset = newline + 1;
+      if (++judged % RECORDS_PER_STEP === 0) yield;
     }
-    if (position + IMAGE_SEARCH_WINDOW < to) yield;
+    // the bytes known were the probe's step: the window read after them is this one's
+    if (known === undefined && position + step < to) yield;
   }
   if (hit) found.push([start, to]);
   return found;
@@ -2098,11 +3118,6 @@ type ShapeRead = RecordShape | typeof NOT_A_RECORD | typeof UNREAD;
  * no record can hold, a nonce made for this read, and its place in `cut` (`wholeString` reads it
  * back). So a record of any size costs a window and its shape, and a picture only its own text.
  */
-function recordShape(stream: TranscriptStream, range: [number, number]): ShapeRead {
-  return finish(recordShapeSteps(stream, range));
-}
-
-/** recordShape in steps a window apart (Steps). */
 function* recordShapeSteps(stream: TranscriptStream, [start, end]: [number, number]): Steps<ShapeRead> {
   const nonce = randomUUID();
   const kept: Buffer[] = [];
@@ -2116,7 +3131,7 @@ function* recordShapeSteps(stream: TranscriptStream, [start, end]: [number, numb
   let stringStart = 0;
   const keep = (bytes: Buffer) => { kept.push(Buffer.from(bytes)); size += bytes.length; };
   for (let position = start; position < end; position += IMAGE_SEARCH_WINDOW) {
-    const bytes = readStream(stream, position, Math.min(end, position + IMAGE_SEARCH_WINDOW));
+    const bytes = yield* streamBytes(stream, position, Math.min(end, position + IMAGE_SEARCH_WINDOW));
     let from = cutting ? -1 : 0;
     for (let index = 0; index < bytes.length; index += 1) {
       const byte = bytes[index]!;
@@ -2170,11 +3185,6 @@ function isHexDigit(byte: number): boolean {
  * A string of a record's shape whole, as JSON decodes it, decoded a window at a time; null when it
  * decodes to more than `limit` characters.
  */
-function wholeString(stream: TranscriptStream, shape: RecordShape, value: string, limit: number): string | null {
-  return finish(wholeStringSteps(stream, shape, value, limit));
-}
-
-/** wholeString in steps a window apart (Steps). */
 function* wholeStringSteps(stream: TranscriptStream, shape: RecordShape, value: string, limit: number): Steps<string | null> {
   let whole = "";
   return (yield* scanStringSteps(stream, shape, value, limit, (piece) => { whole += piece; })) ? whole : null;
@@ -2199,7 +3209,7 @@ function* scanStringSteps(stream: TranscriptStream, shape: RecordShape, value: s
   let pending = "";
   for (let position = range[0]; position <= range[1]; position += IMAGE_SEARCH_WINDOW) {
     const last = position + IMAGE_SEARCH_WINDOW >= range[1];
-    const text = pending + (last ? decoder.decode(readStream(stream, position, range[1])) : decoder.decode(readStream(stream, position, position + IMAGE_SEARCH_WINDOW), { stream: true }));
+    const text = pending + (last ? decoder.decode(yield* streamBytes(stream, position, range[1])) : decoder.decode(yield* streamBytes(stream, position, position + IMAGE_SEARCH_WINDOW), { stream: true }));
     // decode up to the last whole escape: the rest waits for the next window
     let split = text.length;
     if (!last) {
@@ -2224,35 +3234,109 @@ function* scanStringSteps(stream: TranscriptStream, shape: RecordShape, value: s
 }
 
 /** A tool call's id as the parser keys it: its text (a number's too), read whole; null past what the endpoint reads. */
-function callId(stream: TranscriptStream, shape: RecordShape, id: unknown): string | null {
-  return typeof id === "string" ? wholeString(stream, shape, id, PICTURE_TEXT_BYTES) : String(id ?? "");
+function* callIdSteps(stream: TranscriptStream, shape: RecordShape, id: unknown): Steps<string | null> {
+  return typeof id === "string" ? yield* wholeStringSteps(stream, shape, id, PICTURE_TEXT_BYTES) : String(id ?? "");
 }
 
 /**
  * Whether a tool result before `before` would be drawn, as the parser decides it: it answers a call
  * an assistant entry the parser draws made, and no result before it answered that call already.
- * False too when a record it would have to judge is past what the endpoint reads: then it serves
- * nothing rather than guess.
+ * The last block before `before` that names the call decides that, so the search starts at `before`
+ * and goes back a window at a time, and a call made just before its result costs that window, not
+ * the transcript. False too when a record it would have to judge (one after that last block) is past
+ * what the endpoint reads: then it serves nothing rather than guess.
  */
-function answersDrawnCall(stream: TranscriptStream, id: string, before: number): boolean {
-  const ranges = linesWith(stream, id, stream.floor, before);
+function* answersDrawnCallSteps(stream: TranscriptStream, id: string, before: number): Steps<boolean> {
+  // a record before the result the endpoint may not judge refuses the forward search wherever it lies, the
+  // last block naming the call or not: the search does not go back past such a record, it goes forward
+  const index = pictureIndexOn ? stream.pictures : undefined;
+  if (index === undefined || (index.blind !== null && index.blind < before) || unreadBefore(stream, index, before)) return yield* answersDrawnCallForwardSteps(stream, id, before);
+  // a call id the parser took from a number can be written in any of a number's spellings
+  const numeric = id !== "" && String(Number(id)) === id;
+  let judged = 0;
+  // a call is most often just before its result: the first stretch is short, and each one after twice as
+  // long as the one before covered (a stretch reaches back to the start of the line it cuts)
+  let span = CALL_SEARCH_START;
+  // what the pieces back are read into without a lease, one buffer for the walk: a line of a MiB is not a
+  // MiB allocated a piece (a lease reads into its own buffer)
+  let scratch = Buffer.allocUnsafe(stream.file === undefined ? CALL_SEARCH_START : 0);
+  for (let to = before, from = before; to > stream.floor; span = Math.min(IMAGE_SEARCH_WINDOW, Math.max(span, to - from) * 2), to = from, yield) {
+    // the lines that end in the last `span` bytes before `to`, whole: back from `to - span`, a piece at a
+    // time, to the start of the line it falls in, so the walk costs about what that line has before it
+    from = Math.max(stream.floor, to - span);
+    // what the piece that found the line's start holds of it: the window is not read again for those bytes
+    let head: Buffer | undefined;
+    // each piece back twice the one before, up to a window: a line of a MiB costs a few reads, not
+    // sixteen, where every read is a round trip (a network home)
+    for (let piece = CALL_SEARCH_START; from > stream.floor; piece = Math.min(IMAGE_SEARCH_WINDOW, piece * 2)) {
+      const low = Math.max(stream.floor, from - piece);
+      let bytes: Buffer;
+      if (stream.file === undefined) {
+        if (scratch.length < from - low) scratch = Buffer.allocUnsafe(Math.min(IMAGE_SEARCH_WINDOW, Math.max(from - low, scratch.length * 2)));
+        bytes = readStreamInto(stream, low, from, scratch);
+      } else bytes = yield* streamBytes(stream, low, from);
+      const newline = bytes.lastIndexOf(0x0a);
+      // the walk's buffer: the window takes these bytes in before the next piece is read into it. A lease's
+      // bytes are copied: they hold only until its next read, and a numeric id searches the lines twice
+      if (newline !== -1) head = stream.file === undefined ? bytes.subarray(newline + 1) : Buffer.from(bytes.subarray(newline + 1));
+      // each read is a step of its own: what reads the lines it found starts on the next one
+      yield;
+      if (newline !== -1) { from = low + newline + 1; break; }
+      from = low;
+    }
+    const ranges = yield* linesWithSteps(stream, id, from, to, head);
+    if (numeric) {
+      yield;
+      const seen = new Set(ranges.map(([start]) => start));
+      for (const range of yield* linesWithSteps(stream, "tool_use", from, to, head)) if (!seen.has(range[0])) ranges.push(range);
+      ranges.sort((left, right) => left[0] - right[0]);
+    }
+    if (ranges.length > 0) yield;
+    for (const range of ranges.reverse()) {
+      if (++judged % RECORDS_PER_STEP === 0) yield;
+      const shape = yield* recordShapeSteps(stream, range);
+      if (shape === UNREAD) return false;
+      if (shape === NOT_A_RECORD) continue;
+      const entry = shape.entry;
+      if (entry.isMeta || entry.isCompactSummary || !Array.isArray(entry.message?.content)) continue;
+      const content: unknown[] = entry.message.content;
+      for (let at = content.length - 1; at >= 0; at -= 1) {
+        if (++judged % RECORDS_PER_STEP === 0) yield;
+        const part = content[at] as { type?: unknown; id?: unknown; name?: unknown; tool_use_id?: unknown } | null;
+        const call = entry.type === "assistant" && part?.type === "tool_use" && typeof part.name === "string" ? yield* callIdSteps(stream, shape, part.id)
+          : entry.type === "user" && part?.type === "tool_result" && typeof part.tool_use_id === "string" ? yield* callIdSteps(stream, shape, part.tool_use_id) : undefined;
+        if (call === undefined) continue;
+        if (call === null) return false;
+        if (call === id) return part?.type === "tool_use";
+      }
+    }
+  }
+  return false;
+}
+
+/** answersDrawnCallSteps as a search forward from the floor: every record before `before` that names the call is judged. */
+function* answersDrawnCallForwardSteps(stream: TranscriptStream, id: string, before: number): Steps<boolean> {
+  const ranges = yield* linesWithSteps(stream, id, stream.floor, before);
   // a call id the parser took from a number can be written in any of a number's spellings
   if (id !== "" && String(Number(id)) === id) {
     const seen = new Set(ranges.map(([start]) => start));
-    for (const range of linesWith(stream, "tool_use", stream.floor, before)) if (!seen.has(range[0])) ranges.push(range);
+    for (const range of yield* linesWithSteps(stream, "tool_use", stream.floor, before)) if (!seen.has(range[0])) ranges.push(range);
     ranges.sort((left, right) => left[0] - right[0]);
   }
   let open = false;
+  let judged = 0;
   for (const range of ranges) {
-    const shape = recordShape(stream, range);
+    if (++judged % RECORDS_PER_STEP === 0) yield;
+    const shape = yield* recordShapeSteps(stream, range);
     if (shape === UNREAD) return false;
     if (shape === NOT_A_RECORD) continue;
     const entry = shape.entry;
     if (entry.isMeta || entry.isCompactSummary || !Array.isArray(entry.message?.content)) continue;
     for (const block of entry.message.content) {
+      if (++judged % RECORDS_PER_STEP === 0) yield;
       const part = block as { type?: unknown; id?: unknown; name?: unknown; tool_use_id?: unknown } | null;
-      const call = entry.type === "assistant" && part?.type === "tool_use" && typeof part.name === "string" ? callId(stream, shape, part.id)
-        : entry.type === "user" && part?.type === "tool_result" && typeof part.tool_use_id === "string" ? callId(stream, shape, part.tool_use_id) : undefined;
+      const call = entry.type === "assistant" && part?.type === "tool_use" && typeof part.name === "string" ? yield* callIdSteps(stream, shape, part.id)
+        : entry.type === "user" && part?.type === "tool_result" && typeof part.tool_use_id === "string" ? yield* callIdSteps(stream, shape, part.tool_use_id) : undefined;
       if (call === undefined) continue;
       if (call === null) return false;
       if (call === id) open = part?.type === "tool_use";
@@ -2268,47 +3352,291 @@ function answersDrawnCall(stream: TranscriptStream, id: string, before: number):
  * tool's picture only from a result the page draws. It holds a window, a record's shape and the
  * picture's own bytes at a time, never a record or the transcript whole.
  */
-export function transcriptImage(path: string, ref: string): { mediaType: string; bytes: Uint8Array<ArrayBuffer> } | null {
+type TranscriptPicture = { mediaType: string; bytes: Uint8Array<ArrayBuffer> };
+
+/** The synchronous reader remains available to page consumers and tests. */
+export function transcriptImage(path: string, ref: string): TranscriptPicture | null {
+  try { return finish(transcriptImageSteps(path, ref, false)); } catch { return null; }
+}
+
+/**
+ * On the shared reader (transcriptReader): the transcript's bytes and stats come by async positional
+ * reads of the file it pinned, so a slow disk holds up no other request, and the event loop gets its
+ * turn between windows and short records too. The lookups of one transcript take it in turn (imageTurn).
+ * The path is checked by the file it names (`follow`), a link to the transcript too, as statSync does.
+ */
+export async function transcriptImageAsync(path: string, ref: string): Promise<TranscriptPicture | null> {
+  // The lookup began when it was asked for, not when its turn came (TranscriptStream.version): the
+  // pictures of a page are asked for together and take their turns one after another, and a check of
+  // the index's bytes (vouchedPictureSteps) that one of them makes vouches for the others, which began
+  // before it, as it does for lookups made side by side. A lookup only takes a verdict from a check
+  // begun after it was asked for, so that verdict is what the file held at a moment between the
+  // request and its answer. The version itself is still the lease's: a rewrite between that check and
+  // this lookup's stat changes it, unless the file's times did not move (the limit fineTimes states).
+  const began = { began: performance.now(), wall: Date.now() };
+  // the file the lease pins is the one the path names as the lookup begins, not one put there while it waited its turn
+  const authorized = authorizedFile(path);
+  if (authorized === null) return null;
+  try { return await imageTurn(path, () => transcriptReader.read(path, (file) => finishAsync(boundSteps([[path, authorized]], transcriptImageSteps(path, ref, true, file, began))), { follow: true })); } catch { return null; }
+}
+
+/**
+ * The reader leases a path to one read at a time anyway: a page's pictures of one transcript wait
+ * here, one after another, so together they hold one place in its bounded queue (never refused for
+ * it), and each after the first finds the boundary the first one kept.
+ */
+const imageTurns = new Map<string, Promise<void>>();
+function imageTurn<T>(path: string, read: () => Promise<T>): Promise<T> {
+  const turn = (imageTurns.get(path) ?? Promise.resolve()).then(read);
+  const done = turn.then(() => {}, () => {});
+  imageTurns.set(path, done);
+  void done.then(() => { if (imageTurns.get(path) === done) imageTurns.delete(path); });
+  return turn;
+}
+
+function sameImageFile(left: ReturnType<typeof fstatSync>, right: ReturnType<typeof fstatSync>): boolean {
+  return left.dev === right.dev && left.ino === right.ino && left.size === right.size && left.mtimeMs === right.mtimeMs && left.ctimeMs === right.ctimeMs;
+}
+
+function* transcriptImageSteps(path: string, ref: string, apart: boolean, file?: TranscriptFile, began?: { began: number; wall: number }): Steps<TranscriptPicture | null> {
   const match = CLAUDE_IMAGE_REF.exec(ref);
   if (match === null) return null;
-  const [, uuid, index, nested] = match;
+  // a lease (`file`) pins the file itself
+  const fd = file === undefined ? openSync(path, "r") : undefined;
+  const pinned = function* (): Steps<Stats> { return file === undefined ? fstatSync(fd!) : yield* awaited(file.stats()); };
+  // the path still names the file as `snapshot` saw it, its change time included: a same-size rewrite
+  // can put the modification time back
+  const named = function* (snapshot: Stats): Steps<boolean> {
+    return sameImageFile(snapshot, file === undefined ? statSync(path) : yield* awaited(file.pathStats()));
+  };
+  const boundary = clearScans.get(path);
+  const boundaryScanned = boundary?.scanned;
+  const scans: TranscriptStream[] = [];
+  // A failed lookup may have published a boundary before a later read or filesystem fence throws.
+  const unpublish = (...streams: TranscriptStream[]): null => {
+    const kept = clearScans.get(path);
+    if (kept !== undefined && (streams.some((scanned) => scanned.published?.scan === kept && scanned.published.through === kept.scanned) || (kept === boundary && boundary.scanned === boundaryScanned))) clearScans.delete(path);
+    return null;
+  };
   try {
-    const stream = transcriptStream("claude-transcript", path, statSync(path), defaultCodexHome());
-    applyHistoryBoundary(path, stream, "claude-transcript");
-    for (const range of linesWith(stream, uuid!, stream.floor, stream.length)) {
-      const shape = recordShape(stream, range);
-      // a record the endpoint cannot judge could be the one the page draws: serve nothing then
-      if (shape === UNREAD) return null;
-      if (shape === NOT_A_RECORD) continue;
-      const entry = shape.entry;
-      // only an entry the parser draws: a hidden one can carry the same id
-      if (entry.uuid !== uuid || entry.type !== "user" || entry.isMeta || entry.isCompactSummary || !Array.isArray(entry.message?.content)) continue;
-      const content: unknown[] = entry.message.content;
-      const block = content[Number(index)] as { type?: unknown; content?: unknown; tool_use_id?: unknown } | undefined;
-      let image: unknown = block;
-      if (nested !== undefined) {
-        // a tool's picture sits inside the result it returned, drawn only when that result answers
-        // a call the page shows, which no result before it answered
-        if (block?.type !== "tool_result" || typeof block.tool_use_id !== "string" || !Array.isArray(block.content)) return null;
-        const call = callId(stream, shape, block.tool_use_id);
-        if (call === null) return null;
-        const answered = content.slice(0, Number(index)).some((other) => {
-          const result = other as { type?: unknown; tool_use_id?: unknown } | null;
-          return result?.type === "tool_result" && typeof result.tool_use_id === "string" && callId(stream, shape, result.tool_use_id) === call;
-        });
-        if (answered || !answersDrawnCall(stream, call, range[0])) return null;
-        image = block.content[Number(nested)];
-      }
-      // the picture's own bytes, read whole only up to the largest picture the chat shows
-      const picture = image as { source?: { data?: unknown } } | null | undefined;
-      const data = typeof picture?.source?.data === "string" ? wholeString(stream, shape, picture.source.data, PICTURE_TEXT_BYTES) : null;
-      if (data === null) return null;
-      const mediaType = claudeImageType({ ...picture, source: { ...picture!.source, data } });
-      if (mediaType === null) return null;
-      return { mediaType, bytes: new Uint8Array(Buffer.from(data, "base64")) };
+    const stat = yield* pinned();
+    // another file than the one the lookup is bound to (transcriptImageAsync) holds none of its pictures
+    checkBoundFile(path, stat);
+    const current = function* (snapshot: Stats): Steps<boolean> { return sameImageFile(snapshot, yield* pinned()) && (yield* named(snapshot)); };
+    // a lease is let in only while the path names the file it pinned (TranscriptReader.read); a change
+    // since is judged once the read ends, as one during it is
+    if (file === undefined && !(yield* current(stat))) return null;
+    const stream = transcriptStream("claude-transcript", path, stat, defaultCodexHome(), undefined, fd, file !== undefined);
+    stream.file = file;
+    // a lookup asked for before its turn began then (transcriptImageAsync)
+    if (began !== undefined && stream.version !== undefined) stream.version = { ...stream.version, ...began };
+    scans.push(stream);
+    stream.current = () => current(stat);
+    if (apart) stream.seen = { from: 0, digest: 0n };
+    // a read rejected after its scan published a boundary takes that boundary back (unless a newer read replaced it):
+    // it was built from bytes that no longer stand, and a later lookup must not reuse it as an append's prefix
+    yield* applyHistoryBoundarySteps(path, stream, "claude-transcript", apart);
+    const picture = yield* claudePictureSteps(stream, match, apart);
+    // the file held still for the whole read (its size, times and identity, by the pinned fd and by path)
+    if (!apart || (yield* current(stat))) return picture;
+    // a boundary kept from before the change is checked only by its tail, which a rewrite can keep
+    if (picture === null) return unpublish(stream);
+    // It changed under the read: only an append can keep the picture, and what was read may since be gone
+    // (a rewrite, then its undoing: ABA). So the read is made again on what the file holds now, from a
+    // boundary rebuilt from those bytes (a rewrite before an append keeps the tail a kept boundary is
+    // checked by), and what that read finds is served.
+    const now = yield* pinned();
+    if (now.dev !== stat.dev || now.ino !== stat.ino || now.size <= stat.size || !(yield* named(now))) return unpublish(stream);
+    // the bytes the boundary scan read (all of them on a cold read, the tail since the last one on a warm
+    // read) must still be there: a rewrite of what this read saw is no append, whatever it changed
+    const seen = stream.seen!;
+    let digest = 0n;
+    for (let position = seen.from; position < stat.size; position = Math.min(stat.size, position + TRANSCRIPT_WINDOW_BYTES)) {
+      digest = Bun.hash.xxHash3(yield* streamBytes({ ...stream, hidden: undefined }, position, Math.min(stat.size, position + TRANSCRIPT_WINDOW_BYTES)), digest);
+      yield;
     }
-  } catch { return null; }
+    if (digest !== seen.digest) return unpublish(stream);
+    const active = transcriptStream("claude-transcript", path, now, defaultCodexHome(), undefined, fd, file !== undefined);
+    active.file = file;
+    scans.push(active);
+    active.current = () => current(now);
+    yield* applyHistoryBoundarySteps(path, active, "claude-transcript", true, true);
+    const again = yield* claudePictureSteps(active, match, true);
+    // a further change during this read is retried by a later request
+    return again !== null && (yield* current(now)) ? again : unpublish(stream, active);
+  } catch { return unpublish(...scans); }
+  finally { if (fd !== undefined) closeSync(fd); }
+}
+
+/** Lets a test look a picture up as the search alone does, the reference the index is held to (false), or with the index again. */
+let pictureIndexOn = true;
+export function pictureIndexForTests(on: boolean): void {
+  pictureIndexOn = on;
+}
+
+/** Whether a record the endpoint may not judge (PictureIndex.unread) lies on the branch between the floor and `before`. */
+function unreadBefore(stream: TranscriptStream, index: PictureIndex, before: number): boolean {
+  return index.unread.some(([start, end]) => start >= stream.floor && start < before && !stream.hidden?.some(([low, high]) => low <= end && start < high));
+}
+
+/**
+ * The record the boundary scan indexed for `uuid` (PictureIndex), when it is still the first one the
+ * search from the floor would judge: past the floor, within the stream, on the session's branch, and
+ * with no record before it the search could refuse at.
+ */
+function indexedPicture(stream: TranscriptStream, uuid: string): IndexedPicture | undefined {
+  const index = pictureIndexOn ? stream.pictures : undefined;
+  const record = index?.at.get(uuid);
+  if (record === undefined || record.start < stream.floor || record.end >= stream.length) return undefined;
+  if (stream.hidden?.some(([start, end]) => start <= record.end && record.start < end)) return undefined;
+  return unreadBefore(stream, index!, record.start) ? undefined : record;
+}
+
+/**
+ * Stops using an index found out of date, in the scan that keeps it too, until a /clear starts another
+ * (applyHistoryBoundarySteps): no record is taken from it, and a call is looked for forward.
+ */
+function forgetPictures(index: PictureIndex): void {
+  index.at.clear();
+  index.blind = 0;
+}
+
+/** the record judged is not the one the picture is in: the search goes on (pictureInRecordSteps) */
+const NOT_IT = "not it";
+
+/**
+ * A same-size rewrite within one filesystem timestamp tick keeps the version: a read of the bytes
+ * vouches for a version to any lookup that began before it, and to a later one only when it began at
+ * least this long after the version's mtime and ctime (claude-command-history's RACY_MS) and those
+ * times tick finer than that (fineTimes).
+ */
+const PICTURE_RACY_MS = 3000;
+/**
+ * Whether the version's ctime, which every write sets and no writer can, has a fraction of a second: then
+ * the filesystem's timestamps tick finer than PICTURE_RACY_MS, and a write made well after them moves it.
+ * A source of whole seconds (or of times held for a while, as a coarse or cached one reports them) can
+ * keep a version's times across such a rewrite, so no read vouches for that version to a later lookup.
+ * A fine ctime that falls on a whole second only costs a read.
+ */
+const fineTimes = (version: NonNullable<TranscriptStream["version"]>): boolean => version.ctimeMs % 1000 !== 0;
+/**
+ * A read that checks an index's bytes (vouchedPictureSteps), by the file version it checks: the lookups
+ * of that version that began before it share it, and none that began after it (that lookup's own version
+ * may name bytes rewritten since the read took them, its times kept)
+ */
+interface PictureCheck extends PictureRead { bytes: PictureBytes; stands?: boolean }
+const pictureChecks = new Map<string, PictureCheck>();
+const vouches = (read: PictureRead, version: NonNullable<TranscriptStream["version"]>): boolean => read.began >= version.began
+  || (fineTimes(version) && Date.now() >= read.wall && read.wall - version.mtimeMs >= PICTURE_RACY_MS && read.wall - version.ctimeMs >= PICTURE_RACY_MS);
+const vouchedFor = (index: PictureIndex, version: TranscriptStream["version"]): boolean =>
+  version !== undefined && index.vouched?.key === version.key && vouches(index.vouched, version);
+const sameBytes = (left: PictureBytes, right: PictureBytes): boolean => left.from === right.from && left.hashed === right.hashed
+  && left.digest === right.digest && left.through === right.through && Buffer.from(left.pending).equals(right.pending);
+
+/**
+ * Trusts the stream's picture index only while the bytes it was built from are still what the file
+ * holds. A scan kept from before a rewrite in place that grew the file is checked only by the bytes just
+ * before where it ended, so a line before the record it indexed may since have become another record of
+ * that uuid, or one the endpoint cannot judge: the search would decide otherwise. A version an earlier
+ * read vouched for (PICTURE_RACY_MS) is trusted; any other is read once, from where the index starts to
+ * where the scan read, and the lookups of that version that began before the read share it (PictureCheck). Bytes
+ * that do not match turn the index off (forgetPictures). `apart`: a cooperative lookup, which can wait for
+ * another's read.
+ */
+function* vouchedPictureSteps(stream: TranscriptStream, apart: boolean): Steps<void> {
+  const index = pictureIndexOn ? stream.pictures : undefined;
+  const version = stream.version;
+  if (index === undefined || (index.blind !== null && index.blind <= index.bytes.from)) return;
+  if (version === undefined) return forgetPictures(index);
+  if (vouchedFor(index, version)) return;
+  let check = pictureChecks.get(version.key);
+  if (check === undefined || !sameBytes(check.bytes, index.bytes) || check.began < version.began || (check.stands === undefined && !apart)) {
+    check = { bytes: { ...index.bytes }, began: performance.now(), wall: Date.now() };
+    if (apart) remember(pictureChecks, version.key, check, 32);
+    try { check.stands = yield* pictureBytesStandSteps(stream, index.bytes); }
+    finally { check.stands ??= false; }
+  }
+  while (check.stands === undefined) yield;
+  if (check.stands) index.vouched = { key: version.key, began: check.began, wall: check.wall };
+  else forgetPictures(index);
+}
+
+/** Whether the file still holds the bytes `bytes` digests, read as the scan read them (raw, every range). */
+function* pictureBytesStandSteps(stream: TranscriptStream, bytes: PictureBytes): Steps<boolean> {
+  if (bytes.through > stream.length) return false;
+  const raw = { ...stream, hidden: undefined };
+  let digest = 0n;
+  for (let at = bytes.from; at < bytes.hashed;) {
+    // whole digest pieces in each read: IMAGE_SEARCH_WINDOW is a multiple of PICTURE_DIGEST_BYTES
+    const end = Math.min(bytes.hashed, (Math.floor(at / IMAGE_SEARCH_WINDOW) + 1) * IMAGE_SEARCH_WINDOW);
+    const read = yield* streamBytes(raw, at, end);
+    if (read.length !== end - at) return false;
+    for (let piece = at; piece < end; piece = Math.min(end, pieceEnd(piece))) digest = Bun.hash.xxHash3(read.subarray(piece - at, Math.min(end, pieceEnd(piece)) - at), digest);
+    at = end;
+    yield;
+  }
+  return digest === bytes.digest && (yield* streamBytes(raw, bytes.hashed, bytes.through)).equals(bytes.pending);
+}
+
+function* claudePictureSteps(stream: TranscriptStream, match: RegExpExecArray, apart: boolean): Steps<TranscriptPicture | null> {
+  // the boundary scan's last read was a step's: the record's read is the next one's
+  yield;
+  const uuid = match[1]!;
+  const index = pictureIndexOn ? stream.pictures : undefined;
+  // A picture the index holds no record of would use it only for the call search, which goes back by what
+  // it noted (unread, blind): that stands only for bytes a read vouched for. When none has for this
+  // version, the lookup is the search alone, as with the index off, rather than a read of the bytes on top
+  // of it, and it neither vouches for nor forgets the index.
+  if (index !== undefined && indexedPicture(stream, uuid) === undefined && !vouchedFor(index, stream.version)) stream = { ...stream, pictures: undefined };
+  else yield* vouchedPictureSteps(stream, apart);
+  const indexed = indexedPicture(stream, uuid);
+  // The index is trusted only while the bytes it was built from stand (vouchedPictureSteps), its record
+  // among them. A record that is not the picture's after all leaves it to the search all the same.
+  if (indexed !== undefined) {
+    const found = yield* pictureInRecordSteps(stream, match, [indexed.start, indexed.end]);
+    if (found !== NOT_IT) return found;
+    forgetPictures(stream.pictures!);
+    yield;
+  }
+  let judged = 0;
+  for (const range of yield* linesWithSteps(stream, uuid, stream.floor, stream.length)) {
+    if (++judged % RECORDS_PER_STEP === 0) yield;
+    const found = yield* pictureInRecordSteps(stream, match, range);
+    if (found !== NOT_IT) return found;
+  }
   return null;
+}
+
+/** The picture `match` names, judged in the record at `range` as the search judges each record it finds. */
+function* pictureInRecordSteps(stream: TranscriptStream, [, uuid, index, nested]: RegExpExecArray, range: [number, number]): Steps<TranscriptPicture | null | typeof NOT_IT> {
+  let judged = 0;
+  const shape = yield* recordShapeSteps(stream, range);
+  // a record the endpoint cannot judge could be the one the page draws: serve nothing then
+  if (shape === UNREAD) return null;
+  if (shape === NOT_A_RECORD) return NOT_IT;
+  const entry = shape.entry;
+  if (entry.uuid !== uuid || entry.type !== "user" || entry.isMeta || entry.isCompactSummary || !Array.isArray(entry.message?.content)) return NOT_IT;
+  const content: unknown[] = entry.message.content;
+  const block = content[Number(index)] as { type?: unknown; content?: unknown; tool_use_id?: unknown } | undefined;
+  let image: unknown = block;
+  if (nested !== undefined) {
+    if (block?.type !== "tool_result" || typeof block.tool_use_id !== "string" || !Array.isArray(block.content)) return null;
+    const call = yield* callIdSteps(stream, shape, block.tool_use_id);
+    if (call === null) return null;
+    for (let at = 0; at < Number(index); at += 1) {
+      if (++judged % RECORDS_PER_STEP === 0) yield;
+      const result = content[at] as { type?: unknown; tool_use_id?: unknown } | null;
+      if (result?.type === "tool_result" && typeof result.tool_use_id === "string" && (yield* callIdSteps(stream, shape, result.tool_use_id)) === call) return null;
+    }
+    if (!(yield* answersDrawnCallSteps(stream, call, range[0]))) return null;
+    image = block.content[Number(nested)];
+  }
+  const picture = image as { source?: { data?: unknown } } | null | undefined;
+  const data = typeof picture?.source?.data === "string" ? yield* wholeStringSteps(stream, shape, picture.source.data, PICTURE_TEXT_BYTES) : null;
+  if (data === null) return null;
+  const mediaType = claudeImageType({ ...picture, source: { ...picture!.source, data } });
+  if (mediaType === null) return null;
+  return { mediaType, bytes: new Uint8Array(Buffer.from(data, "base64")) };
 }
 
 const TOOL_REF = /^[A-Za-z0-9_:.-]{1,128}$/;
@@ -2318,65 +3646,145 @@ const TOOL_OUTPUT_MAX = 2_000_000;
 /** The whole output of a tool call whose page output was cut, by its id; null when there is none. */
 export async function toolOutput(paneId: string, ref: string, codexHome?: string, opencodeDb?: string, hermesHome?: string, grokHome?: string, museData?: string): Promise<string | null> {
   if (!TOOL_REF.test(ref) && !/^cp[0-9a-f]{16}\.[A-Za-z0-9_:.-]{1,128}(?:@[0-9a-z]+@[0-9a-z]+@[0-9a-f]{32})?$/.test(ref)) return null;
+  // a pane closed (forgetPaneTranscriptState) or a herdr session left while this awaited answers nothing
+  const socket = herdrSocketPath();
+  const forgetsBefore = forgets;
+  const live = (): boolean => herdrSocketPath() === socket && !forgottenSince(paneId, forgetsBefore);
   const snapshot = await sessionSnapshot();
   const pane = snapshot.panes.find((candidate) => candidate.pane_id === paneId);
   if (pane === undefined || typeof pane.cwd !== "string" || pane.cwd.length === 0) return null;
   let resolved: ResolvedTranscript;
-  try { resolved = await resolveTranscript(pane, pane.cwd, codexHome, snapshot.panes, opencodeDb, hermesHome, grokHome, museData); }
+  try { resolved = noteBinding(paneId, await resolveTranscript(pane, pane.cwd, codexHome, snapshot.panes, opencodeDb, hermesHome, grokHome, museData)); }
   catch (error) { if (error instanceof ConversationUnavailable) return null; throw error; }
   if (resolved.source === "opencode-transcript") {
     const output = opencodeToolOutput(resolved.path, resolved.session, ref);
     return output !== null && output.length > TOOL_OUTPUT_MAX ? `${output.slice(0, TOOL_OUTPUT_MAX)}\n… trimmed` : output;
   }
   rememberPaneRead(paneId, resolved.path);
+  if (resolved.source === "dsh-transcript") return await dshToolOutput(resolved, ref);
+  if (resolved.source === "kiro-transcript") return await kiroToolOutput(resolved, ref);
   if (resolved.source === "hermes-transcript") return hermesToolOutput(resolved.sessionId, resolved.path, ref, TOOL_OUTPUT_MAX);
-  let nativeRef = ref;
-  if (resolved.source === "copilot-transcript") {
-    let history: string;
-    try { history = copilotHistoryIdentity(resolved.path); } catch { return null; }
-    const prefix = copilotPrefix(paneId, `${resolved.binding}\0${history}`);
-    if (!ref.startsWith(prefix)) return null;
-    nativeRef = ref.slice(prefix.length);
-    if (!nativeRef.includes("@")) return null;
-  }
-  const output = transcriptToolOutput(resolved.source, resolved.path, nativeRef, resolved.codexHome ?? codexHome);
+  const transcript = resolved;
+  const lookup = (): string | null => {
+    let nativeRef = ref;
+    if (transcript.source === "copilot-transcript") {
+      let history: string;
+      try { history = copilotHistoryIdentity(transcript.path); } catch { return null; }
+      const prefix = copilotPrefix(paneId, `${transcript.binding}\0${history}`, transcript.path);
+      if (!ref.startsWith(prefix)) return null;
+      nativeRef = ref.slice(prefix.length);
+      if (!nativeRef.includes("@")) return null;
+    }
+    return transcript.source === "agy-transcript" ? null : transcriptToolOutput(transcript.source, transcript.path, nativeRef, transcript.codexHome ?? codexHome);
+  };
+  let output: string | null;
+  // the sources whose lookup digests the transcript (transcriptGeneration) read that off the event loop first
+  if (resolved.source === "copilot-transcript" || resolved.source === "omo-transcript") {
+    let settled: { value: string | null } | null;
+    // a transcript the path no longer names (replaced while it settled) has not this output
+    try { settled = await readSettled({ path: resolved.path, checkWindow: false, live }, lookup); }
+    catch (error) { if (error instanceof ConversationUnavailable || error instanceof ConversationReadPending) return null; throw error; }
+    // a pane bound to another transcript while this settled (another OmO session) has not this output:
+    // one seen bound elsewhere is refused at once, any other resolved again. Copilot's is checked below.
+    if (settled === null || rebound(paneId, transcript)) return null;
+    if (transcript.source === "omo-transcript") {
+      let fresh: NativeTranscript;
+      try { fresh = await paneTranscript(paneId, codexHome, undefined, undefined, opencodeDb, hermesHome, grokHome, museData); }
+      catch (error) { if (error instanceof ConversationUnavailable) return null; throw error; }
+      if (fresh.source !== transcript.source || fresh.path !== transcript.path) return null;
+    }
+    output = settled.value;
+  } else if (resolved.source === "pi-transcript" || resolved.source === "cmd-transcript" || resolved.source === "codex-transcript") {
+    output = readAuthorized(resolved.path, lookup);
+  } else output = resolved.source === "agy-transcript" ? await agyToolOutput(resolved.path, ref) : lookup();
   if (resolved.agy && !sameAgyStore(resolved.agy, await resolveAgyStore(pane))) return null;
   if (resolved.source === "copilot-transcript") {
     const current = await copilotTranscriptPath(pane, snapshot.panes, resolved.peerClaims).catch(() => null);
     if (current?.path !== resolved.path || current.binding !== resolved.binding) return null;
     try {
-      if (!ref.startsWith(copilotPrefix(paneId, `${resolved.binding}\0${copilotHistoryIdentity(resolved.path)}`))) return null;
+      if (!ref.startsWith(copilotPrefix(paneId, `${resolved.binding}\0${copilotHistoryIdentity(resolved.path)}`, resolved.path))) return null;
     } catch { return null; }
   }
-  return output;
+  return live() ? output : null;
 }
 
 /** The output a transcript file holds for one tool call id, whole (up to TOOL_OUTPUT_MAX). */
-export function transcriptToolOutput(source: StreamSource, path: string, ref: string, codexHome?: string): string | null {
+export function transcriptToolOutput(source: Exclude<StreamSource, "agy-transcript">, path: string, ref: string, codexHome?: string): string | null {
   if (!TOOL_REF.test(ref) && !(source === "copilot-transcript" && /^[A-Za-z0-9_:.-]{1,128}@[0-9a-z]+@[0-9a-z]+@[0-9a-f]{32}$/.test(ref))) return null;
   if (source === "codex-transcript") {
     let segments: ReturnType<typeof codexHistorySegments>;
     try { segments = codexHistorySegments(path, codexHome); } catch { return null; }
     for (const segment of segments) {
       let text: string;
-      // a rollout may have been archived since resolution: the others still hold theirs
-      try { text = readRange(segment.path, 0, segment.end); } catch { continue; }
+      // a rollout may have been archived since resolution: the others still hold theirs. Each is read as the
+      // file it was when its chain was resolved, and another file there answers nothing (readAuthorized)
+      try {
+        if (segment.identity) bindFile(segment.path, segment.identity);
+        text = readRange(segment.path, 0, segment.end);
+      } catch (error) {
+        if (error instanceof ConversationReadPending) throw error;
+        continue;
+      }
       const output = outputInText(source, text, ref);
       if (output !== null) return output;
     }
     return null;
   }
-  if (source === "grok-transcript") return grokToolOutput(path, ref);
-  if (source === "agy-transcript") return agyToolOutput(path, ref);
+  // each open of the log is held to the file the path names as the lookup begins (readAuthorized)
+  if (source === "grok-transcript") return readAuthorized(path, () => grokToolOutput(path, ref));
   if (source === "muse-transcript") {
-    const output = museToolOutput(path, ref);
+    const output = readAuthorized(path, () => museToolOutput(path, ref));
     return output !== null && output.length > TOOL_OUTPUT_MAX ? `${output.slice(0, TOOL_OUTPUT_MAX)}\n… trimmed` : output;
   }
   if (source === "letta-transcript") {
-    const output = lettaToolOutput(path, ref);
+    const output = readAuthorized(path, () => lettaToolOutput(path, ref));
     return output !== null && output.length > TOOL_OUTPUT_MAX ? `${output.slice(0, TOOL_OUTPUT_MAX)}\n… trimmed` : output;
   }
   if (source === "pi-transcript" || source === "cmd-transcript") return piToolOutput(path, ref);
+  if (source === "kimi-transcript") return readAuthorized(path, () => kimiToolOutput(path, ref, TOOL_OUTPUT_MAX));
+  if (source === "omo-transcript") {
+    try {
+      const stream = transcriptStream(source, path, statSync(path), codexHome ?? defaultCodexHome());
+      const from = windowStart(stream.length);
+      const ranges = [...finish(linesWithSteps(stream, ref, from, stream.length)), ...finish(linesWithSteps(stream, "context_clear", from, stream.length))];
+      const unique = new Map(ranges.map((range) => [range[0], range]));
+      let output: string | null = null;
+      // A window may start inside a record; never interpret that partial record.
+      const partialLead = from > 0 && readStream(stream, from - 1, from)[0] !== 0x0a;
+      for (const [start, end] of [...unique.values()].sort((a, b) => a[0] - b[0])) {
+        if (partialLead && start === from) continue;
+        if (end - start > TOOL_OUTPUT_MAX) {
+          const shape = finish(recordShapeSteps(stream, [start, end]));
+          if (shape === UNREAD) return null;
+          if (shape === NOT_A_RECORD) continue;
+          if (isContextClear(shape.entry, source)) output = null;
+          if (output !== null) continue;
+          const message = piMessage(shape.entry);
+          if (!message) continue;
+          const blocks = message.role === "toolResult" ? [message] : Array.isArray(message.content) ? message.content.filter((item) => item && typeof item === "object" && item.type === "toolResult") : [];
+          const block = blocks.find((item) => item && typeof item === "object" && (item as { toolCallId?: unknown }).toolCallId === ref) as { content?: unknown } | undefined;
+          if (!block) continue;
+          let result = "";
+          let truncated = false;
+          const text = (value: string): void => {
+            if (truncated || result.length > TOOL_OUTPUT_MAX) return;
+            truncated = !finish(scanStringSteps(stream, shape, value, TOOL_OUTPUT_MAX + 1 + IMAGE_SEARCH_WINDOW - result.length,
+              (piece) => { result += piece.slice(0, TOOL_OUTPUT_MAX + 1 - result.length); }));
+          };
+          const content = block.content;
+          if (typeof content === "string") text(content);
+          else if (Array.isArray(content)) for (const item of content) if (item && typeof item === "object" && typeof item.text === "string") text(item.text);
+          output = result;
+          if (truncated || output.length > TOOL_OUTPUT_MAX) output = `${output.slice(0, TOOL_OUTPUT_MAX)}\n… trimmed`;
+          continue;
+        }
+        const line = readStream(stream, start, end).toString("utf8");
+        try { if (isContextClear(JSON.parse(line), source)) output = null; } catch { continue; }
+        if (output === null) output = outputInText(source, line, ref);
+      }
+      return output;
+    } catch { return null; }
+  }
   if (source === "copilot-transcript") {
     let fd: number;
     try { fd = openCopilotFile(path); } catch { return null; }
@@ -2384,9 +3792,25 @@ export function transcriptToolOutput(source: StreamSource, path: string, ref: st
       return ref.includes("@") ? copilotOffsetOutput(fd, ref, TOOL_OUTPUT_MAX) : copilotOutput(fd, ref, TOOL_OUTPUT_MAX);
     } finally { closeSync(fd); }
   }
-  let text: string;
-  try { text = readFileSync(path, "utf8"); } catch { return null; }
-  return outputInText(source, text, ref);
+  // read whole through one open held to the file the path names as the lookup begins (readAuthorized)
+  return readAuthorized(path, () => {
+    let fd: number;
+    try { fd = openBound(path); } catch { return null; }
+    let text: string;
+    try { text = readFileSync(fd, "utf8"); } catch { return null; } finally { closeSync(fd); }
+    return outputInText(source, text, ref);
+  });
+}
+
+/**
+ * `read`, a lookup for an image or tool output, with the file `path` names now bound (readBound): null
+ * where it names none, or where an open in the lookup finds another file there.
+ */
+function readAuthorized<T>(path: string, read: () => T | null): T | null {
+  const authorized = authorizedFile(path);
+  if (authorized === null) return null;
+  try { return readBound([[path, authorized]], read); }
+  catch (error) { if (error instanceof ConversationReadPending) return null; throw error; }
 }
 
 /**
@@ -2474,9 +3898,15 @@ export function piTranscriptImage(path: string, ref: string): { mediaType: strin
  * Like a Claude picture, it holds a window, a record's shape and the picture at a time, never a record
  * or the transcript whole, and it gives the event loop its turn between windows (finishAsync), so a
  * large transcript never holds the bridge for more than a window's work.
+ * omo writes its pictures inline the same way and its page reads the file the same way, so `source`
+ * omo-transcript reads it so too, with no blob store (#3420); `exact` is the file its resolver proved
+ * (omoFile), which every open is then held to instead of the file the path names as the lookup begins.
  */
-export async function ompTranscriptImage(path: string, ref: string, anchor?: string | null): Promise<{ mediaType: string; bytes: Uint8Array<ArrayBuffer> } | null> {
-  try { return await finishAsync(ompTranscriptImageSteps(path, ref, anchor)); } catch { return null; }
+export async function ompTranscriptImage(path: string, ref: string, anchor?: string | null, source: "omp-transcript" | "omo-transcript" = "omp-transcript", exact?: FileIdentity): Promise<{ mediaType: string; bytes: Uint8Array<ArrayBuffer> } | null> {
+  // every open of the transcript, after each await too, is held to the file the path names as the lookup begins
+  const authorized = authorizedFile(path);
+  if (authorized === null) return null;
+  try { return await finishAsync(boundSteps([[path, exact ?? authorized]], ompTranscriptImageSteps(path, ref, anchor, source))); } catch { return null; }
 }
 
 /**
@@ -2490,16 +3920,17 @@ const RECORDS_PER_STEP = 32;
  * authorized (conversationImage: ompBlobAnchor); a blob is read only from that directory. Without one
  * (a caller that authorized nothing first), it is the store as this read starts.
  */
-function* ompTranscriptImageSteps(path: string, ref: string, given?: string | null): Steps<{ mediaType: string; bytes: Uint8Array<ArrayBuffer> } | null> {
+function* ompTranscriptImageSteps(path: string, ref: string, given: string | null | undefined, source: "omp-transcript" | "omo-transcript"): Steps<{ mediaType: string; bytes: Uint8Array<ArrayBuffer> } | null> {
   const tool = PI_IMAGE_REF.exec(ref);
   const match = tool ?? PI_PROMPT_IMAGE_REF.exec(ref);
   if (match === null || match[1] === undefined || match[2] === undefined) return null;
   const [, id, nth] = match;
-  const blobs = ompBlobStore(path);
-  const anchor = given === undefined ? ompBlobAnchor(blobs)?.identity ?? null : given;
+  // omo keeps every picture inline: no store to read a blob from
+  const blobs = source === "omp-transcript" ? ompBlobStore(path) : null;
+  const anchor = blobs === null ? null : given === undefined ? ompBlobAnchor(blobs)?.identity ?? null : given;
   {
-    const stream = transcriptStream("omp-transcript", path, statSync(path), defaultCodexHome());
-    yield* applyHistoryBoundarySteps(path, stream, "omp-transcript", true);
+    const stream = transcriptStream(source, path, statSync(path), defaultCodexHome());
+    yield* applyHistoryBoundarySteps(path, stream, source, true);
     // the records that name the id, and those that can be a clear however JSON writes it
     const ranges = yield* linesWithSteps(stream, id, stream.floor, stream.length);
     const seen = new Set(ranges.map(([start]) => start));
@@ -2517,7 +3948,7 @@ function* ompTranscriptImageSteps(path: string, ref: string, given?: string | nu
       if (shape === UNREAD) return null;
       if (shape === NOT_A_RECORD) continue;
       const entry: unknown = shape.entry;
-      if (isContextClear(entry, "omp-transcript")) { open = false; found = null; continue; }
+      if (isContextClear(entry, source)) { open = false; found = null; continue; }
       if (found !== null) continue;
       // what the parser draws as something other than a message carries no picture of its
       if (skillPromptMessage(entry) !== null || piNotice(entry) !== null || omoTaskResults(entry, new Map()) !== null || (entry as { type?: unknown }).type === "compaction") continue;
@@ -2586,7 +4017,10 @@ function* ompPictureSteps(stream: TranscriptStream, shape: RecordShape, content:
  * windows (finishAsync).
  */
 export async function codexToolImage(path: string, ref: string, codexHome: string): Promise<{ mediaType: string; bytes: Uint8Array<ArrayBuffer> } | null> {
-  try { return await finishAsync(codexToolImageSteps(path, ref, codexHome)); } catch { return null; }
+  // as ompTranscriptImage: the live rollout as the lookup begins, and each earlier one as the chain is laid out (transcriptStream)
+  const authorized = authorizedFile(path);
+  if (authorized === null) return null;
+  try { return await finishAsync(boundSteps([[path, authorized]], codexToolImageSteps(path, ref, codexHome))); } catch { return null; }
 }
 
 function* codexToolImageSteps(path: string, ref: string, codexHome: string): Steps<{ mediaType: string; bytes: Uint8Array<ArrayBuffer> } | null> {

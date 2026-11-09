@@ -13,6 +13,10 @@
  *   Enter, Space: the first Tab after it shows reaches it) opens the field as the other variant does, with the focus in
  *   it. It goes, opening nothing, as the selection collapses or changes, on Escape, on a press elsewhere, and as anything
  *   of the layer opens; a new selection shows it anew. No key typed while it shows goes anywhere but where it would.
+ *   Where the surface quotes (`CommentSource.quote`: the chat's replies, in a pane it may send to) Quote stands beside
+ *   it, upstream's Quote (lib/selectionQuote.ts), the next Tab's: it puts the words in the composer as a `> ` quote and
+ *   clears the selection, or, too long for the draft, is refused and says so. The field variant and a finger's pill offer
+ *   Comment alone.
  * - The selection is first cut to commentable text (lib/markdownSelection.ts `clampSelection`, with where the button
  *   went up: a drag released beside the text is cut back to the block at that height), the visible selection set to
  *   match, then the surface says what it is on (`at`). Selecting a stored comment's place opens that comment, with its text.
@@ -63,7 +67,8 @@ import { CommentMargin, type CommentMarginProps } from "./CommentMargin.tsx";
 import { useMarkdownCommentSheet } from "./MarkdownCommentSheet.tsx";
 import { CommentPopover } from "./CommentPopover.tsx";
 import type { FileReference } from "./FileReference.tsx";
-import { SelectionButton, SELECTION_BUTTON_CLASS } from "./SelectionButton.tsx";
+import { SelectionButton, SELECTION_BUTTON_CLASS, SELECTION_QUOTE_CLASS } from "./SelectionButton.tsx";
+import type { QuoteOffer } from "../lib/selectionQuote.ts";
 import { SelectionField } from "./SelectionField.tsx";
 import { useCommentPopover } from "./useCommentPopover.ts";
 import { TouchSelection } from "./TouchSelection.tsx";
@@ -132,7 +137,15 @@ export interface CommentSource<T> {
   persist: (target: T, text: string) => string | null;
   /** deletes the stored comment `id` at once; one gone already is no change */
   remove(id: string): void;
+  /**
+   * Quote beside the Comment button for the page's selection, cut to `range` (lib/selectionQuote.ts `quoteOffer`), read
+   * as the button shows; null, or unset: Comment alone (the file viewer's preview, a pane this device may not send to)
+   */
+  quote?(range: Range): QuoteOffer | null;
 }
+
+/** The Comment button's selection (`range`, cut to commentable text; its text's `ranges`) and Quote's offer beside it. */
+interface Offer { range: Range; ranges: readonly Range[]; quote: QuoteOffer | null }
 
 /** The layer never keeps an open field for a new selection: the press that starts one has left it already. */
 const NO_SAME_PLACE = (): boolean => false;
@@ -296,8 +309,8 @@ export function MarkdownCommentLayer<T>({ ref, source, surface: host, roots, mod
   latest.current = { host, source, roots, mode, open, onSelect };
   // the Comment button's selection (`range`, cut to commentable text; its text's `ranges`), while it shows; the ref for
   // the listeners, set with the state
-  const [offer, setOffer] = useState<{ range: Range; ranges: readonly Range[] } | null>(null);
-  const offered = useRef<{ range: Range; ranges: readonly Range[] } | null>(null);
+  const [offer, setOffer] = useState<Offer | null>(null);
+  const offered = useRef<Offer | null>(null);
   // whether the field opened next takes the focus (opened by the button), read as its element is made
   const focusField = useRef(false);
   // the text the field over a selection is on, what it quotes, and the field's box
@@ -385,6 +398,16 @@ export function MarkdownCommentLayer<T>({ ref, source, surface: host, roots, mod
     if (now !== null && source !== null && at !== null) openOn(source, at, textRanges(now.range, rootsOf()), true);
   }, [hideOffer, openOn]);
 
+  /** Quote's click: the words into the composer, the selection cleared (before the composer takes the keyboard); too long, refused. */
+  const quoteOffered = useCallback((): void => {
+    const quoted = offered.current?.quote ?? null;
+    if (quoted === null) return;
+    if (!quoted.fits) { say(t("Too long to quote: shorten the message or the selection.|comment mode")); return; }
+    hideOffer();
+    window.getSelection()?.removeAllRanges();
+    quoted.put();
+  }, [hideOffer, say, t]);
+
   /**
    * The page's selection, if it is in the surface's commentable text, shows the Comment button or opens its field
    * (`commentOnSelect`): cut to that text (`release`: where a mouse's button went up), the visible selection set to
@@ -411,7 +434,7 @@ export function MarkdownCommentLayer<T>({ ref, source, surface: host, roots, mod
       openOn(source, at, textRanges(clamped, rootList));
       return;
     }
-    const shown = { range: clamped, ranges: textRanges(clamped, rootList) };
+    const shown = { range: clamped, ranges: textRanges(clamped, rootList), quote: source.quote?.(clamped) ?? null };
     offered.current = shown;
     setOffer(shown);
     // it takes no focus (the page keeps its selection): a screen reader is told, once for this selection
@@ -437,7 +460,7 @@ export function MarkdownCommentLayer<T>({ ref, source, surface: host, roots, mod
     let shiftOn: Range | null | undefined;
     const onPointerDown = (event: PointerEvent): void => {
       // a press anywhere but on the Comment button hides it (a press that selects anew shows it again as it ends)
-      if (!(event.target instanceof Element && event.target.closest(`.${SELECTION_BUTTON_CLASS}`) !== null)) hideOffer();
+      if (!(event.target instanceof Element && event.target.closest(`.${SELECTION_BUTTON_CLASS}, .${SELECTION_QUOTE_CLASS}`) !== null)) hideOffer();
       const body = latest.current.host;
       pressed = (event.pointerType === "mouse" || event.pointerType === "pen") && event.button === 0 && body !== null
         && event.target instanceof Node && body.contains(event.target) && !isCommentUi(event.target);
@@ -600,7 +623,7 @@ export function MarkdownCommentLayer<T>({ ref, source, surface: host, roots, mod
   ), [host, open, text, save, removeOpen, closeField]);
   // the Comment button, portalled into the surface beside the selection
   const button = useMemo(() => host === null || offer === null ? null
-    : <SelectionButton surface={host} ranges={offer.ranges} onComment={commentOffer} />, [host, offer, commentOffer]);
+    : <SelectionButton surface={host} ranges={offer.ranges} onComment={commentOffer} quote={offer.quote === null ? undefined : { fits: offer.quote.fits, onQuote: quoteOffered }} />, [host, offer, commentOffer, quoteOffered]);
 
   // a finger's tap: the sheet, read-only with the mode off
   const onSheet = useCallback((ids: readonly string[]): void => {

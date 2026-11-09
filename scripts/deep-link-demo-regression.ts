@@ -63,6 +63,40 @@ try {
   try {
     const browser = await chromium.launch({ executablePath: chromePath(), headless: true, args: ["--no-sandbox"] });
     try {
+      await withPage(browser, "?machine=removed&new=workspace&agent=codex", async (page) => {
+        await page.locator(".header-note", { hasText: "That link's PC is not set up here" }).waitFor();
+        assert.equal(await page.getByRole("dialog", { name: /New workspace/ }).count(), 0, "a creation link for an unknown PC never opens a local creation dialog");
+      });
+      await withPage(browser, `?pane=${encodeURIComponent(INFRA)}`, async (page) => {
+        await waitSelected(page, INFRA);
+        await page.evaluate(() => {
+          const selected = JSON.stringify({ machine_id: "previous-PC", pane_id: "w1:p1" });
+          sessionStorage.setItem("ovis:selection", selected);
+          localStorage.setItem("ovis:selection", selected);
+        });
+        await page.goto(`${url}?new=workspace&agent=codex`);
+        await page.getByRole("dialog", { name: "New workspace · workstation", exact: true }).waitFor();
+        assert.equal((await query(page))["machine"], undefined, "a local creation link overrides the remembered PC without a pane or workspace");
+      });
+      console.log("PASS creation links honor their PC without a pane and never create on another PC when the target is missing");
+
+      // a creation link on the PC already shown opens over its pane: Cancel leaves that pane, not herdr's focused one
+      for (const pane of [INFRA, DOCS]) await withPage(browser, `?pane=${encodeURIComponent(pane)}`, async (page) => {
+        await waitSelected(page, pane);
+        await page.goto(`${url}?new=workspace&agent=codex`);
+        const dialog = page.getByRole("dialog", { name: "New workspace · workstation", exact: true });
+        await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
+        await waitSelected(page, pane);
+        await page.evaluate((here) => {
+          history.pushState(null, "", "?new=workspace&agent=codex");
+          history.pushState(null, "", here);
+        }, await page.evaluate(() => location.search));
+        await page.goBack();
+        await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
+        await waitSelected(page, pane);
+      });
+      console.log("PASS a creation link for the PC already shown keeps its pane, on load and on Back");
+
       // a link to a workspace opens the pane its row opens, and the address then names it all
       await withPage(browser, `?ws=${wsOf(INFRA)}`, async (page) => {
         await waitSelected(page, INFRA);
@@ -84,6 +118,10 @@ try {
         await waitSelected(page, INFRA);
         assert.equal(await page.locator('.view-switch button[aria-pressed="true"]').innerText(), "Chat", "the linked lens is the one shown");
         const start = await page.evaluate(() => history.length);
+        const resting = page.locator(".agents-sidebar .agent-resting-label .agent-background-toggle");
+        await resting.waitFor();
+        if (await resting.getAttribute("aria-expanded") === "false") await resting.click();
+        await page.locator('.agents-sidebar .agent-resting-label .agent-background-toggle[aria-expanded="true"]').waitFor();
         await page.locator(`.agents-sidebar .agent-item[data-pane="${DOCS}"] .agent-select`).click();
         await waitQuery(page, "pane", DOCS);
         assert.equal(await page.evaluate(() => history.length), start + 1, "opening another pane is an entry");
@@ -187,6 +225,51 @@ try {
         await page.locator('.agents-sidebar .agent-select[aria-current="true"]').waitFor();
         await waitQuery(page, "machine", null);
         assert.deepEqual(errors, []);
+        // Back off a creation link before the PCs are in, onto an entry that asks for nothing, drops the creation
+        await page.goto(`${url}?pane=${encodeURIComponent(INFRA)}`);
+        await waitSelected(page, INFRA);
+        await page.evaluate(() => {
+          history.pushState(null, "", "?");
+          history.pushState(null, "", "?new=workspace&agent=codex");
+          sessionStorage.setItem("hold-roster", "1");
+        });
+        await page.reload();
+        await page.waitForFunction(() => typeof (window as unknown as { __releaseRoster?: unknown }).__releaseRoster === "function" && document.querySelector(".sidebar-shell") !== null);
+        await page.goBack();
+        await waitQuery(page, "new", null);
+        await page.evaluate(() => (window as unknown as { __releaseRoster: () => void }).__releaseRoster());
+        await page.locator('.agents-sidebar .agent-select[aria-current="true"]').waitFor();
+        assert.equal(await page.getByRole("dialog", { name: /New workspace/ }).count(), 0, "an entry left before the roster arrived does not open its creation dialog");
+        for (const machine of ["local", "removed"]) for (const forward of [false, true]) {
+          await page.goto(`${url}?pane=${encodeURIComponent(INFRA)}`);
+          await waitSelected(page, INFRA);
+          const here = await page.evaluate(() => location.search);
+          await page.evaluate(({ here, machine, forward }) => {
+            history.pushState(null, "", `?machine=${machine}&new=workspace&agent=codex&name=Held`);
+            if (!forward) history.pushState(null, "", here);
+          }, { here, machine, forward });
+          if (forward) { await page.goBack(); await waitQuery(page, "pane", INFRA); }
+          await page.evaluate(() => sessionStorage.setItem("hold-roster", "1"));
+          await page.reload();
+          await page.waitForFunction(() => typeof (window as unknown as { __releaseRoster?: unknown }).__releaseRoster === "function" && document.querySelector(".sidebar-shell") !== null);
+          if (forward) await page.goForward(); else await page.goBack();
+          await waitQuery(page, "new", "workspace");
+          assert.equal(await page.getByRole("dialog", { name: /New workspace/ }).count(), 0, "creation waits for the first roster");
+          await page.evaluate(() => (window as unknown as { __releaseRoster: () => void }).__releaseRoster());
+          if (machine === "local") {
+            await page.getByRole("dialog", { name: "New workspace · workstation", exact: true }).waitFor();
+            assert.equal((await query(page))["name"], "Held", "history preserves the pending creation fields until the roster arrives");
+            if (forward) await page.goBack(); else await page.goForward();
+            await page.getByRole("dialog", { name: /New workspace/ }).waitFor({ state: "detached" });
+          } else {
+            await page.locator(".header-note", { hasText: "That link's PC is not set up here" }).waitFor();
+            await waitQuery(page, "machine", null);
+            assert.equal(await page.getByRole("dialog", { name: /New workspace/ }).count(), 0, "a missing PC cancels held creation before local fallback");
+            if (forward) await page.goBack(); else await page.goForward();
+            await waitSelected(page, INFRA);
+          }
+        }
+        assert.deepEqual(errors, []);
       } finally {
         await heldContext.close();
       }
@@ -279,16 +362,17 @@ try {
       // address follows what is typed, and closing the dialog takes it off
       await withPage(browser, `?new=workspace&cwd=${encodeURIComponent("/home/demo/infra")}&name=Fix%20backup&agent=codex`, async (page) => {
         const dialog = page.getByRole("dialog", { name: /New workspace/ });
+        const nameField = dialog.getByRole("textbox", { name: "Optional workspace label", exact: true });
         await dialog.waitFor();
         assert.equal(await page.locator("#new-session-cwd").inputValue(), "/home/demo/infra");
-        assert.equal(await dialog.getByRole("textbox", { name: "Name" }).inputValue(), "Fix backup");
+        assert.equal(await nameField.inputValue(), "Fix backup");
         await dialog.locator(".agent-picker-label", { hasText: /codex/i }).waitFor();
         const workspaces = async () => (await page.evaluate(async () => (await (await fetch("/api/session")).json()).snapshot.workspaces.length)) as number;
         const before = await workspaces();
         await page.waitForTimeout(800); // fixed wait: no workspace may be created by the link
         assert.equal(await workspaces(), before, "a link fills the form; Create is still the user's");
         await waitQuery(page, "name", "Fix backup");
-        await dialog.getByRole("textbox", { name: "Name" }).fill("Fix the nightly backup");
+        await nameField.fill("Fix the nightly backup");
         await waitQuery(page, "name", "Fix the nightly backup");
         assert.equal((await query(page))["new"], "workspace");
         await page.keyboard.press("Escape");
@@ -486,12 +570,16 @@ try {
       // the app picked becomes one the user picked must leave it in the modal (#675 review)
       await withPage(browser, `?ws=${wsOf(INFRA)}&pane=${encodeURIComponent(INFRA)}&view=terminal`, async (page) => {
         await waitSelected(page, INFRA);
+        const resting = page.locator(".agents-sidebar .agent-resting-label .agent-background-toggle");
+        await resting.waitFor();
+        if (await resting.getAttribute("aria-expanded") === "false") await resting.click();
+        await page.locator('.agents-sidebar .agent-resting-label .agent-background-toggle[aria-expanded="true"]').waitFor();
         await page.locator(`.agents-sidebar .agent-item[data-pane="${DOCS}"] .agent-select`).click();
         await waitQuery(page, "pane", DOCS);
         // the selected pane closes: the app picks the pane herdr has in front (autoSelected)
         await page.evaluate((pane) => fetch("/api/pane/close", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ pane_id: pane }) }), DOCS);
         await page.waitForFunction((pane) => new URLSearchParams(window.location.search).get("pane") !== pane, DOCS);
-        await page.locator(".palette-button").click();
+        await page.keyboard.press("ControlOrMeta+Shift+K");
         const palette = page.getByRole("dialog", { name: "Command palette" });
         await palette.waitFor();
         await page.goBack();
@@ -517,7 +605,8 @@ try {
         await more.waitFor();
         const search = more.getByRole("button", { name: "Search panes and actions", exact: true });
         assert.equal(await search.count(), 1, "More offers Search panes and actions");
-        assert.equal((await more.locator(".row-sheet-item .row-sheet-label").allTextContents())[0], "Search panes and actions", "Search panes and actions is More's first item");
+        // a phone's header lists the tabs, so More leads with the jump to a session waiting for you, when one waits
+        assert.equal((await more.locator(".row-sheet-item .row-sheet-label").allTextContents()).find((label) => label !== "Open the next session waiting for you"), "Search panes and actions", "Search panes and actions is More's first item of its own");
         await more.getByRole("button", { name: "Browse files", exact: true }).tap();
         const files = page.getByRole("dialog", { name: "Files", exact: true });
         await files.waitFor();
@@ -593,11 +682,11 @@ try {
         await waitSelected(page, INFRA);
         await page.goForward();
         await waitSelected(page, DOCS);
-        // an item that opens a dialog on the sheet's address keeps the sheet's entry: the tab menu's
-        // Rename pane dialog stays up once the sheet's closing has settled, and Back closes it alone
-        await page.locator(".tab-strip-menu").tap();
+        // an item that opens a dialog on the sheet's address keeps the sheet's entry: More's (a phone's
+        // pane menu) Rename pane dialog stays up once the sheet's closing has settled, and Back closes it alone
+        await more.tap();
         await page.getByRole("button", { name: "Rename pane", exact: true }).tap();
-        const creation = page.getByRole("dialog", { name: "Rename pane", exact: true });
+        const creation = page.getByRole("dialog", { name: /^Rename pane · / });
         await creation.waitFor();
         await page.waitForTimeout(150); // fixed wait: the Rename pane dialog may not close
         assert.equal(await creation.isVisible(), true, "the Rename pane dialog stays up after the sheet's entry settles");

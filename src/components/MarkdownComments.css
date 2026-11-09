@@ -127,8 +127,9 @@
   padding: 0 var(--space-4);
 }
 
-/* a pointer's: a control's height, above the field and the margin's fields it never shows with */
-.markdown-select-comment {
+/* a pointer's: a control's height, above the field and the margin's fields it never shows with; Quote beside it the same */
+.markdown-select-comment,
+.markdown-select-quote {
   z-index: var(--z-popover);
   height: var(--control-h);
   padding: 0 var(--space-3);
@@ -138,7 +139,14 @@
 
 /* hover as a text button's (.btn), only where a pointer can hover */
 @media (hover: hover) {
-  .markdown-select-comment:hover {
+  .markdown-select-comment:hover,
+  .markdown-select-quote:not([aria-disabled="true"]):hover {
     background: var(--bg-hover);
   }
+}
+
+/* too long for the draft: refused, and its title says why (focusable still, for a keyboard) */
+.markdown-select-quote[aria-disabled="true"] {
+  color: var(--text-dim);
+  cursor: not-allowed;
 }

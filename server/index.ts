@@ -1,68 +1,73 @@
+import type { TailnetPcsOptions } from "./tailnet-pcs.ts";
+import type { SshCandidatesOptions } from "./ssh-candidates.ts";
 import "./adopt-legacy-env.ts";
-import { handleWorkspaceRequest } from "./workspace-routes.ts";
-import { connectionData, createCore, type SocketData } from "./core/index.ts";
+import type { RelaySocket } from "../shared/relay-channel.ts";
+import { createCore, type SocketData } from "./core/index.ts";
 import { ClientConnectionLog } from "./client-connection-log.ts";
 import { RequestLog } from "./request-log.ts";
-import { handlePaneRequest } from "./pane-routes.ts";
-import { handleIntegrationsRequest } from "./integrations-routes.ts";
+import { RelayReceiptIds } from "./machine-relay.ts";
 import { randomBytes, randomUUID } from "node:crypto";
 import { OrderSequence } from "./order-sequence.ts";
 import { readHerdrProfiles, type HerdrMachineProfile } from "./herdr-profiles.ts";
-import { accessSync, constants, readFileSync, rmSync } from "node:fs";
+import { accessSync, constants, readFileSync, rmSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
-
-import type { DevicePairedEvent, HealthAuth, PendingMessage, SecuritySummary, SessionSnapshot } from "../shared/protocol.ts";
+import type { PendingMessage, SessionSnapshot } from "../shared/protocol.ts";
 import { DEFAULT_PORT } from "../shared/protocol.ts";
-import { authClient, deviceCookieValue, bearerMatches, handleAuthRequest, isAuthenticated, isSecureRequest, parseCookies, presentedToken, presentedTokenHeld, recordPresentedTokenFailure, requiresAuth, unauthorizedJson } from "./auth.ts";
-import { bindScope, cameThroughProxy, decideAccess, forwardingHeaders, isLoopbackAddress, isLoopbackBind, isServeOwnerRequest, lanExposed, observedIngress } from "./access.ts";
-import { DeviceStore, handleDeviceRequest, newStreamKey, sameBrowser, streamCookie, streamKeys, type DeviceMatch } from "./devices.ts";
-import { handlePreferencesRequest, PreferenceStore } from "./preferences.ts";
-import { handleSeenRequest, SeenStore } from "./seen.ts";
-import { remoteAccess, TailnetIdentitySource } from "./tailscale.ts";
-import { badRequest, errorResponse, jsonResponse, setRequestRoute } from "./http.ts";
-import { requestOrigin, serveStatic } from "./static.ts";
-import { compressResponse } from "./compress.ts";
-import { handleTasksRequest } from "./tasks-routes.ts";
-import { handlePlanRequest } from "./plan-routes.ts";
-import { ShellAgentLocator } from "./shell-agent.ts";
-import { handleAgentsRequest } from "./agents-routes.ts";
+import { isLoopbackBind, lanExposed } from "./access.ts";
+import { DeviceStore, mergeAccountTombstones } from "./devices.ts";
+import { PreferenceStore } from "./preferences.ts";
+import { readOmpHeldFilesSetting } from "./omp.ts";
+import { SeenStore } from "./seen.ts";
+import type { SeenFinish } from "../shared/seen.ts";
+import { TailnetIdentitySource } from "./tailscale.ts";
+import { SHELL_AGENTS, ShellAgentLocator } from "./shell-agent.ts";
 import { AgentDetector, catalogLocator, defaultLoginProbe } from "./agent-catalog-detect.ts";
-import { handleAgentCatalogRequest } from "./agent-catalog-routes.ts";
-import { forgetPageMedia } from "./file-view.ts";
-import { handleFileRequest } from "./file-routes.ts";
-import { BACKGROUND_AGENT_PATH, handleBackgroundAgentRequest, type BackgroundAgentDeps } from "./background-agent.ts";
-import {
-  herdrSocketPath,
-  paneGet,
-  ping,
-} from "./herdr/client.ts";
-import { type AlertTiming, defaultStateDir, handlePushRequest } from "./push.ts";
+import { InstalledLookup } from "./installed-lookup.ts";
+import { agentCatalogFor } from "./agent-catalog-routes.ts";
+import { AGENT_CATALOG, catalogPlatform } from "../shared/agent-catalog.ts";
+import { AgentInstaller } from "./agent-catalog-install.ts";
+import { type BackgroundAgentDeps } from "./background-agent.ts";
+import { herdrSocketPath, ping } from "./herdr/client.ts";
+import { coreConnection, coreSeenMarker, hcBin, hcMachine, NoHerdrCoreError, runtime, servingCore, setRuntime, startRuntime } from "./herdr-core/runtime.ts";
+import { chooseRuntime, runtimeService, type RuntimeChoice, type RuntimeService } from "./herdr-core/runtime-choice.ts";
+import { moveService, type HcInstaller } from "./runtime-move-service.ts";
+import { moveLockPath } from "./runtime-move-lock.ts";
+import { bridgePins } from "./herdr-core/pin-label.ts";
+import { herdrCoreFacts, rediscoverHc } from "./herdr-core/discovery.ts";
+import { HC_RELEASE, hcInstallTarget, installHc } from "./herdr-core/install.ts";
+import { userHome } from "./user-home.ts";
+import { type HerdrCoreFacts, LOCAL_MACHINE } from "../shared/machines.ts";
+import { type AlertTiming, defaultStateDir } from "./push.ts";
 import { mergeSiblingState, siblingStateDir } from "./state-merge.ts";
 import { moveLegacyStateDir } from "./update-state.ts";
-import { handlePromptRequest, OpenCodePromptState } from "./prompt.ts";
-import { attachableIdentity } from "./pty/sidecar.ts";
-import { connectUpdater, handleUpdateRequest, type UpdateService } from "./update-api.ts";
-import { handleHerdrUpdateRequest, HerdrUpdater } from "./herdr-update.ts";
-import { handlePortalRequest, PortalService } from "./portal.ts";
-import { handleTelemetryRequest, Telemetry } from "./telemetry.ts";
-import { handleUsageRequest, UsageService } from "./usage.ts";
+import { sweepSshDirs } from "./ssh.ts";
+import { OpenCodePromptState } from "./prompt.ts";
+import { connectUpdater, type UpdateService } from "./update-api.ts";
+import { HerdrUpdater } from "./herdr-update.ts";
+import { PortalService } from "./portal.ts";
+import { RelayService } from "./relay/service.ts";
+import { AccountMailbox, accountServiceUrl, passAccountService } from "./account/mailbox.ts";
+import { AccountHolds } from "./account/holds.ts";
+import { AccountIntroductions } from "./account/introductions.ts";
+import { Telemetry } from "./telemetry.ts";
+import { UsageService } from "./usage.ts";
+import { createSystemSampler, type SystemSampler } from "./system-stats.ts";
 import { CLIProxyService } from "./cliproxy.ts";
 import { CLIProxyRoutes } from "./cliproxy-routes.ts";
 import { UsageLoginService } from "./usage-login.ts";
-import { handleVoiceRequest, VoiceService } from "./voice.ts";
-
-import { BRIDGE_PROTOCOL } from "../shared/machines.ts";
-import { bridgeIdentity, loopbackRelay, registerBridge, relayTarget } from "./bridge.ts";
-import { handleMachineRequest, nonCanonicalPath, slowMachinePath } from "./machine-api.ts";
-import { handleSessionHistoryRequest, handleSessionResumeRequest, SESSION_HISTORY_PATH, SESSION_RESUME_PATH } from "./session-history-routes.ts";
+import { UsageAccountList } from "./usage-account-list.ts";
+import { VoiceService } from "./voice.ts";
+import { loopbackRelay, registerBridge, relayTarget } from "./bridge.ts";
+import { PiSessionReader } from "./pi-session-metadata.ts";
 import { HerdrSidebarConfig, herdrConfigPath, snapshotWithoutHiddenTokens } from "./herdr-sidebar.ts";
-import { readHerdrUi } from "./herdr-ui.ts";
 import { closeCodexDaemonSources } from "./codex-daemon.ts";
 import { holdOpenCodeNative } from "./opencode-native.ts";
+import { holdCommandHistory } from "./claude-command-history.ts";
 import { holdFilePool } from "./file-pool.ts";
-import { MachineRelay } from "./machine-relay.ts";
-import { sameOrigin } from "./machine-security.ts";
-import { handlePluginRequest } from "./plugin-routes.ts";
+import { handleRequest, type RequestServices, type ServerContext } from "./dispatch.ts";
+import { lanHttpsCertificate, lanHttpsConfig, privateLanAddresses, privateLanPeer, type LanHttpsConfig } from "./lan-https.ts";
+
+
 
 /** The gap between a composer message's text and its Enter (see submitText). */
 export const SUBMIT_DELAY_MS = 120;
@@ -100,12 +105,33 @@ const DRAFT_CLEAR_POLL_MS = 50;
  */
 const BUN_BODY_CEILING = 64 * 1024 * 1024;
 
+/** herdr-core installed for the move to it, offered once a look for hc found none and herdr-core has a build for this PC. */
+export function herdrCoreInstaller(): HcInstaller {
+  return {
+    offer: () => hcInstallTarget() !== null && herdrCoreFacts()?.version === null ? { version: HC_RELEASE.version } : null,
+    install: async () => {
+      const installed = await installHc({ home: userHome() });
+      // one Ovis's own look does not find: taken out again, so the row offers the install once more
+      if ((await rediscoverHc()) === null) {
+        installed.undo();
+        throw new Error("herdr-core was installed, but Ovis does not find it; it was taken out again");
+      }
+    },
+  };
+}
+
 export interface ServerInstance {
+  /** A socket context with this server's services, also usable with transport operations replaced. */
+  readonly context: ServerContext;
   port: number;
   hostname: string;
+  /** the opt-in LAN HTTPS listener when it is up (server/lan-https.ts), else null */
+  lanHttps: { port: number; addresses: readonly string[]; sha256: string } | null;
   statusReady: Promise<void>;
   focusReady: Promise<void>;
   alertsSettled: () => Promise<void>;
+  /** Start background version reads; only the real entrypoints opt in. */
+  warmAgentCatalog: () => void;
   /**
    * queues a create request's first message for a pane's agent, as POST /api/workspace/create and /api/tab/create do with
    * `first_message` and `first_message_connection` (`requester`, a connection's id from its first snapshot): for tests that start no agent
@@ -118,6 +144,10 @@ export function createServer(
   options: {
     port?: number;
     hostname?: string;
+    /** Also listen on ::1 when the primary listener is bound to 127.0.0.1. */
+    ipv6Loopback?: boolean;
+    /** the opt-in LAN HTTPS listener (server/lan-https.ts); only the real entrypoint reads it from the environment. Port 0 picks one. */
+    lanHttps?: LanHttpsConfig;
     token?: string;
     /** where VAPID keys and push subscriptions persist; tests pass a temp dir */
     stateDir?: string;
@@ -149,12 +179,26 @@ export function createServer(
     updates?: UpdateService;
     /** updates herdr itself (server/herdr-update.ts); unset, the app offers no herdr update. Tests pass one that runs a stand-in herdr. */
     herdrUpdate?: HerdrUpdater;
+    /** what this PC has of herdr-core, for Settings (server/herdr-core/discovery.ts); unset, health tells none. Tests pass a stand-in. */
+    herdrCoreFacts?: () => HerdrCoreFacts | undefined;
+    /** which runtime this server serves and the Settings switch (server/herdr-core/runtime-choice.ts); unset, health tells none and a switch is refused. Tests pass a stand-in. */
+    runtimeService?: RuntimeService;
+    /** installs herdr-core for the move to it where the PC has none (server/herdr-core/install.ts); unset, none is offered. Tests pass a stand-in. */
+    herdrCoreInstaller?: HcInstaller;
+    /** whether the launcher took this bridge as its own after its startup check (server/supervisor.ts); unset, nothing is told */
+    launchAccepted?: () => boolean;
     /** a public address through Portal (server/portal.ts); unset, the app offers none. Tests pass one that runs a stand-in portal. */
     portal?: PortalService;
+    /** Relay opt-in and identity persist in stateDir; tests can supply a local physical transport. */
+    relay?: RelayService;
+    /** Where this PC collects account records left for it (server/account/mailbox.ts); tests pass the in-memory service. */
+    accountService?: { url: string; fetch?: (request: Request) => Promise<Response> };
     /** anonymous install and update counts (server/telemetry.ts); unset, the server sends none and answers 404. Only the real entrypoint passes one. */
     telemetry?: Telemetry;
     /** plan limits of the AI subscriptions signed in here; tests pass one without real sign-ins */
     usage?: UsageService;
+    /** this PC's load; tests pass one that reads nothing from the machine, or null for a server that tells none */
+    system?: SystemSampler | null;
     /** Tests supply an isolated proxy service, never a user's configured instance. */
     cliProxy?: CLIProxyService;
     /** Tests use a disposable credential home and stand-in CLI binaries. */
@@ -162,8 +206,20 @@ export function createServer(
     /** voice input's key, provider and models; tests pass one with their own env and fetch */
     voice?: VoiceService;
     machines?: boolean;
+    /** how PCs added through the relay reach it (server/relay-pc.ts); tests point it at a local relay */
+    relayPcSocket?: (url: string) => RelaySocket;
+    /** how they dial those PCs' direct carriers; tests point it at a local listener */
+    relayPcDirectSocket?: (url: string) => RelaySocket;
+    /** how often another PC's own update is looked at while it runs; tests shorten it */
+    pcUpdateTimings?: { pollMs?: number; startMs?: number; checkMs?: number; offerMs?: number };
+    /** how other PCs on this PC's Tailscale are found (server/tailnet-pcs.ts); tests give their own */
+    tailnetPcs?: TailnetPcsOptions;
+    /** where Add a connection → SSH reads its list from; tests point it at a fixture */
+    sshCandidates?: SshCandidatesOptions;
     /** a bridge this app starts on a PC (server/remote-entry.ts): its token is the credential its connection server holds, and no browser reaches it, so its snapshots go whole (#2160) */
     bridgeOnly?: boolean;
+    /** false: the panes' files are on another machine (server/herdr-core/machine-entry.ts), so no route reads or makes files on this disk for them */
+    localFiles?: boolean;
     /** Read-only saved profiles from the local herdr client; tests supply their own catalog. */
     herdrProfiles?: () => Promise<HerdrMachineProfile[]>;
     /** herdr's config.toml, for its sidebar rows (server/herdr-sidebar.ts) and its copy_on_select (server/herdr-ui.ts); unset, where herdr itself reads it. Tests pass a temp file. */
@@ -185,6 +241,8 @@ export function createServer(
     alertTiming?: Partial<AlertTiming>;
     /** accept plain-http loopback push endpoints (server/push.ts); only tests delivering to push.fake.ts set it */
     pushLoopbackHttp?: boolean;
+    /** keep desktop-activity.json in the state dir for the desktop app (server/desktop-activity.ts) */
+    desktopActivity?: boolean;
     /** how long a turn's end is held for its background work (server/background-wait.ts); tests shorten it */
     backgroundWait?: { grace: number; limit: number };
     /** Clock for background holds and alert turn durations; tests advance it explicitly. */
@@ -199,6 +257,8 @@ export function createServer(
     attachRelookupForMs?: number;
     /** ATTACH_HOLD_MS; a test lengthens it so an attach's exit always comes before its hold ends */
     attachHoldMs?: number;
+    /** PI_READ_DEADLINE_MS, a Pi session listing's deadline; a test that checks what is listed, not how fast, lengthens it */
+    piSessionDeadlineMs?: number;
     /** whether herdr can `terminal attach`; unset, its ping says, and this runtime's PTY sidecar has to be runnable. Tests give a Windows herdr's answer, at once or as late as a ping's. */
     terminalAttach?: boolean | (() => Promise<boolean>);
     /** GET /api/pane/background-agent's read (server/background-agent.ts); a test holds it to change the pane's session while it is out */
@@ -218,14 +278,26 @@ export function createServer(
   const bootId = process.env["OVIS_BOOT_ID"] || randomUUID();
   const orderSequence = new OrderSequence(bootId);
   const hostname = options.hostname ?? process.env["HOST"] ?? "127.0.0.1";
+  const ipv6Loopback = (options.ipv6Loopback ?? process.env["OVIS_IPV6_LOOPBACK"] === "1") && hostname === "127.0.0.1";
   /** Empty token = gate disabled; every route then behaves exactly as it did before auth existed. */
   const token = options.token ?? process.env["OVIS_TOKEN"] ?? "";
   /** paired devices (server/devices.ts) and the PC's Tailscale login: the two ways in besides the token and this PC itself */
   // resolved once: a merge can give the old dir files of its own, after which resolving again could name the other dir
   const stateDir = options.stateDir ?? defaultStateDir();
+  const ovisRelay = options.relay ?? new RelayService({ stateDir, accountService: passAccountService(options.accountService?.url), ...(options.accountService?.fetch ? { accountFetch: options.accountService.fetch } : {}) });
   const merge = options.siblingStateDir ? mergeSiblingState(stateDir, options.siblingStateDir) : null;
-  const devices = new DeviceStore(stateDir, merge?.devicesBlocked ?? null);
+  let accountBlocked: string | null = null;
+  if (options.siblingStateDir) {
+    try { accountBlocked = mergeAccountTombstones(stateDir, options.siblingStateDir); }
+    catch (error) { accountBlocked = `cannot merge the account tombstones of ${options.siblingStateDir}: ${error instanceof Error ? error.message : String(error)}`; }
+    if (accountBlocked !== null) console.error(accountBlocked);
+  }
+  const devices = new DeviceStore(stateDir, merge?.devicesBlocked ?? null, accountBlocked);
   const preferences = new PreferenceStore(stateDir);
+  // Settings -> Experimental -> OMP on macOS herdr-core: chat from the session it holds open
+  readOmpHeldFilesSetting(() => preferences.get().settings.ompHeldFiles === true);
+  // on herdr-core an agent pinned here is pinned in the Herdr app and its other clients too
+  const stopPinBridge = servingCore() ? bridgePins(coreConnection(), preferences, LOCAL_MACHINE, stateDir) : null;
   // Chat's own rewind (#1500, never released) kept its rewinds here; nothing reads them since #1577
   try {
     rmSync(join(stateDir, "claude-rewinds.json"), { force: true });
@@ -238,14 +310,51 @@ export function createServer(
   const usageLogin = options.usageLogin ?? new UsageLoginService();
   // a sign-in runs in a herdr tab, which outlives this server: the next one must know its home is taken (#2313)
   usageLogin.persistTo(stateDir);
-  const usage = options.usage ?? new UsageService(undefined, undefined, (refresh) => cliProxy.report(refresh));
+  const usage = options.usage ?? new UsageService(undefined, undefined, (refresh, skipped) => cliProxy.report(refresh, skipped));
+  // a removed or restored account changes which Hub accounts stay unread, saved at once (#3427)
+  const usageAccounts = new UsageAccountList(stateDir, usage, () => cliProxy.hiddenChanged());
+  const hiddenAccounts = (hidden: unknown): Set<string> => new Set(Array.isArray(hidden) ? hidden.filter((key): key is string => typeof key === "string") : []);
+  // an account hidden in Settings (the shared usageHidden) or removed from Ovis has its sign-in looked up no more (#3333)
+  // whether the last read of the removed list succeeded: while it does not, the Hub forgets no hidden account (#3428)
+  let removedReadable = true;
+  const skippedAccounts = () => {
+    let removed: string[] = [];
+    // an unreadable list skips nothing; the report says why
+    try { removed = usageAccounts.removed(); removedReadable = true; } catch { removedReadable = false; /* UsageAccountList.report warns */ }
+    return new Set([...hiddenAccounts(preferences.get().settings.usageHidden), ...removed]);
+  };
+  usage.skipAccounts(skippedAccounts);
+  // a Hub sign-in keeps the rows of the accounts hidden now, not only of those the last report skipped
+  cliProxy.skipAccounts(skippedAccounts, () => removedReadable);
+  // an account shown again is looked up now, not at the browser's next poll; hiding one needs no read,
+  // and with Plan limits off nothing is read at all (gh auth token included)
+  let usageHidden = hiddenAccounts(preferences.get().settings.usageHidden);
+  preferences.subscribe((next) => {
+    const before = usageHidden;
+    usageHidden = hiddenAccounts(next.settings.usageHidden);
+    // which Hub account each hidden key is, saved now and with Plan limits off too: a restart before any report keeps it (#3427)
+    // and again at every change while its last save failed: a retried hide is refused until it is saved (#3428)
+    if (before.size !== usageHidden.size || [...before].some((key) => !usageHidden.has(key)) || cliProxy.hiddenUnsaved()) cliProxy.hiddenChanged();
+    if (!next.settings.showUsage || ![...before].some((key) => !usageHidden.has(key))) return;
+    usage.report().catch((error: unknown) => console.warn("usage: could not be read after the hidden accounts changed", error instanceof Error ? error.message : String(error)));
+  });
+  // a herdr-core machine's server runs on this PC, so it has no load of that machine to tell (system-stats.ts)
+  const systemSampler = options.system === undefined ? (hcMachine() === null ? createSystemSampler() : null) : options.system;
+  // a sign-in the browser followed ends in the server's own PTY, not a herdr pane: it says so itself
+  usageLogin.onLoginEnded((account, provider) => {
+    usage.invalidate(provider);
+    if (account !== null) {
+      try { usageAccounts.restore(account); }
+      catch (error) { console.warn("Could not restore the signed-in account to Ovis", error instanceof Error ? error.message : String(error)); }
+    }
+  });
   const voice = options.voice ?? new VoiceService({ stateDir, env: process.env, fetch });
   /** a login named here is taken as it is: a tagged node has none of its own to read (OVIS_TAILSCALE_OWNER) */
   const namedOwner = options.tailscaleOwner !== undefined ? options.tailscaleOwner : process.env["OVIS_TAILSCALE_OWNER"]?.trim() || undefined;
   const tailnet = options.tailnet ?? new TailnetIdentitySource();
-  const identityOf = async (grantPath: boolean, host: string | null) => {
+  const identityOf = async (grantPath: boolean, host: string | null, loginPath = false) => {
     if (namedOwner !== undefined) return { ...(grantPath ? await tailnet.freshIdentity(host) : { soleLogin: null, dnsName: null, tailnetIp: null }), owner: namedOwner, tagged: false };
-    return grantPath ? tailnet.freshIdentity(host) : tailnet.identity();
+    return grantPath ? tailnet.freshIdentity(host) : loginPath ? tailnet.loginIdentity() : tailnet.identity();
   };
   const serveOnly = options.tailscaleServeOnly ?? process.env["OVIS_TAILSCALE_SERVE_ONLY"] === "1";
   /** what lets Portal open an address: this server's own values, never a request's */
@@ -253,6 +362,26 @@ export function createServer(
 
   const shellAgents = options.shellAgents ?? new ShellAgentLocator({ probe: null });
   const agentDetector = options.agentDetector ?? new AgentDetector({ locate: catalogLocator({ probe: null }) });
+  // GET /api/agents: on a PATH a pane's shell starts it from, read again once after an install put it
+  // in its installer's folder (installed-lookup.ts); shell-started kinds through the locator that starts them
+  const catalogPlatformHere = catalogPlatform(process.platform);
+  const installFolder = (binary: string): { path: string; mark: string } | null => {
+    const entry = AGENT_CATALOG.find((candidate) => candidate.detect.binaries.includes(binary));
+    const dirs = entry !== undefined && catalogPlatformHere !== null ? entry.detect.install_dirs?.[catalogPlatformHere] ?? [] : [];
+    const path = catalogPlatformHere === null ? null : agentDetector.inInstallFolder(binary, dirs, catalogPlatformHere);
+    if (path === null) return null;
+    try { return { path, mark: String(statSync(path).mtimeMs) }; } catch { return null; }
+  };
+  const herdrKinds = new InstalledLookup({ onPath: (binary) => agentDetector.onPath(binary), inInstallFolder: installFolder, refresh: () => agentDetector.refreshPath() });
+  const shellKinds = new InstalledLookup({ onPath: (kind) => shellAgents.executable(kind), inInstallFolder: installFolder, refresh: () => shellAgents.refresh() });
+  const agentOffered = async (kind: string): Promise<boolean> => {
+    const entry = AGENT_CATALOG.find((candidate) => candidate.id === kind);
+    // a program it needs to run (DeepSeek Harness's dsh behind dsh-tui) missing: not offered, as the catalog says
+    for (const needed of entry?.detect.needs ?? []) if (!(await herdrKinds.has(needed))) return false;
+    if (kind in SHELL_AGENTS) return shellKinds.has(kind);
+    return herdrKinds.has(entry?.detect.binaries[0] ?? kind);
+  };
+  const agentInstaller = new AgentInstaller(agentDetector);
   const openCodeState = new OpenCodePromptState();
   const draftTimer = setInterval(() => openCodeState.prune(), 60_000);
   draftTimer.unref();
@@ -260,14 +389,36 @@ export function createServer(
   // A bridge this app starts on a PC (`bridgeOnly`, server/remote-entry.ts) serves only its connection server, with
   // the credential it registered as its token: that server applies its own rows, so it gets every snapshot whole.
   const browserSnapshot = <S extends SessionSnapshot>(snapshot: S): S => options.bridgeOnly ? snapshot : snapshotWithoutHiddenTokens(herdrSidebar.get(), snapshot);
-  const core = createCore({ options: { ...options, stateDir, openCodeState, orderSequence }, devices, preferences, usage, usageLogin, browserSnapshot, TYPED_SETTLE_MS, KEY_SETTLE_MS, SUBMIT_DEADLINE_MS, SUBMIT_DELAY_MS, DRAFT_CLEAR_WAIT_MS, DRAFT_CLEAR_POLL_MS });
-  const { sidecar, serialize, push, logPushError, omo, claudeAgents, opencodeAgents, piAgents, plans, clientSnapshot, machines, broadcastAll, collector, queueFirstMessage } = core;
+  const core = createCore({ options: { ...options, stateDir, openCodeState, orderSequence, serverId: () => ovisRelay.serverId(), seenMoved: (from, to, renumber) => seen.moved(LOCAL_MACHINE, from, to, renumber) }, devices, preferences, usage, usageLogin, browserSnapshot, TYPED_SETTLE_MS, KEY_SETTLE_MS, SUBMIT_DEADLINE_MS, SUBMIT_DELAY_MS, DRAFT_CLEAR_WAIT_MS, DRAFT_CLEAR_POLL_MS });
+  const { machines, collector, queueFirstMessage, push } = core;
   // read finishes are kept until this server knows their herdr run ended
   const seen = new SeenStore(stateDir, (pc, epoch) => machines?.finishEnded(pc, epoch) ?? false);
+  // a pane another PC's herdr moved under a new ID: what was read under the old ID is read under the new one (#1503;
+  // this PC's own moves are told with their numbering above)
+  machines?.subscribe((event) => {
+    if (event.type !== "machine-message" || event.machine_id === LOCAL_MACHINE || event.message.type !== "pane-moved") return;
+    try { seen.moved(event.machine_id, event.message.from, event.message.to); }
+    catch (error) { console.warn(`seen: could not carry the reads of ${event.message.from} to ${event.message.to}:`, error); }
+  });
+  // on herdr-core a finish read here is read in the Herdr app and its other clients too: only the
+  // pane's finish now, so a read told late never marks a turn that ended since as seen. A pane brought
+  // into view writes it again (shared/seen.ts SeenPresentation); one left on screen does not
+  const seenMarker = servingCore() ? coreSeenMarker() : null;
+  const markSeen = (finish: SeenFinish, again: boolean) => {
+    if (!seenMarker || finish.pc !== LOCAL_MACHINE || machines?.finishEnded(finish.pc, finish.epoch) !== false) return;
+    const pane = machines.list().find((machine) => machine.id === LOCAL_MACHINE)?.snapshot?.panes.find((candidate) => candidate.pane_id === finish.pane);
+    if (pane?.agent_status !== "done" || pane.finish_id !== finish.id) return;
+    seenMarker.mark(finish.pane, again).catch((error: unknown) => console.warn(`herdr-core: could not mark ${finish.pane} seen:`, error));
+  };
+  if (seenMarker) {
+    seen.subscribe((finish, presented) => { if (presented !== "new") markSeen(finish, false); });
+    seen.onPresented((finish) => markSeen(finish, true));
+  }
   // started after createCore's Node probe (server/pty/sidecar.ts), which can hold the thread up to 3 s: that wait
   // would count against the read's own 2.5 s limit, and a read cut short leaves the owner unknown for 5 minutes
   identityOf(false, null);
   const bridgeToken = options.bridgeToken ?? randomBytes(32).toString("hex");
+  const piReader = new PiSessionReader({ deadlineMs: options.piSessionDeadlineMs });
 
   type PortalStartup = { ok: true } | { ok: false; error: unknown };
   let settlePortalStartup!: (result: PortalStartup) => void;
@@ -282,383 +433,96 @@ export function createServer(
 
   const envPort = process.env["PORT"];
   const clientConnectionLog = new ClientConnectionLog();
+  const socketContext = (bunServer: Bun.Server<SocketData>): ServerContext => ({
+    requestIP: (request) => bunServer.requestIP(request),
+    timeout: (request, seconds) => { bunServer.timeout(request, seconds); },
+    upgrade: (request, options) => bunServer.upgrade(request, options),
+    get port() { return bunServer.port; },
+    peer: { kind: "socket" },
+    services,
+  });
   const server = Bun.serve<SocketData>({
     port: options.port ?? (envPort ? Number(envPort) : DEFAULT_PORT),
     hostname,
     maxRequestBodySize: BUN_BODY_CEILING,
 
-    async fetch(request, bunServer) {
-      return requestLog.handle(request, async (headers) => {
-      const startup = portalStartupResult ?? await portalStartup;
-      if (!startup.ok) {
-        setRequestRoute("startup");
-        return compressResponse(request, errorResponse(startup.error));
-      }
-      // the route's answer, gzipped for a browser that takes it (server/compress.ts)
-      return compressResponse(request, await (async (): Promise<Response | undefined> => {
-      const url = new URL(request.url);
-      let { pathname } = url;
-      const bridgeAuthorized = isAuthenticated(request, bridgeToken);
-      // the connection server that reaches this one as its PC reads its update status and asks for the
-      // update on offer: an Ovis run on this PC by itself is updated through its own updater, never
-      // replaced (server/machines.ts ownOffer). An install still names the offered revision and the
-      // custom header (update-api.ts), and whoever holds the token already drives every pane here. Only those two
-      // requests, each by its own method and with no query: the token opens nothing else of these routes (#2054)
-      const bridgeUpdatePath = url.search === "" && (pathname === "/api/updates" ? request.method === "GET" : pathname === "/api/updates/install" && request.method === "POST");
-      const bridgePath = pathname === "/api/bridge" || pathname === "/api/session" || pathname === SESSION_HISTORY_PATH || pathname === SESSION_RESUME_PATH || pathname === "/api/agents" || pathname === "/api/agent-catalog" || pathname === "/api/agent/rename" || pathname === "/api/agent/commands" || pathname === "/api/integrations" || pathname === "/api/plugins/actions" || pathname === "/api/plugin/action" || pathname.startsWith("/api/pane/") || pathname.startsWith("/api/workspace/") || pathname.startsWith("/api/worktree/") || pathname.startsWith("/api/tab/") || pathname === "/api/layout/ratio" || pathname.startsWith("/api/fs/") || pathname === "/ws" || bridgeUpdatePath;
-      const ip = bunServer.requestIP(request);
-      const loopback = ip !== null && isLoopbackAddress(ip.address);
-      const forwarded = cameThroughProxy(request.headers);
-      const funnel = request.headers.has("tailscale-funnel-request");
-      const tailscaleLogin = request.headers.get("tailscale-user-login");
-      const forwardedFor = request.headers.get("x-forwarded-for");
-      const requestHost = request.headers.get("host");
-      // the guessing budget of the address that asks (auth.ts): a token presented while it waits is not compared
-      const client = authClient(ip?.address ?? null, request.headers);
-      const presented = presentedToken(request, token, client);
-      // counted at once, before any await below lets a concurrent guess pass the same check. Every
-      // wrong token counts, a paired watch device's too (a right one would upgrade it to drive);
-      // the connection server's own bridge token does not
-      if (presented === "wrong" && !bridgeAuthorized) recordPresentedTokenFailure(client);
-      const tokenMatched = presented === "match";
-      let pairedDevice: DeviceMatch | null;
-      try {
-        pairedDevice = devices.match(deviceCookieValue(parseCookies(request.headers.get("cookie"))));
-      } catch (error) {
-        // First-cookie confirmation is an authorization write, not best-effort telemetry.
-        return errorResponse(error);
-      }
-      const requestShape = { loopback, forwarded, funnel, tailscaleLogin, forwardedFor, serveOnly };
-      const identity = await identityOf(token === "" && pairedDevice === null && isServeOwnerRequest(requestShape) && (pathname === "/ws" || pathname.startsWith("/api/")), requestHost);
-      const access = decideAccess({
-        ...requestShape,
-        host: requestHost,
-        tokenMatched,
-        device: pairedDevice,
-        ...identity,
-        tokenConfigured: token !== "",
-        gated: devices.gated,
-      });
-      const authenticated = access.level === "full" || (bridgePath && bridgeAuthorized);
-
-      if (requiresAuth(pathname) && !authenticated) {
-        setRequestRoute("auth-refusal");
-        // a script's Bearer guess is told to wait; a browser's cookie gets the usual 401 and its sign-in form
-        if (presented === "held" && pathname !== "/ws" && request.headers.has("authorization")) return presentedTokenHeld(client);
-        // The WS client never parses a body, so the upgrade refusal stays plain text.
-        return pathname === "/ws" ? new Response("unauthorized", { status: 401 }) : unauthorizedJson(access.level === "none" ? access.reason : "token_required");
-      }
-
-      const readOnly = access.level === "full" && access.role === "watch";
-      const mutating = !["GET", "HEAD", "OPTIONS"].includes(request.method);
-      if (pathname.startsWith("/api/") && mutating && !sameOrigin(request)) {
-        setRequestRoute("origin-refusal");
-        return jsonResponse({ error: { code: "invalid_origin", message: "Use controls from this app" } }, 403);
-      }
-      // An empty segment ("//", or a trailing "/") or an encoded separator reads as another route to
-      // the checks below, while the PC proxy drops empty segments before forwarding:
-      // `/api/machines/<id>//fs/file` would pass as not a file read, `<id>/sessions/history/` as no history.
-      if (pathname.startsWith("/api/") && nonCanonicalPath(pathname)) return jsonResponse({ error: { code: "not_found", message: "not found" } }, 404);
-      // What a watching device must not reach, spelled out rather than inferred from the
-      // method: file contents (those files include credentials) and a directory listing
-      // (names and sizes are the shape of a repository the terminals never print), plus
-      // every mutation except the two below.
-      const fileRead = /^\/api\/(?:machines\/[^/]+\/)?fs\//.test(pathname);
-      const directoryListing = /^\/api\/(?:machines\/[^/]+\/)?workspace\/directories$/.test(pathname);
-      // Signing a device's own alerts in is a preference of that device, so `watch` keeps
-      // it. The endpoint it registers is https-only (server/push.ts), and that is the
-      // protection: a watch device's subscription is delivered every status change anyway.
-      // /api/push/test stays with a session that can drive only because it is a mutation; /api/push/status
-      // is a POST only to keep the subscription out of the address, and answers the device about its own.
-      // A watch device may report its own connection metadata, never terminal input or file data.
-      const ownPreferences = pathname === "/api/auth" || pathname === "/api/push/subscribe" || pathname === "/api/push/status" || pathname === "/api/connection-diagnostics";
-      // a repository's changes are file contents too: the patch of a credential file is that file
-      const repositoryDiff = /^\/api\/(?:machines\/[^/]+\/)?workspace\/diff\//.test(pathname);
-      // earlier sessions carry their first prompts
-      const sessionHistory = /^\/api\/(?:machines\/[^/]+\/)?sessions\/history$/.test(pathname);
-      // an agent's commands in a folder, and a pane's, are read from that folder's command files (each row
-      // carries a file's first line and its path), as a directory listing and a file read are; the
-      // composer's menu that lists them is a drive feature (#2132)
-      const commandRows = /^\/api\/(?:machines\/[^/]+\/)?(?:agent|pane)\/commands$/.test(pathname);
-      // the paths under a pane's folder that match a query are a directory listing too; they feed the
-      // composer's @-mention picker, a drive feature (#2244)
-      const paneFiles = /^\/api\/(?:machines\/[^/]+\/)?pane\/files$/.test(pathname);
-      // where a plugin action's run stands carries what its command printed when it failed, asked for by a
-      // log id: only the device that started the run (a POST, which a watching device cannot send) asks it
-      const pluginRun = /^\/api\/(?:machines\/[^/]+\/)?plugin\/action$/.test(pathname);
-      // a repository's checkouts are its folders' paths and branches, those not open in herdr too; the worktree
-      // dialog that lists them is a drive feature, and the sidebar names a branch only for a driving device (#2250)
-      const worktreeList = /^\/api\/(?:machines\/[^/]+\/)?worktree\/list$/.test(pathname);
-      if (readOnly && (fileRead || directoryListing || repositoryDiff || sessionHistory || commandRows || paneFiles || pluginRun || worktreeList || mutating && !ownPreferences)) {
-        setRequestRoute("watch-refusal");
-        return jsonResponse({ error: { code: "read_only", message: "this device can only watch" } }, 403);
-      }
-
-      // API reads can chain several bounded 10 s Herdr RPCs. Give the handler time to return
-      // its JSON result or timeout instead of Bun closing the socket at its default 10 s idle
-      // cutoff. Static files keep their default; streaming and long-operation routes override
-      // this finite budget below, after access and origin checks have passed. Only a signed-in
-      // request gets it: the routes open without sign-in (health, auth, pairing) keep the default,
-      // so an unauthenticated client cannot hold idle sockets for a minute.
-      if (pathname.startsWith("/api/") && authenticated) bunServer.timeout(request, 60);
-
-      if (pathname === "/api/bridge") {
-        setRequestRoute(pathname);
-        if (token === "" && !bridgeAuthorized) return unauthorizedJson();
-        try { return jsonResponse(await bridgeIdentity(sidecar)); } catch (error) { return errorResponse(error); }
-      }
-      if (pathname === "/api/machines" || pathname.startsWith("/api/machines/")) {
-        if (!machines) return jsonResponse({ error: { code: "bridge_only", message: "Manage PCs on the connection server" } }, 404);
-        // /local aliases preserve every existing endpoint without a self-proxy.
-        if (pathname.startsWith("/api/machines/local/")) {
-          if (!sameOrigin(request) || (request.method !== "GET" && request.headers.get("x-herdr-machine") !== "1")) return jsonResponse({ error: { code: "invalid_origin", message: "Use PC controls from this app" } }, 403);
-          pathname = pathname.replace("/api/machines/local/", "/api/");
-          if (!/^\/api\/(session|agents|agent-catalog$|integrations|pane\/|workspace\/|worktree\/|tab\/|layout\/ratio$|agent\/(?:rename|commands)$|plugins\/actions$|plugin\/action$|sessions\/(?:history|resume)$)/.test(pathname)) return badRequest("invalid_route", "Unknown PC endpoint");
-          url.pathname = pathname;
-        } else {
-          // a worktree made with an agent waits on git and then agent.start, up to 150 s on the PC, and a
-          // resume on agent.start and then its store check (machine-api.ts slowMachinePath)
-          bunServer.timeout(request, pathname === "/api/machines/events" ? 0 : slowMachinePath(pathname.split("/").slice(4).join("/")) ? 180 : 80);
-          const deviceId = access.level === "full" ? access.device?.id : undefined;
-          // a device's enrollment is news to every stream but the new device's own: one the stream's
-          // device cookie names, or one this browser asked for itself (its stream key, server/devices.ts),
-          // which a stream opened before that device existed cannot know by its cookie. A browser
-          // without a key gets one with this stream; a key is a cookie of its own name, so tabs that
-          // open at once each add theirs and the pairing later carries all of them
-          const presentedKeys = streamKeys(request);
-          const issuedKey = presentedKeys.length === 0 && pathname === "/api/machines/events" ? newStreamKey() : null;
-          const keys = issuedKey === null ? presentedKeys : [issuedKey];
-          // a stream that came in through the open LAN is told nothing: every enrollment follows the write
-          // that closed the gate, so whoever holds it has no access left by the time there is news
-          const openAccess = access.level === "full" && access.via === "open";
-          const pairings = { subscribe: (listener: (event: DevicePairedEvent) => void) => devices.onPaired((event, origin) => { if (!openAccess && event.device_id !== deviceId && !sameBrowser(origin, keys)) listener(event); }) };
-          const response = await handleMachineRequest(request, machines, deviceId ? (close) => devices.onRevoke(deviceId, close) : undefined, preferences, readOnly, herdrSidebar, seen, pairings);
-          response.headers.set("cache-control", "no-store");
-          if (issuedKey !== null && response.ok) response.headers.append("set-cookie", streamCookie(issuedKey, isSecureRequest(request)));
-          return response;
-        }
-      }
-      if (pathname === "/ws") {
-        setRequestRoute(pathname);
-        if (!sameOrigin(request)) return new Response("invalid origin", { status: 403 });
-        const deviceId = access.level === "full" ? access.device?.id : undefined;
-        const machineId = url.searchParams.get("machine_id");
-        if (machineId && machineId !== "local") {
-          if (access.level === "none") return unauthorizedJson(access.reason);
-          if (!machines?.endpoint(machineId)) return jsonResponse({ error: { code: "machine_offline", message: "This PC is disconnected" } }, 503);
-          let relay: MachineRelay | undefined;
-          try {
-            relay = new MachineRelay(machines, machineId, readOnly, browserSnapshot);
-            await relay.ready;
-            const upgraded = bunServer.upgrade(request, { headers, data: connectionData({ relay, deviceId, readOnly }) });
-            if (upgraded) return undefined;
-            relay.close();
-          } catch { relay?.close(); return new Response("remote websocket unavailable", { status: 502 }); }
-          return new Response("websocket upgrade required", { status: 426 });
-        }
-        const upgraded = bunServer.upgrade(request, { headers, data: connectionData({ deviceId, readOnly, bridge: bridgeAuthorized }) });
-        if (upgraded) return undefined;
-        return new Response("websocket upgrade required", { status: 426 });
-      }
-
-      if (pathname === "/api/auth") {
-        setRequestRoute(pathname);
-        // signing out also ends the page media this browser was given (by its device, else by its address)
-        // a browser can hold the token and a device cookie at once, and its renders are then the
-        // client's: signing out ends both kinds
-        if (request.method === "DELETE" && authenticated) {
-          if (pairedDevice !== null) forgetPageMedia({ device: pairedDevice.id });
-          forgetPageMedia({ client });
-        }
-        return handleAuthRequest(request, token, client);
-      }
-      if (pathname === "/api/devices" || pathname.startsWith("/api/devices/")) {
-        try {
-          // one device, or all of them: the registry names what was revoked, and the cleanup follows its ids
-          return await handleDeviceRequest(request, pathname, devices, access, (revoked) => {
-            for (const id of revoked) {
-              // The device registry is the delivery authority even if cleaning the push file fails.
-              try { push.revokeDevice(id); } catch (error) { logPushError(error); }
-              // and every page media address its renders were given
-              forgetPageMedia({ device: id });
-            }
-          });
-        } catch (error) { return errorResponse(error); }
-      }
-
-      if (pathname === "/api/updates" || pathname.startsWith("/api/updates/")) {
-        // the bridge token cannot read /api/access: where this server answers comes with its update status (#2191)
-        // the port is this server's own; a tailscale that cannot be read only leaves the https address out
-        const where = bridgeAuthorized ? async () => {
-          const port = bunServer.port ?? DEFAULT_PORT;
-          const serving = await remoteAccess(port).then((access) => access.tailscale.serving_url, () => null);
-          return { port, serving_url: serving };
-        } : undefined;
-        return handleUpdateRequest(request, pathname, options.updates, where);
-      }
-      if (pathname === "/api/herdr/update") { setRequestRoute(pathname); return handleHerdrUpdateRequest(request, options.herdrUpdate); }
-      if (pathname === "/api/portal" || pathname.startsWith("/api/portal/")) {
-        return handlePortalRequest(request, pathname, options.portal, { port: bunServer.port ?? DEFAULT_PORT, ...portalGuards() });
-      }
-      if (pathname === "/api/connection-diagnostics") { setRequestRoute(pathname); return clientConnectionLog.handle(request, client ?? "unknown"); }
-      if (pathname === "/api/telemetry") { setRequestRoute(pathname); return handleTelemetryRequest(request, options.telemetry); }
-      // what every browser of this server shares; a watching device reads it and cannot change it (above)
-      if (pathname === "/api/preferences") { setRequestRoute(pathname); return handlePreferencesRequest(request, preferences); }
-      // the finishes read in some browser of this server; a watching device reads them and cannot add to them (above)
-      if (pathname === "/api/seen") { setRequestRoute(pathname); return handleSeenRequest(request, seen); }
-
-      if (pathname === "/api/usage") { setRequestRoute(pathname); return handleUsageRequest(request, url, usage); }
-      if (pathname === "/api/usage/login") { setRequestRoute(pathname); bunServer.timeout(request, 30); return usageLogin.handle(request, collector.trackPane); }
-      if (pathname === "/api/cliproxy" || pathname.startsWith("/api/cliproxy/")) { bunServer.timeout(request, 60); return cliProxyRoutes.handle(request); }
-      // a long clip can keep the provider silent past Bun's 10 s idle limit before the first line
-      if (pathname === "/api/voice" || pathname.startsWith("/api/voice/")) { bunServer.timeout(request, 120); return handleVoiceRequest(request, pathname, voice); }
-
-      if (pathname === "/api/push" || pathname.startsWith("/api/push/")) {
-        try {
-          // a paired device owns its alerts; the open LAN (before any pairing) owns them only while
-          // it stays open, like a subscription from before owners (undefined); a local/token/
-          // Tailscale sign-in is the owner (null)
-          const owner = access.level !== "full" ? null : access.device?.id ?? (access.via === "open" ? undefined : null);
-          // the subscription remembers its browser's stream keys, so that browser's own pairing is not
-          // pushed to it whoever owns the subscription; a browser without one gets one here
-          const presentedKeys = streamKeys(request);
-          const issuedKey = presentedKeys.length === 0 && request.method === "POST" && pathname === "/api/push/subscribe" ? newStreamKey() : null;
-          const answered = await handlePushRequest(request, pathname, push, owner, issuedKey === null ? presentedKeys : [issuedKey]);
-          if (answered && issuedKey !== null && answered.ok) answered.headers.append("set-cookie", streamCookie(issuedKey, isSecureRequest(request)));
-          if (answered) return answered;
-        } catch (error) {
-          return errorResponse(error);
-        }
-      }
-
-      if (pathname === "/api/health") {
-        setRequestRoute(pathname);
-        const auth: HealthAuth = access.level === "full"
-          ? { required: false, authenticated: true, via: access.via, role: access.role, ...(access.via === "token" && bearerMatches(request, token) ? { bearer: true as const } : {}) }
-          : { required: true, authenticated, ...(authenticated ? {} : { reason: access.reason }) };
-        // this server is open to the network with no token and nothing paired, told to a client
-        // that got in and to nobody else: naming it to an anonymous caller would be
-        // reconnaissance, not help. Nothing here changes who is let in (server/access.ts).
-        const lan_exposure = access.level === "full" && lanExposed({ hostname, tokenConfigured: token !== "", gated: devices.gated })
-          ? { host: hostname } : undefined;
-        // what protects this server, for a client that got in (a watching one too) and nobody else;
-        // per request, so never stored. The ingress is this request's, proven or `unknown`.
-        const ingress = observedIngress({ ...requestShape, ...identity, peerKnown: ip !== null, forwardingHeaders: forwardingHeaders(request.headers) });
-        const security: SecuritySummary | undefined = access.level === "full" ? {
-          token_configured: token !== "",
-          pairing_gate: devices.error !== null ? "unavailable" : devices.gated ? "closed" : "open",
-          bind_scope: bindScope(hostname),
-          observed_ingress: ingress,
-          public_exposure: ingress === "funnel" ? "observed" : "unknown",
-        } : undefined;
-        const securityHeaders: Record<string, string> = security ? { "cache-control": "no-store" } : {};
-        if (url.searchParams.get("scope") === "bridge") return jsonResponse({ ok: true, auth, bridge_protocol: BRIDGE_PROTOCOL, ...(security ? { security } : {}) }, 200, securityHeaders);
-        try {
-          const info = await ping();
-          // a forced answer (tests) and a runtime without the PTY sidecar are told the way a Windows herdr's own would be
-          const herdr = attachableIdentity(info, sidecar);
-          return jsonResponse({ ok: true, herdr, auth, ...(lan_exposure ? { lan_exposure } : {}), ...(security ? { security } : {}),
-            web_ui: { boot_id: bootId, revision: process.env["OVIS_REVISION"] ?? null } }, 200, securityHeaders);
-        } catch (error) {
-          return errorResponse(error);
-        }
-      }
-
-      if (pathname === "/api/herdr-ui") {
-        if (request.method !== "GET") return badRequest("method_not_allowed", "use GET");
-        return jsonResponse(readHerdrUi(options.herdrConfigPath), 200, { "cache-control": "no-store" });
-      }
-
-      if (pathname === "/api/access") {
-        setRequestRoute(pathname);
-        if (request.method !== "GET") return badRequest("method_not_allowed", "use GET");
-        return jsonResponse(await remoteAccess(bunServer.port ?? DEFAULT_PORT), 200, { "cache-control": "no-store" });
-      }
-
-      if (pathname === "/api/session") {
-        setRequestRoute(pathname);
-        try {
-          // another Ovis server reading this PC (its bridge token) applies its own rows; a browser gets this server's
-          const snapshot = await clientSnapshot();
-          return jsonResponse({ snapshot: bridgeAuthorized ? snapshot : browserSnapshot(snapshot) });
-        } catch (error) {
-          return errorResponse(error);
-        }
-      }
-
-      const agentsResponse = await handleAgentsRequest(request, pathname, shellAgents);
-      if (agentsResponse) return agentsResponse;
-
-      const catalogResponse = await handleAgentCatalogRequest(request, pathname, agentDetector);
-      if (catalogResponse) return catalogResponse;
-
-      const integrationsResponse = await handleIntegrationsRequest(request, pathname);
-      if (integrationsResponse) return integrationsResponse;
-
-      const filesResponse = await handleFileRequest(request, url, pathname, { bridgeAuthorized, requestHost, forwarded, client, access });
-      if (filesResponse) return filesResponse;
-
-      const workspaceResponse = await handleWorkspaceRequest(request, url, pathname, bunServer, broadcastAll, queueFirstMessage, () => {
-        // the receipt first, then the roster read that can show it: not waited for, and its failure changes no answer
-        const receipt = orderSequence.moved();
-        void machines?.refreshLocal();
-        return receipt;
-      }, shellAgents);
-      if (workspaceResponse) return workspaceResponse;
-
-      const pluginResponse = await handlePluginRequest(request, url, pathname, options);
-      if (pluginResponse) return pluginResponse;
-
-      const paneResponse = await handlePaneRequest(request, url, pathname, options);
-      if (paneResponse) return paneResponse;
-
-      const tasksResponse = await handleTasksRequest(request, url, pathname, { omo, claudeAgents, opencodeAgents, piAgents });
-      if (tasksResponse) return tasksResponse;
-
-      // a GET a watching device may make on purpose: a subagent's prose and tool-call arguments (which can carry file
-      // contents) are what the live conversation already shows it of the agents of this pane
-      if (pathname === BACKGROUND_AGENT_PATH) {
-        return handleBackgroundAgentRequest(request, url, { paneGet, omoPane: (paneId) => omo.sessionOf(paneId) !== null, claudeAgents, read: options.backgroundAgentRead });
-      }
-
-      const planResponse = await handlePlanRequest(request, url, pathname, { omo, claudeAgents, plans });
-      if (planResponse) return planResponse;
-
-      if (pathname === SESSION_HISTORY_PATH) {
-        setRequestRoute(SESSION_HISTORY_PATH);
-        return handleSessionHistoryRequest(request, url, { readOnly, stores: { codexHome: options.codexHome, opencodeDb: options.opencodeDb, hermesHome: options.hermesHome } });
-      }
-
-      if (pathname === SESSION_RESUME_PATH) {
-        setRequestRoute(SESSION_RESUME_PATH);
-        // agent.start can legitimately take a minute; Bun's default idle timeout is shorter
-        return handleSessionResumeRequest(request, { readOnly, stores: { codexHome: options.codexHome, opencodeDb: options.opencodeDb, hermesHome: options.hermesHome }, holdOpen: (seconds) => bunServer.timeout(request, seconds) });
-      }
-
-      if (pathname.startsWith("/api/pane/prompt")) {
-        try {
-          const response = await handlePromptRequest(request, url, { serialize, codexHome: options.codexHome, claudeTranscript: (paneId) => claudeAgents.sessionOf(paneId)?.path ?? null, readOnly, openCodeStateDir: options.openCodeStateDir, openCodeState });
-          if (response) return response;
-        } catch (error) {
-          return errorResponse(error);
-        }
-      }
-
-      if (pathname.startsWith("/api/")) {
-        return jsonResponse({ error: { code: "not_found", message: `unknown endpoint ${pathname}` } }, 404);
-      }
-
-      // static client - public even when the API is gated, so the login UI can load
-      setRequestRoute("static");
-      return serveStatic(pathname, request.headers.get("accept-encoding"), requestOrigin(request));
-      })());
-      });
-    },
+    fetch: (request, bunServer) => handleRequest(request, socketContext(bunServer)),
 
     websocket: core.websocket,
   });
+  // bound before anything else opens, so a failed ::1 bind leaves only what a failed primary bind would
+  let ipv6: Bun.Server<SocketData> | null = null;
+  if (ipv6Loopback) {
+    try {
+      ipv6 = Bun.serve<SocketData>({
+        hostname: "::1", port: server.port, maxRequestBodySize: BUN_BODY_CEILING,
+        fetch: (request, bunServer) => handleRequest(request, socketContext(bunServer)),
+        websocket: core.websocket,
+      });
+    } catch (error) {
+      server.stop(true);
+      // createCore already started the status hub's watchers and timers
+      core.stop(() => clearInterval(draftTimer));
+      piReader.close();
+      throw error;
+    }
+  }
 
   const requestLog = new RequestLog(stateDir);
+  const accountHolds = new AccountHolds({ enrollingPath: join(stateDir, "account-enrolling.json"), heldPath: join(stateDir, "account-held.json") });
+  const accountMailbox = new AccountMailbox({
+    pendingPath: join(stateDir, "account-pending.json"), holds: accountHolds,
+    devices, identity: () => ovisRelay.currentIdentity(),
+    service: (() => { try { return accountServiceUrl(options.accountService?.url); } catch (error) { return error instanceof Error ? error : new Error(String(error)); } })(), ...(options.accountService?.fetch ? { fetch: options.accountService.fetch } : {}),
+  });
+  const services: RequestServices = {
+    runtimeMove: options.runtimeService ? moveService({
+      stateDir, port: server.port ?? DEFAULT_PORT, serving: runtime, facts: () => options.runtimeService?.facts(),
+      lock: { path: moveLockPath(herdrSocketPath()) },
+      stores: { codexHome: options.codexHome, opencodeDb: options.opencodeDb, hermesHome: options.hermesHome, piReader },
+      holdsPending: core.holdsPending,
+      inputEmpty: core.inputEmpty,
+      lane: core.serialize,
+      settleAfterTyping: core.settleAfterTyping,
+      accepted: () => options.launchAccepted?.() ?? true,
+      switching: () => options.runtimeService?.switching?.() ?? false,
+      switchRuntime: () => { const answer = options.runtimeService!.request("herdr-core"); return answer.ok ? null : answer.message; },
+      ...(options.herdrCoreInstaller ? { installer: options.herdrCoreInstaller } : {}),
+    }) : null,
+    options, relay: ovisRelay, relayReceiptIds: new RelayReceiptIds(), hostname, token, bridgeToken, bootId, devices, accountMailbox, accountIntroductions: new AccountIntroductions(Date.now, join(stateDir, "account-introductions.json")), accountHolds, preferences, herdrSidebar, identityOf, serveOnly, portalGuards, shellAgents, agentDetector, agentOffered, agentInstaller, openCodeState, cliProxyRoutes, usageLogin, usage, usageAccounts, systemSampler, fontsDir: join(stateDir, "fonts"), voice, browserSnapshot, core, seen, piReader, orderSequence, clientConnectionLog, requestLog, portalStartup,
+    get portalStartupResult() { return portalStartupResult; },
+  };
+  ovisRelay.resume(services, server.port ?? DEFAULT_PORT);
+  accountMailbox.start();
+
+  // one listener per address on one port, all or none: a half-bound set would answer where nobody asked it to
+  const lanListeners: Bun.Server<SocketData>[] = [];
+  let lanHttps: ServerInstance["lanHttps"] = null;
+  if (options.lanHttps) {
+    const config = options.lanHttps;
+    try {
+      const addresses = config.host !== undefined ? [config.host] : privateLanAddresses();
+      if (addresses.length === 0) throw new Error("this PC has no private IPv4 address to listen on; set OVIS_LAN_HTTPS_HOST");
+      const certificate = lanHttpsCertificate(stateDir, config, config.host === "0.0.0.0" ? privateLanAddresses() : addresses);
+      let port = config.port;
+      for (const address of addresses) {
+        const listener = Bun.serve<SocketData>({
+          hostname: address, port, maxRequestBodySize: BUN_BODY_CEILING, tls: { cert: certificate.cert, key: certificate.key },
+          fetch: (request, bunServer) => privateLanPeer(bunServer.requestIP(request)?.address)
+            // the port is the main listener's: Portal and /api/access route plain http to it, never to this TLS one
+            ? handleRequest(request, { ...socketContext(bunServer), get port() { return server.port; }, lanHttps: true })
+            : new Response("forbidden", { status: 403 }),
+          websocket: core.websocket,
+        });
+        lanListeners.push(listener);
+        port = listener.port ?? port;
+      }
+      lanHttps = { port, addresses, sha256: certificate.sha256 };
+    } catch (error) {
+      for (const listener of lanListeners.splice(0)) listener.stop(true);
+      console.error(`LAN HTTPS is off: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
 
   if (options.portal) {
     // a Portal that ends on its own is started again only while this server's own token and serve-only allow it
@@ -686,18 +550,29 @@ export function createServer(
   const releaseOpenCodeNative = holdOpenCodeNative();
   // the file threads are shared by every server in this process too: the last one to stop ends them
   const releaseFilePool = holdFilePool();
+  const releaseCommandHistory = holdCommandHistory();
   core.start();
 
   return {
+    context: socketContext(server),
     port: server.port ?? 0,
     hostname,
+    lanHttps,
     // both subscriptions live: a test may create a workspace and wait for its session-changed
     statusReady: Promise.all([collector.ready, collector.structureReady]).then(() => undefined),
     focusReady: collector.focusReady,
     /** a create request's first message for a pane's agent, as the create routes queue it (server/core/pending.ts); for tests that run no agent */
     queueFirstMessage,
     alertsSettled: () => push.settled(),
+    warmAgentCatalog: () => {
+      void agentCatalogFor(catalogPlatform(process.platform), agentDetector).catch((error: unknown) => {
+        console.error(`agent catalog warm-up failed: ${error instanceof Error ? error.message : String(error)}`);
+      });
+    },
     stop: () => {
+      services.runtimeMove?.stop();
+      accountMailbox.stop();
+      void ovisRelay.shutdown();
       settlePortalStartup({ ok: false, error: new Error("Server stopped before Portal startup cleanup completed") });
       core.stop(() => {
         clearInterval(draftTimer);
@@ -708,9 +583,17 @@ export function createServer(
         closeCodexDaemonSources();
         releaseOpenCodeNative();
       });
+      piReader.close();
+      stopPinBridge?.stop();
+      // the followed sign-ins run in this server's own terminals: no dialog could reach them once it stops
+      void usageLogin.stopAll();
       void shellAgents.stop();
+      agentDetector.close();
       server.stop(true);
+      ipv6?.stop(true);
+      for (const listener of lanListeners) listener.stop(true);
       releaseFilePool();
+      releaseCommandHistory();
       requestLog.close();
     },
   };
@@ -718,15 +601,61 @@ export function createServer(
 
 if (import.meta.main) {
   moveLegacyStateDir();
+  // SSH connection folders an earlier server left in /tmp; here, not in createServer, so tests never touch them
+  void sweepSshDirs();
   // resolved once, for the same reason as in createServer
   const stateDir = defaultStateDir();
+  // herdr-core's adapter is HERDR_SOCKET: it listens before anything below asks herdr
+  // the launcher says when it took this bridge as its own, past its startup check: a page following a
+  // runtime switch waits for that, never for a bridge the launcher may still roll back
+  let launchAccepted = process.env["OVIS_MANAGED"] !== "1";
+  process.on("message", (message: unknown) => {
+    if (message !== null && typeof message === "object" && (message as { type?: unknown }).type === "bridge-accepted") launchAccepted = true;
+  });
+  // OVIS_RUNTIME, else the choice saved from Settings, else what this PC has (runtime-choice.ts)
+  const startEnv = { ...process.env };
+  let herdrCore: Awaited<ReturnType<typeof startRuntime>>;
+  let choice: RuntimeChoice;
+  let fallback: "no_herdr_core" | undefined;
+  try {
+    choice = await chooseRuntime({ stateDir, port: Number(startEnv["PORT"] || DEFAULT_PORT), env: startEnv });
+    setRuntime(choice.runtime);
+    console.log(`Runtime: ${choice.runtime} (${choice.reason})`);
+    try {
+      herdrCore = await startRuntime(stateDir);
+    } catch (err) {
+      // a choice saved from Settings whose core is gone falls back to herdr, where Settings can switch again;
+      // OVIS_RUNTIME says what to serve, and its failure stays an error
+      // only a missing hc: any other failure (a state folder, another Ovis) is the launcher's to roll back
+      if (choice.source !== "saved" || choice.runtime !== "herdr-core" || !(err instanceof NoHerdrCoreError)) throw err;
+      console.error(`The herdr-core chosen in Settings cannot start (${err instanceof Error ? err.message : String(err)}); serving herdr.`);
+      choice = { ...choice, runtime: "herdr" };
+      fallback = "no_herdr_core";
+      setRuntime("herdr");
+      herdrCore = null;
+    }
+  } catch (err) {
+    console.error(`Ovis cannot start: ${err instanceof Error ? err.message : String(err)}.`);
+    process.exit(1);
+  }
   const updates = connectUpdater();
   const version = (JSON.parse(readFileSync(join(import.meta.dir, "..", "package.json"), "utf8")) as { version: string }).version;
-  const telemetry = new Telemetry({ stateDir, version, env: process.env, fetch, previousVersion: () => updates.installed().previous_version });
+  const telemetry = new Telemetry({ stateDir, version, env: process.env, fetch, previousVersion: () => updates.installed().previous_version, runtime: herdrCore === null ? "herdr" : "herdr-core" });
   const portal = new PortalService({ stateDir });
+  // the direct carrier on this PC's private and Tailscale addresses, which the phone apps' OvisDirect plugin opens (docs/relay.md)
+  const tailnet = new TailnetIdentitySource();
+  const relay = new RelayService({ stateDir, direct: { tailnetIp: () => tailnet.identity().tailnetIp }, accountService: passAccountService() });
+  const lanConfig = lanHttpsConfig(process.env);
+  if (lanConfig !== null && "error" in lanConfig) console.error(`LAN HTTPS is off: ${lanConfig.error}.`);
   let instance: ReturnType<typeof createServer>;
   try {
-    instance = createServer({ updates, herdrUpdate: new HerdrUpdater(), portal, telemetry, registerBridge: true, herdrProfiles: readHerdrProfiles, shellAgents: new ShellAgentLocator(), agentDetector: new AgentDetector({ locate: catalogLocator({ probe: defaultLoginProbe() }) }), stateDir, siblingStateDir: siblingStateDir(stateDir) });
+    instance = createServer({ updates, herdrUpdate: new HerdrUpdater(), herdrCoreFacts, herdrCoreInstaller: herdrCoreInstaller(),
+      launchAccepted: () => launchAccepted,
+      runtimeService: runtimeService({ stateDir, port: Number(startEnv["PORT"] || DEFAULT_PORT), serving: choice.runtime, source: choice.source, ...(fallback ? { fallback } : {}), env: startEnv, core: herdrCoreFacts, accepted: () => launchAccepted, restart: (id) => process.send?.({ type: "runtime-restart", id }) }),
+      portal, relay, tailnet, telemetry, registerBridge: true, herdrProfiles: readHerdrProfiles, shellAgents: new ShellAgentLocator(), agentDetector: new AgentDetector({ locate: catalogLocator({ probe: defaultLoginProbe() }) }), stateDir, siblingStateDir: siblingStateDir(stateDir),
+      desktopActivity: process.env["OVIS_DESKTOP_APP"] === "1",
+      ...(lanConfig !== null && !("error" in lanConfig) ? { lanHttps: lanConfig } : {}) });
+    instance.warmAgentCatalog();
   } catch (err) {
     const { code, syscall } = err as { code?: string; syscall?: string };
     // only the bind itself: a permission error reading a state file keeps its own message and path
@@ -739,6 +668,7 @@ if (import.meta.main) {
         ? "this PC has no such address; try HOST=127.0.0.1"
         : "the port needs permission; try a PORT above 1024";
     console.error(`Ovis cannot listen on ${host}:${port}: ${reason}.`);
+    herdrCore?.stop();
     process.exit(1);
   }
   telemetry.start();
@@ -750,15 +680,26 @@ if (import.meta.main) {
     instance.stop();
     // Attach sidecars need ~1.2s to release herdr's exclusive client slot; Portal unregisters from
     // its relay, and the pipes it logs to must outlive it
-    void Promise.all([Bun.sleep(2000), portal.shutdown()]).then(() => process.exit(0));
+    // herdr-core's adapter answers what the stopping server still asks meanwhile
+    void Promise.all([Bun.sleep(2000), portal.shutdown(), relay.shutdown()]).then(() => {
+      herdrCore?.stop();
+      process.exit(0);
+    });
   };
   process.on("SIGTERM", shutdown);
   process.on("SIGINT", shutdown);
   if (process.env["OVIS_MANAGED"] === "1") process.on("disconnect", shutdown);
   console.log(`Ovis listening on http://${instance.hostname}:${instance.port}`);
+  if (instance.lanHttps) {
+    const { port, addresses, sha256 } = instance.lanHttps;
+    const shown = addresses.includes("0.0.0.0") ? privateLanAddresses() : addresses;
+    console.log(`LAN HTTPS on ${shown.map((address) => `https://${address}:${port}`).join(", ")} (token or paired device only; certificate SHA-256 ${sha256})`);
+  }
   const socket = herdrSocketPath();
   void ping(socket).catch(() => {
-    console.error(`herdr is not reachable at ${socket}: start herdr, or set HERDR_SOCKET to its socket (named sessions: ~/.config/herdr/sessions/<name>/herdr.sock).`);
+    console.error(herdrCore
+      ? `herdr-core is not reachable through ${socket}: start it with \`${hcBin()} server start\`, or set OVIS_HC_BIN to hc's full path.`
+      : `herdr is not reachable at ${socket}: start herdr, or set HERDR_SOCKET to its socket (named sessions: ~/.config/herdr/sessions/<name>/herdr.sock).`);
   });
   // the state folder is created on first write, so test the nearest folder that exists
   let probe = stateDir;

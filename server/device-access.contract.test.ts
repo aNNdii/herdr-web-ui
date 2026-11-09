@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { CLEAR_LEGACY_DEVICE_COOKIE, DEVICE_COOKIE, DEVICE_COOKIE_CLEARED } from "./auth.ts";
 import { DeviceStore } from "./devices.ts";
+import { handleRequest, type ServerContext } from "./dispatch.ts";
 import { privateStateFs } from "./private-state.ts";
 import { MachineRelay } from "./machine-relay.ts";
 import { MachineManager } from "./machines.ts";
@@ -14,6 +15,84 @@ import { workspaceCreate, workspaceClose } from "./herdr/client.ts";
 import type { DevicePairedEvent, DevicesRevokedAll, MachineEvent, ServerMessage } from "../shared/protocol.ts";
 
 const guard = { "x-herdr-machine": "1", "content-type": "application/json" };
+
+it("pairs a relay device, authenticates its key, and dispatches with the stored role", async () => {
+  const stateDir = mkdtempSync(join(tmpdir(), "ovis-relay-contract-"));
+  const app = createServer({ port: 0, hostname: "127.0.0.1", stateDir, token: "configured", tailscaleOwner: null, machines: false, sidecar: false });
+  try {
+    const store = app.context.services.devices;
+    const keys = await crypto.subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, false, ["sign", "verify"]);
+    const publicKey = Buffer.from(await crypto.subtle.exportKey("spki", keys.publicKey)).toString("base64url");
+    const paired = store.pairRelay(store.startPairing().code, "Relay phone", publicKey);
+    if (!paired) throw new Error("Expected relay enrollment");
+    const nonce = crypto.getRandomValues(new Uint8Array(32));
+    const signature = Buffer.from(await crypto.subtle.sign({ name: "ECDSA", hash: "SHA-256" }, keys.privateKey,
+      Buffer.concat([Buffer.from("ovis-relay-auth/1"), nonce, Buffer.from("server-contract")]))).toString("base64url");
+    for (const role of ["drive", "watch"] as const) {
+      store.update(paired.device.id, { role });
+      const device = await store.matchRelay(paired.device.id, nonce, signature, "server-contract");
+      expect(device?.role).toBe(role);
+      if (!device) throw new Error("Expected authenticated relay device");
+      const ctx: ServerContext = { ...app.context, peer: { kind: "relay", device, sessionId: `session-${role}`, serverId: "0123456789abcdef0123456789abcdef", key: "" }, requestIP: () => null, timeout: () => {} };
+      const health = await handleRequest(new Request("https://relay.ovis.invalid/api/health"), ctx);
+      expect(health?.status).toBe(200);
+      expect(await health?.json()).toMatchObject({ auth: { via: "relay", role }, security: { observed_ingress: "relay", pairing_gate: "closed" } });
+      const listing = await handleRequest(new Request("https://relay.ovis.invalid/api/devices"), ctx);
+      expect(await listing?.json()).toEqual({ devices: [expect.objectContaining({ id: device.id, role, current: true, via_relay: true })] });
+      if (role === "watch") {
+        const mutation = await handleRequest(new Request("https://relay.ovis.invalid/api/preferences", { method: "PUT", headers: guard, body: "{}" }), ctx);
+        expect(mutation?.status).toBe(403);
+        expect(await mutation?.json()).toMatchObject({ error: { code: "read_only" } });
+      } else {
+        const cookiePair = await handleRequest(new Request("https://relay.ovis.invalid/api/devices/pair", { method: "POST", headers: guard, body: "{}" }), ctx);
+        expect(cookiePair?.status).toBe(403);
+        expect(await cookiePair?.json()).toMatchObject({ error: { code: "device_key_required" } });
+        expect(cookiePair?.headers.has("set-cookie")).toBe(false);
+      }
+    }
+  } finally {
+    app.stop();
+    rmSync(stateDir, { recursive: true, force: true });
+  }
+});
+
+it("never promotes forged relay headers or cookies on a real HTTP socket", async () => {
+  const stateDir = mkdtempSync(join(tmpdir(), "ovis-relay-forged-"));
+  const app = createServer({ port: 0, hostname: "127.0.0.1", stateDir, token: "configured", tailscaleOwner: "owner@example.com", machines: false, sidecar: false });
+  try {
+    for (const headers of [
+      new Headers({ "x-ovis-relay-peer": "1" }),
+      new Headers({ "x-ovis-relay-peer": "1", "x-forwarded-for": "100.64.0.9", "tailscale-user-login": "another@example.com", cookie: "ovis_device=relay:0123456789abcdef" }),
+    ]) {
+      const health = await fetch(`http://127.0.0.1:${app.port}/api/health`, { headers });
+      expect(await health.json()).toMatchObject({ auth: { authenticated: false, reason: "token_required" } });
+      const access = await fetch(`http://127.0.0.1:${app.port}/api/access`, { headers });
+      expect(access.status).toBe(401);
+    }
+  } finally {
+    app.stop();
+    rmSync(stateDir, { recursive: true, force: true });
+  }
+});
+
+it("returns pairing_rate_limited on the eleventh HTTP code issue", async () => {
+  const stateDir = mkdtempSync(join(tmpdir(), "ovis-relay-issue-limit-"));
+  const app = createServer({ port: 0, hostname: "127.0.0.1", stateDir, token: "", tailscaleOwner: null, machines: false, sidecar: false });
+  try {
+    for (let i = 0; i < 10; i++) {
+      const response = await fetch(`http://127.0.0.1:${app.port}/api/devices/pair/start`, { method: "POST", headers: guard });
+      expect(response.status).toBe(200);
+      await response.arrayBuffer();
+    }
+    const limited = await fetch(`http://127.0.0.1:${app.port}/api/devices/pair/start`, { method: "POST", headers: guard });
+    expect(limited.status).toBe(429);
+    expect(await limited.json()).toMatchObject({ error: { code: "pairing_rate_limited" } });
+    expect(Number(limited.headers.get("retry-after"))).toBeGreaterThan(0);
+  } finally {
+    app.stop();
+    rmSync(stateDir, { recursive: true, force: true });
+  }
+});
 
 /** Fails every flush of a private state file, before its rename, until restored. */
 function failFileSync() {
@@ -167,6 +246,47 @@ async function openEvents(base: string, headers: Record<string, string>, signal:
   // the browser's stream key, when the server gave it one with this stream (shared/protocol.ts, "Browser stream keys")
   const setCookies = response.headers.getSetCookie();
   return { events, next, ended, setCookies, cookie: setCookies[0]?.split(";")[0] ?? null };
+}
+
+for (const action of ["revoke", "role change"] as const) {
+it(`keeps native WS and SSE open on rename until ${action}`, async () => {
+  const root = mkdtempSync(join(tmpdir(), "ovis-native-rename-"));
+  const server = createServer({ port: 0, hostname: "127.0.0.1", stateDir: root, token: "", tailscaleOwner: null, sidecar: false });
+  const base = `http://127.0.0.1:${server.port}`;
+  const store = server.context.services.devices;
+  const paired = store.pair(store.startPairing().code, "Phone", "drive");
+  if (!paired) throw new Error("Expected pairing");
+  store.match(paired.token);
+  const cookie = `${DEVICE_COOKIE}=${paired.token}`;
+  const abort = new AbortController();
+  const client = await connect(`${base.replace("http:", "ws:")}/ws`, cookie);
+  try {
+    const events = await openEvents(base, { cookie }, abort.signal);
+    await events.next((event) => event.type === "machines", "initial roster");
+    const response = await fetch(`${base}/api/devices/${paired.device.id}`, {
+      method: "PATCH", headers: guard, body: JSON.stringify({ label: "Renamed phone" }),
+    });
+    expect(response.status).toBe(200);
+    await response.json();
+    store.update(paired.device.id, { role: "drive" });
+    const acknowledged = nextMessage(client.socket, (message) => message.type === "role-ack", "role after rename");
+    client.socket.send(JSON.stringify({ type: "role", mode: "observe" }));
+    expect(await acknowledged).toMatchObject({ mode: "observe" });
+    const enrolled = events.next((event) => event.type === "device-paired", "enrollment after rename");
+    store.pair(store.startPairing().code, "Other phone", "drive");
+    await enrolled;
+    expect(client.socket.readyState).toBe(WebSocket.OPEN);
+    if (action === "revoke") store.revoke(paired.device.id);
+    else store.update(paired.device.id, { role: "watch" });
+    expect((await client.closed).code).toBe(1008);
+    await events.ended;
+  } finally {
+    abort.abort();
+    client.socket.close();
+    server.stop();
+    rmSync(root, { recursive: true, force: true });
+  }
+}, 10_000);
 }
 
 /** A browser's cookie jar: what each answer set, by cookie name, and the Cookie header its next request sends. */
@@ -717,7 +837,7 @@ it("watch credentials cannot mutate HTTP state, read credential files, or elevat
   }, websocket: { open(ws) { ws.data.relay.bind(ws); }, message(ws, raw) { ws.data.relay.message(raw); }, close(ws) { ws.data.relay.close(); } } });
   try {
     expect((await fetch(`${base}/api/session`, { headers })).status).toBe(200);
-    for (const path of ["pane/input", "workspace/create", "tab/create", "tab/rename", "tab/close", "machines/setup", "updates/install", "herdr/update", "portal/start", "portal/stop"]) {
+    for (const path of ["pane/input", "workspace/create", "tab/create", "tab/rename", "tab/close", "machines/setup", "updates/install", "herdr/update", "portal/start", "portal/stop", "portal/invite"]) {
       expect((await fetch(`${base}/api/${path}`, { method: "POST", headers, body: "{}" })).status).toBe(403);
     }
     // the shared settings: a watching device reads them, and cannot change them for every browser
@@ -850,7 +970,7 @@ it("the paths under a pane's folder and a plugin run's output are refused to a w
   const server = createServer({ port: 0, stateDir: root, token: "test-pane-files", tailscaleOwner: null });
   const base = `http://127.0.0.1:${server.port}`;
   // the @-mention picker's paths, and where a plugin action's run stands (what its command printed when it failed)
-  const routes = ["pane/files?pane_id=ovis-test-absent:p1&q=commands", "plugin/action?plugin_id=ovis-test-absent&log_id=plugin-log-1"];
+  const routes = ["pane/files?pane_id=ovis-test-absent:p1&q=commands", "plugin/action?plugin_id=ovis-test-absent&log_id=plugin-log-1", "pane/docs?pane_id=ovis-test-absent:p1"];
   try {
     for (const route of routes) {
       for (const prefix of ["api", "api/machines/local", "api/machines/pc1"]) {
@@ -862,7 +982,7 @@ it("the paths under a pane's folder and a plugin run's output are refused to a w
     // a driving device reaches the routes: this PC asks herdr, its alias too, and no such PC is connected
     const driving = { cookie: `ovis_device=${drive.token}` };
     for (const prefix of ["api", "api/machines/local"]) {
-      for (const [route, code] of [[routes[0], "pane_not_found"], [routes[1], "plugin_log_not_found"]] as const) {
+      for (const [route, code] of [[routes[0], "pane_not_found"], [routes[1], "plugin_log_not_found"], [routes[2], "pane_not_found"]] as const) {
         const response = await fetch(`${base}/${prefix}/${route}`, { headers: driving });
         expect([prefix, route, response.status, ((await response.json()) as { error: { code: string } }).error.code]).toEqual([prefix, route, 404, code]);
       }
@@ -882,21 +1002,24 @@ it("a repository's checkouts are refused to a watching device on this PC, its al
   store.match(drive.token);
   const server = createServer({ port: 0, stateDir: root, token: "test-worktree-list", tailscaleOwner: null });
   const base = `http://127.0.0.1:${server.port}`;
-  // every checkout of the workspace's repository: paths and branches, those not open in herdr too
-  const route = "worktree/list?workspace_id=ovis-test-absent";
+  // every checkout of the workspace's repository: paths and branches, those not open in herdr too;
+  // the inventory answers the same for several workspaces at once (#2661)
   try {
-    for (const prefix of ["api", "api/machines/local", "api/machines/pc1"]) {
+    for (const route of ["worktree/list?workspace_id=ovis-test-absent", "worktree/inventory?workspace_id=ovis-test-absent"]) for (const prefix of ["api", "api/machines/local", "api/machines/pc1"]) {
       const path = `${prefix}/${route}`;
       const response = await fetch(`${base}/${path}`, { headers: { cookie: `ovis_device=${watch.token}` } });
       expect([path, response.status, ((await response.json()) as { error: { code: string } }).error.code]).toEqual([path, 403, "read_only"]);
     }
     // a driving device reaches the route: this PC asks herdr, its alias too, and no such PC is connected
     const driving = { cookie: `ovis_device=${drive.token}` };
+    const route = "worktree/list?workspace_id=ovis-test-absent";
     for (const prefix of ["api", "api/machines/local"]) {
       const response = await fetch(`${base}/${prefix}/${route}`, { headers: driving });
       expect([prefix, response.status, ((await response.json()) as { error: { code: string } }).error.code]).toEqual([prefix, 404, "workspace_not_found"]);
+      const inventory = await fetch(`${base}/${prefix}/worktree/inventory?workspace_id=ovis-test-absent`, { headers: driving });
+      expect([prefix, inventory.status, ((await inventory.json()) as { entries: { error?: { code: string } }[] }).entries.map((entry) => entry.error?.code)]).toEqual([prefix, 200, ["workspace_not_found"]]);
     }
-    expect((await fetch(`${base}/api/machines/pc1/${route}`, { headers: driving })).status).toBe(503);
+    for (const path of [route, "worktree/inventory?workspace_id=ovis-test-absent"]) expect((await fetch(`${base}/api/machines/pc1/${path}`, { headers: driving })).status).toBe(503);
   } finally {
     server.stop(); rmSync(root, { recursive: true, force: true });
   }
@@ -983,6 +1106,247 @@ it("never announces a pairing to a stream that came in through the open LAN, bef
     expect(pairedLabels(local)).toEqual(["First", "Second"]);
   } finally {
     abort.abort();
+    server.stop();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+it("a script pairs for its token in JSON and authenticates with Authorization: Device under the cookie's role, last-seen and revocation (#2744)", async () => {
+  const stateDir = mkdtempSync(join(tmpdir(), "ovis-device-header-"));
+  const app = createServer({ port: 0, hostname: "127.0.0.1", stateDir, token: "configured", tailscaleOwner: null, machines: false, sidecar: false });
+  const base = `http://127.0.0.1:${app.port}`;
+  const admin = { ...guard, authorization: "Bearer configured" };
+  const code = async () => ((await (await fetch(`${base}/api/devices/pair/start`, { method: "POST", headers: admin })).json()) as { code: string }).code;
+  try {
+    // a browser's pairing keeps its answer: no body, the HttpOnly cookie only
+    const browser = await fetch(`${base}/api/devices/pair`, { method: "POST", headers: guard, body: JSON.stringify({ code: await code(), label: "Browser" }) });
+    expect(browser.status).toBe(204);
+    expect(await browser.text()).toBe("");
+    const browserCookie = browser.headers.get("set-cookie")!.split(";")[0]!;
+    expect(browserCookie).toStartWith("ovis_device=");
+    // its cookie coming back confirms the first pairing, so the script pairs through the closed gate
+    expect((await fetch(`${base}/api/session`, { headers: { cookie: browserCookie } })).status).toBe(200);
+
+    const paired = await fetch(`${base}/api/devices/pair`, { method: "POST", headers: { ...guard, accept: "application/json" }, body: JSON.stringify({ code: await code(), label: "Script" }) });
+    expect(paired.status).toBe(200);
+    expect(paired.headers.get("cache-control")).toBe("no-store");
+    const { token } = await paired.json() as { token: string };
+    expect(token).toMatch(/^\S{16,}$/);
+    expect(paired.headers.get("set-cookie")).toContain(`ovis_device=${encodeURIComponent(token)}`);
+
+    const session = (authorization: string) => fetch(`${base}/api/session`, { headers: { authorization } });
+    const listed = async () => ((await (await fetch(`${base}/api/devices`, { headers: admin })).json()) as { devices: { id: string; label: string; last_seen_at: string | null }[] }).devices.find((d) => d.label === "Script")!;
+    expect((await listed()).last_seen_at).toBeNull();
+    expect((await session(`Device ${token}`)).status).toBe(200);
+    expect((await session(`device ${token}`)).status).toBe(200);
+    expect((await listed()).last_seen_at).not.toBeNull();
+    expect((await session(`Device ${token}x`)).status).toBe(401);
+    // the device's token is not the shared token
+    expect((await session(`Bearer ${token}`)).status).toBe(401);
+    const { devices } = await (await fetch(`${base}/api/devices`, { headers: { authorization: `Device ${token}` } })).json() as { devices: { label: string; current: boolean }[] };
+    expect(devices.find((d) => d.current)?.label).toBe("Script");
+
+    const id = (await listed()).id;
+    const startAs = (authorization: string) => fetch(`${base}/api/devices/pair/start`, { method: "POST", headers: { ...guard, authorization } });
+    expect((await startAs(`Device ${token}`)).status).toBe(200);
+    app.context.services.devices.update(id, { role: "watch" });
+    const refused = await startAs(`Device ${token}`);
+    expect(refused.status).toBe(403);
+    expect(await refused.json()).toMatchObject({ error: { code: "read_only" } });
+
+    expect((await fetch(`${base}/api/devices/${id}`, { method: "DELETE", headers: admin })).status).toBe(204);
+    expect((await session(`Device ${token}`)).status).toBe(401);
+  } finally {
+    app.stop();
+    rmSync(stateDir, { recursive: true, force: true });
+  }
+});
+
+it("a device downgraded to watch while its relayed /ws?machine_id= upgrade is pending is ended at admission, not left driving", async () => {
+  const root = mkdtempSync(join(tmpdir(), "ovis-device-downgrade-relay-"));
+  let reached!: () => void, release!: () => void;
+  const reachedRemote = new Promise<void>((resolve) => { reached = resolve; });
+  const released = new Promise<void>((resolve) => { release = resolve; });
+  let upstreamClosed!: () => void;
+  const closedUpstream = new Promise<void>((resolve) => { upstreamClosed = resolve; });
+  const forwarded: string[] = [];
+  const upstream = Bun.serve({
+    port: 0, hostname: "127.0.0.1",
+    async fetch(request, instance) {
+      reached(); await released;
+      return instance.upgrade(request) ? undefined : new Response(null, { status: 426 });
+    },
+    websocket: { open() {}, message(_ws, raw) { forwarded.push(String(raw)); }, close() { upstreamClosed(); } },
+  });
+  const endpoint = spyOn(MachineManager.prototype, "endpoint").mockImplementation((id) =>
+    id === "fictional-remote" ? { url: `http://127.0.0.1:${upstream.port}`, token: "fictional-remote" } : undefined);
+  const app = createServer({ port: 0, hostname: "127.0.0.1", stateDir: root, token: "test-downgrade-relay", tailscaleOwner: null, sidecar: false });
+  const base = `http://127.0.0.1:${app.port}`;
+  const admin = { ...guard, authorization: "Bearer test-downgrade-relay" };
+  const stranger = { "x-forwarded-for": "100.64.0.9" };
+  let socket: WebSocket | undefined;
+  try {
+    const { code } = await (await fetch(`${base}/api/devices/pair/start`, { method: "POST", headers: admin })).json() as { code: string };
+    const paired = await fetch(`${base}/api/devices/pair`, { method: "POST", headers: { ...guard, ...stranger }, body: JSON.stringify({ code, label: "Phone" }) });
+    expect(paired.status).toBe(204);
+    const cookie = paired.headers.get("set-cookie")!.split(";")[0]!;
+    // its cookie coming back confirms the pairing
+    expect((await fetch(`${base}/api/session`, { headers: { ...stranger, cookie } })).status).toBe(200);
+    const { devices } = await (await fetch(`${base}/api/devices`, { headers: { ...stranger, cookie } })).json() as { devices: { id: string; current: boolean }[] };
+    const id = devices.find((device) => device.current)!.id;
+
+    const RuntimeSocket = WebSocket as unknown as new (url: string, options: { headers: { cookie: string } }) => WebSocket;
+    socket = new RuntimeSocket(`${base.replace("http:", "ws:")}/ws?machine_id=fictional-remote`, { headers: { cookie } });
+    const closed = new Promise<CloseEvent>((resolve) => socket!.addEventListener("close", resolve, { once: true }));
+    await reachedRemote;
+    // the role changes while the relay still dials the other PC: the socket was authorized to drive
+    app.context.services.devices.update(id, { role: "watch" });
+    release();
+    socket.addEventListener("open", () => socket!.send(JSON.stringify({ type: "attach", pane_id: "remote-pane", cols: 80, rows: 24, receipt_resume_id: crypto.randomUUID() })), { once: true });
+    const ended = await Promise.race([closed, new Promise<never>((_, reject) => setTimeout(() => reject(new Error("the downgraded socket was left open")), 5000))]);
+    expect(ended.code).toBe(1008);
+    await closedUpstream;
+    expect(forwarded).toEqual([]);
+  } finally {
+    socket?.close();
+    app.stop();
+    upstream.stop(true);
+    endpoint.mockRestore();
+    rmSync(root, { recursive: true, force: true });
+  }
+}, 15_000);
+
+it("a script's first pairing on a fresh install is kept at once, so its token still works after a restart (#2744)", async () => {
+  const stateDir = mkdtempSync(join(tmpdir(), "ovis-device-header-first-"));
+  const options = { port: 0, hostname: "127.0.0.1", stateDir, token: "configured", tailscaleOwner: null, machines: false, sidecar: false } as const;
+  let app = createServer(options);
+  try {
+    let base = `http://127.0.0.1:${app.port}`;
+    const { code } = await (await fetch(`${base}/api/devices/pair/start`, { method: "POST", headers: { ...guard, authorization: "Bearer configured" } })).json() as { code: string };
+    const paired = await fetch(`${base}/api/devices/pair`, { method: "POST", headers: { ...guard, accept: "application/json" }, body: JSON.stringify({ code, label: "Script" }) });
+    expect(paired.status).toBe(200);
+    const { token } = await paired.json() as { token: string };
+    const registry = JSON.parse(readFileSync(join(stateDir, "devices.json"), "utf8")) as { gate_closed_at: string | null; devices: { label: string }[] };
+    expect(registry.devices.map((d) => d.label)).toEqual(["Script"]);
+    expect(registry.gate_closed_at).not.toBeNull();
+    app.stop();
+    app = createServer(options);
+    base = `http://127.0.0.1:${app.port}`;
+    expect((await fetch(`${base}/api/session`, { headers: { authorization: `Device ${token}` } })).status).toBe(200);
+  } finally {
+    app.stop();
+    rmSync(stateDir, { recursive: true, force: true });
+  }
+});
+
+it("a PC in no account lets a revoked key pair again with a code started through the relay, which clears its tombstone", async () => {
+  const stateDir = mkdtempSync(join(tmpdir(), "ovis-relay-repair-"));
+  try {
+    const store = new DeviceStore(stateDir);
+    const keys = await crypto.subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, true, ["sign", "verify"]);
+    const publicKey = Buffer.from(await crypto.subtle.exportKey("spki", keys.publicKey)).toString("base64url");
+    const first = store.pairRelay(store.startPairing().code, "Relay phone", publicKey);
+    if (!first) throw new Error("Expected relay enrollment");
+    store.revoke(first.device.id);
+    expect(store.isTombstoned(publicKey)).toBe(true);
+    const again = store.pairRelay(store.startPairing(Date.now(), { remote: true, startedBy: null, memberRequired: false }).code, "Relay phone", publicKey);
+    expect(again?.device.label).toBe("Relay phone");
+    expect(new DeviceStore(stateDir).isTombstoned(publicKey)).toBe(false);
+  } finally {
+    rmSync(stateDir, { recursive: true, force: true });
+  }
+});
+
+it("a PC in no account still refuses, with a code started through the relay, a key its account removed", async () => {
+  const stateDir = mkdtempSync(join(tmpdir(), "ovis-relay-account-removed-"));
+  try {
+    const keys = await crypto.subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, true, ["sign", "verify"]);
+    const publicKey = Buffer.from(await crypto.subtle.exportKey("spki", keys.publicKey)).toString("base64url");
+    writeFileSync(join(stateDir, "account-tombstones.json"), JSON.stringify({ v: 1, tombstones: [{ key: publicKey, account: "acct_1", record_id: "r1", removed_at: "2026-11-01T00:00:00.000Z" }] }), { mode: 0o600 });
+    const store = new DeviceStore(stateDir);
+    expect(store.pairRelay(store.startPairing(Date.now(), { remote: true, startedBy: null, memberRequired: false }).code, "Phone", publicKey)).toBeNull();
+    expect(store.isTombstoned(publicKey)).toBe(true);
+  } finally {
+    rmSync(stateDir, { recursive: true, force: true });
+  }
+});
+
+it("a PC in no account whose tombstone file will not parse refuses a code started through the relay", async () => {
+  const stateDir = mkdtempSync(join(tmpdir(), "ovis-relay-tombstones-broken-"));
+  try {
+    writeFileSync(join(stateDir, "account-tombstones.json"), "{broken", { mode: 0o600 });
+    const store = new DeviceStore(stateDir);
+    const keys = await crypto.subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, true, ["sign", "verify"]);
+    const publicKey = Buffer.from(await crypto.subtle.exportKey("spki", keys.publicKey)).toString("base64url");
+    expect(store.pairRelay(store.startPairing(Date.now(), { remote: true, startedBy: null, memberRequired: false }).code, "Phone", publicKey)).toBeNull();
+  } finally {
+    rmSync(stateDir, { recursive: true, force: true });
+  }
+});
+
+it("a key re-paired on a PC in no account with a code another device started stays when its tombstone comes back", async () => {
+  const stateDir = mkdtempSync(join(tmpdir(), "ovis-relay-repair-starter-"));
+  try {
+    const store = new DeviceStore(stateDir);
+    const fresh = async () => {
+      const keys = await crypto.subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, true, ["sign", "verify"]);
+      return Buffer.from(await crypto.subtle.exportKey("spki", keys.publicKey)).toString("base64url");
+    };
+    const [starterKey, publicKey] = [await fresh(), await fresh()];
+    const starter = store.pairRelay(store.startPairing().code, "Laptop", starterKey);
+    const first = store.pairRelay(store.startPairing().code, "Phone", publicKey);
+    if (!starter || !first) throw new Error("Expected relay enrollment");
+    store.revoke(first.device.id);
+    const tombstones = readFileSync(join(stateDir, "account-tombstones.json"));
+    // a second later, as a person pairing again would be
+    const later = Date.now() + 1_000;
+    expect(store.pairRelay(store.startPairing(later, { remote: true, startedBy: starter.device.id, memberRequired: false }).code, "Phone", publicKey, later)).not.toBeNull();
+    // the revoke's tombstone back, as a stop before it was cleared or a sibling dir's merge leaves it
+    writeFileSync(join(stateDir, "account-tombstones.json"), tombstones, { mode: 0o600 });
+    expect(new DeviceStore(stateDir).hasKey(publicKey)).toBe(true);
+  } finally {
+    rmSync(stateDir, { recursive: true, force: true });
+  }
+});
+
+it("POST /api/devices/pair/cancel takes back the pending code, so it pairs nothing", async () => {
+  const root = mkdtempSync(join(tmpdir(), "herdr-device-cancel-"));
+  const server = createServer({ port: 0, stateDir: root, token: "test-device-cancel", tailscaleOwner: null });
+  const base = `http://127.0.0.1:${server.port}`;
+  const admin = { ...guard, authorization: "Bearer test-device-cancel" };
+  try {
+    const { code } = await (await fetch(`${base}/api/devices/pair/start`, { method: "POST", headers: admin })).json() as { code: string };
+    expect((await fetch(`${base}/api/devices/pair/cancel`, { method: "POST", headers: { authorization: admin.authorization } })).status).toBe(403);
+    expect((await fetch(`${base}/api/devices/pair/cancel`, { method: "POST", headers: admin })).status).toBe(200);
+    const late = await fetch(`${base}/api/devices/pair`, { method: "POST", headers: guard, body: JSON.stringify({ code, label: "Too late" }) });
+    expect(late.status).not.toBe(204);
+  } finally {
+    server.stop();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+it("POST /api/devices/pair/cancel with a code ends only that pairing, not one started after it", async () => {
+  const root = mkdtempSync(join(tmpdir(), "herdr-device-cancel-own-"));
+  const server = createServer({ port: 0, stateDir: root, token: "test-device-cancel-own", tailscaleOwner: null });
+  const base = `http://127.0.0.1:${server.port}`;
+  const admin = { ...guard, authorization: "Bearer test-device-cancel-own" };
+  try {
+    const start = async () => (await (await fetch(`${base}/api/devices/pair/start`, { method: "POST", headers: admin })).json() as { code: string }).code;
+    const shown = await start();
+    // Settings, or another device, starts a pairing of its own while `link --code` still runs
+    const newer = await start();
+    const stale = await fetch(`${base}/api/devices/pair/cancel`, { method: "POST", headers: admin, body: JSON.stringify({ code: shown }) });
+    expect(stale.status).toBe(200);
+    expect(await stale.json()).toEqual({ ok: true, cancelled: false });
+    const paired = await fetch(`${base}/api/devices/pair`, { method: "POST", headers: guard, body: JSON.stringify({ code: newer, label: "Newer" }) });
+    expect(paired.ok).toBe(true);
+    const third = await start();
+    const own = await fetch(`${base}/api/devices/pair/cancel`, { method: "POST", headers: admin, body: JSON.stringify({ code: third }) });
+    expect(await own.json()).toEqual({ ok: true, cancelled: true });
+    const late = await fetch(`${base}/api/devices/pair`, { method: "POST", headers: guard, body: JSON.stringify({ code: third, label: "Too late" }) });
+    expect(late.ok).toBe(false);
+  } finally {
     server.stop();
     rmSync(root, { recursive: true, force: true });
   }
