@@ -2,7 +2,7 @@ import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from "n
 import type { Dirent, Stats } from "node:fs";
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import { SkillIgnore } from "../skill-ignore.ts";
-import { resolvePiPath } from "./pi-config.ts";
+import { readPiConfig, resolvePiPath } from "./pi-config.ts";
 import type { PiConfig, PiFilters, PiKind, PiPackageEntry } from "./pi-config.ts";
 import { description, plainObject, readFrontmatter, readSkillText } from "./walk.ts";
 
@@ -16,10 +16,14 @@ import { description, plainObject, readFrontmatter, readSkillText } from "./walk
 export type BundledExtension = "llama" | "mcp";
 const BUNDLED_PATHS: ReadonlyArray<readonly [BundledExtension, string]> = [["llama", "builtin:llama.cpp"], ["mcp", "builtin:mcp"]];
 /**
- * Every command a bundled extension registers. The scan lists them as pi's built-ins (skills/pi.ts), so the running
- * pi's list of extension commands (piExtensionCommands in ../pi.ts) leaves them out, as it does pi's own: never twice.
+ * The running pi's extension commands (piExtensionCommands in ../pi.ts) without those of the bundled extensions that
+ * pi loads: the scan lists these as pi's built-ins (skills/pi.ts), which the merge never removes, so they would show
+ * twice. Another package's command of such a name (pi-mcp-adapter's /mcp, with pi's own excluded) stays.
  */
-export const BUNDLED_EXTENSIONS: readonly BundledExtension[] = BUNDLED_PATHS.map(([name]) => name);
+export function withoutLoadedBundled<T extends { readonly name: string }>(rows: T[], pi: { home: string; cwd: string | null; env: readonly string[] | null }): T[] {
+  const loaded: ReadonlySet<string> = new Set(bundled(readPiConfig({ ...pi, repoRoot: null, roots: {} })));
+  return rows.filter((row) => !loaded.has(row.name));
+}
 
 export interface PiCommandFile { readonly name: string; readonly description: string; readonly origin: "user" | "project" | "package"; readonly id?: string }
 export interface PiLoaded {

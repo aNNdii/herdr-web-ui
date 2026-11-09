@@ -13,7 +13,7 @@ import { piAgentDir } from "./pi-models.ts";
 import { authorizedTranscript, unwrittenSession } from "./transcript-store.ts";
 import { source as piCatalog } from "./skills/pi.ts";
 // fork: the bundled extensions' commands, which the fork's scan lists as pi's built-ins
-import { BUNDLED_EXTENSIONS } from "./skills/pi-resources.ts";
+import { withoutLoadedBundled } from "./skills/pi-resources.ts";
 import { userHome } from "./user-home.ts";
 export { transcriptInStore as piTranscriptInStore, unwrittenSession } from "./transcript-store.ts";
 
@@ -150,7 +150,7 @@ async function extensionSocket(pi: { pid: number; cwd?: string | null }, environ
 }
 
 const COMMANDS_MAX = 1_000;
-const PI_BUILTIN_NAMES: ReadonlySet<string> = new Set([...piCatalog.builtins, ...BUNDLED_EXTENSIONS]);
+const PI_BUILTIN_NAMES: ReadonlySet<string> = new Set(piCatalog.builtins);
 
 /**
  * The commands pi's extensions and packages registered, which no file scan can know (#1448), as the
@@ -194,6 +194,8 @@ export async function piExtensionCommands(
   } catch {
     return null; // too slow, or not the extension answering
   }
+  // fork: the commands of the bundled extensions this pi loads are the scan's built-ins: never twice
+  rows = withoutLoadedBundled(rows, { home: options.home ?? userHome(), cwd: pi.cwd ?? null, env: (options.environOf ?? processEnviron)(pi.pid) });
   // the answer is that pi's: one that left the front while it was asked, or now shares it with
   // another pi, no longer speaks for the pane
   const after = options.processesAfter

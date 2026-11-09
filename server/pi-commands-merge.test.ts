@@ -59,6 +59,13 @@ it.skipIf(process.platform === "win32")("lists each pi command once with the run
     const alone = await mergeCatalogSources("pi-without-extension", pane, root, scanned);
     expect(alone).toEqual(scanned);
     expect(alone.find((command) => command.name === "team")).toMatchObject({ source: "user", description: "A prompt the extension's /team runs before" });
+
+    // pi's own mcp excluded, a package's /mcp (pi-mcp-adapter) is the running pi's: listed once, as that package's
+    put(join(agentDir, "settings.json"), JSON.stringify({ extensions: ["-builtin:mcp"] }));
+    answer.commands[3] = { name: "mcp", description: "Show MCP servers (pi-mcp-adapter)", scope: "user", origin: "package" };
+    const adapter = await mergeCatalogSources("pi-merge-test", pane, root, paneCommands("pi", null, root, { environ }));
+    expect(adapter.filter((command) => command.name === "mcp")).toEqual([expect.objectContaining({ source: "plugin", description: "Show MCP servers (pi-mcp-adapter)" })]);
+    expect(adapter.filter((command) => command.name === "llama")).toEqual([expect.objectContaining({ source: "builtin" })]);
   } finally {
     remove();
     await server.stop(true);
