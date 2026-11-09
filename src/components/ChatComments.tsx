@@ -32,8 +32,10 @@ import { draftRanges, markCommentSurface, watchCommentHighlights } from "../lib/
 import { marginLayout } from "../lib/commentMargin.ts";
 import { rangeComment } from "../lib/commentSelection.ts";
 import { commentAt } from "../lib/commentSource.ts";
+import { quoteOffer } from "../lib/selectionQuote.ts";
 import { useSettings, type CommentLayout } from "../lib/settings.ts";
 import { MarginRowsContext, type CommentSource, type LayerComment } from "./MarkdownComments.tsx";
+import { replySelectionText } from "./ReplyComments.tsx";
 import { useSurfaceRanges } from "./useSurfaceRanges.ts";
 
 /** The commentable roots of the chat's transcript in `scroller`: the final answer parts of finished replies, in document order. */
@@ -43,9 +45,11 @@ export function chatCommentRoots(scroller: Element | null): readonly Element[] {
 
 /**
  * The chat's comment source (see the module comment) for the pane `owner`, on the list's `scroller` while it shows the
- * conversation (`active`); null otherwise and while comments are turned off.
+ * conversation (`active`); null otherwise and while comments are turned off. `quoteInto`: the pane whose draft Quote
+ * puts a selection in (upstream's Quote, the pill the comment mode does not mount), as the copy reads it
+ * (ReplyComments.tsx `replySelectionText`); null: no Quote (a pane this device may not send to).
  */
-export function useChatCommentSource(owner: string, scroller: RefObject<HTMLDivElement | null>, active: boolean): CommentSource<CommentTarget> | null {
+export function useChatCommentSource(owner: string, scroller: RefObject<HTMLDivElement | null>, active: boolean, quoteInto: string | null = null): CommentSource<CommentTarget> | null {
   const { settings } = useSettings();
   const enabled = active && settings.comments;
   const stored = useBlockComments(owner);
@@ -108,8 +112,12 @@ export function useChatCommentSource(owner: string, scroller: RefObject<HTMLDivE
         return blockComments.get(owner, target)?.id ?? null;
       },
       remove: (id) => blockComments.remove(owner, [id]),
+      quote: (range) => {
+        const view = scroller.current;
+        return quoteOffer(quoteInto, (view === null ? null : replySelectionText(window.getSelection(), view)) ?? range.toString());
+      },
     };
-  }, [enabled, owner, replies, scroller, rangesOf]);
+  }, [enabled, owner, replies, scroller, rangesOf, quoteInto]);
 }
 
 /**

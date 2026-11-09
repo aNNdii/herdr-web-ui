@@ -2945,6 +2945,14 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   opening nothing, when the selection collapses or changes, on Escape (the selection stays), on a press anywhere
   else, and when the field, the margin's fields or the sheet opens; a new selection shows it anew. Typing while it
   shows opens nothing. Which text counts is the same as for the field.
+- In the chat, the comment mode does not mount the reply's Quote/Comment pill (below, `.reply-comment*`): one popup
+  per selection. Its **Quote** stands right of the Comment button instead (`.markdown-select-quote`, the same pill,
+  `--space-1` apart, the pair placed as one; lucide `Quote` and "Quote"), where that pill would offer it (a pane this
+  device may send to, not ended, no secret prompt in the box), and puts the words in the draft as the pill's Quote does
+  (`lib/selectionQuote.ts`, through `lib/chatQuote.ts`), the selection cleared. Too long for the draft it is refused,
+  never cut: `aria-disabled`, `--text-dim`, its title (and, clicked, the live region) saying why. The Tab after the
+  Comment button's reaches it. Comment stays the first action here, as the mode is for comments; the field variant
+  (Open the comment field) and a finger's pill offer Comment alone, so Quote there needs the mode off.
 - Writing: selecting text in the comment mode and releasing opens the **comment field** over the selection at once
   where When you select text says **Open the comment field** (`MarkdownComments.tsx`), and so does the Comment
   button's click. The field is the code view's row card (`.comment-popover.is-row`), at most `--float-w` (320px) wide,

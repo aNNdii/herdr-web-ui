@@ -2665,13 +2665,14 @@ export const ChatView = memo(function ChatView({ paneId, presentationKey, finish
   // cards or counts are its own row's (`ReplyMargin`, through the layer's `MarginRowsContext`), so a row that scrolled
   // out of the list's window shows none until it is back, and the composer's walk opens its comments in a dialog meanwhile.
   // While the mode is on it alone answers a selection: upstream's Quote/Comment pill (ReplyCommentAction) is not mounted
-  // then, and its chip in the composer still lists the comments saved with it before
+  // then (its Quote stands beside the layer's Comment button instead), and its chip in the composer still lists the
+  // comments saved with it before
   const owner = paneStorageId(machineId, paneId);
   const stored = useBlockComments(owner);
   // every comment of the pane, its files' too: all of them go with the next message from here
   const paneCount = stored.length;
   const conversation = state.source === "conversation" && ChatTimeline !== null;
-  const chatSource = useChatCommentSource(owner, scroller, conversation);
+  const chatSource = useChatCommentSource(owner, scroller, conversation, quotable && interactive && !ended ? owner : null);
   const chatLayout = useChatMargin(scroller, chatSource !== null, settings.commentLayout);
   // the comment mode's toggle: where a Delete that leaves no card puts the focus
   const commentToggle = useRef<HTMLButtonElement>(null);
