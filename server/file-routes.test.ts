@@ -57,8 +57,32 @@ describe("file routes", () => {
       expect(found.status).toBe(200);
       expect(await found.json()).toMatchObject({ name: "notes.txt", size: 5 });
       get.mockImplementation(async (paneId) => { throw new HerdrError("pane_not_found", `pane ${paneId} not found`); });
-      expect(await error(await fetch(url("/api/fs/stat?pane_id=w1:p1&path=notes.txt")))).toEqual([404, "not_found"]);
+      // not "no such file": the chat keeps a link for a name it could not look for (src/lib/fileNameLookup.ts)
+      expect(await error(await fetch(url("/api/fs/stat?pane_id=w1:p1&path=notes.txt")))).toEqual([404, "pane_unknown"]);
+      expect(await error(await fetch(url(`/api/fs/stat?pane_id=w1:p1&path=${q(join(folder, "missing.txt"))}`)))).toEqual([404, "not_found"]);
       expect((await fetch(url(`/api/fs/stat?pane_id=w1:p1&path=${q(notes)}`))).status).toBe(200);
+    } finally {
+      get.mockRestore();
+    }
+  });
+
+  it("prefers foreground_cwd for relative images even when pane.cwd has another copy", async () => {
+    const foreground = join(folder, "subproject");
+    mkdirSync(join(folder, "out"), { recursive: true });
+    mkdirSync(join(foreground, "out"), { recursive: true });
+    const parentImage = join(folder, "out", "diagram.svg");
+    const foregroundImage = join(foreground, "out", "diagram.svg");
+    const image = (label: string) => `<svg xmlns="http://www.w3.org/2000/svg"><title>${label}</title></svg>`;
+    writeFileSync(parentImage, image("pane cwd"));
+    writeFileSync(foregroundImage, image("foreground cwd"));
+    const get = spyOn(herdr, "paneGet").mockImplementation(async (paneId) => ({ pane_id: paneId, cwd: folder, foreground_cwd: foreground }) as unknown as Awaited<ReturnType<typeof herdr.paneGet>>);
+    try {
+      const stat = await fetch(url(`/api/fs/stat?pane_id=w1:p1&path=${q("./out/diagram.svg")}`));
+      expect(stat.status).toBe(200);
+      const info = await stat.json() as { path: string };
+      expect(info.path).toBe(foregroundImage);
+      const bytes = await fetch(url(`/api/fs/file?pane_id=w1:p1&path=${q(info.path)}`));
+      expect(await bytes.text()).toBe(image("foreground cwd"));
     } finally {
       get.mockRestore();
     }

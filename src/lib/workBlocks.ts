@@ -1,4 +1,5 @@
 import type { ConversationPart, ConversationTurn } from "../../shared/protocol.ts";
+import { matchPart, searchPattern } from "../../shared/conversation-search.ts";
 import { turnSkills } from "./skillActivity.ts";
 import { isTodoTool, todoSnapshot, type TodoItem } from "./todos.ts";
 import { t } from "./i18n.ts";
@@ -82,6 +83,42 @@ export function runNames(runs: readonly WorkSegment[], at: ReadonlyMap<Conversat
   });
 }
 
+/** An answer run as the chat draws it: its words, and with request details on, each run of failed requests as one row. */
+export type AnswerItem = { kind: "text"; part: TextPart } | { kind: "failed"; parts: TextPart[] };
+
+/**
+ * Consecutive requests the agent recorded as failed read as one row (#901); with `requestDetails`
+ * off (a caller that wants them plain), each stays its error line.
+ */
+export function answerItems(parts: readonly TextPart[], requestDetails: boolean): AnswerItem[] {
+  const items: AnswerItem[] = [];
+  for (const part of parts) {
+    const last = items.at(-1);
+    if (!requestDetails || part.failed !== true) items.push({ kind: "text", part });
+    else if (last?.kind === "failed") last.parts.push(part);
+    else items.push({ kind: "failed", parts: [part] });
+  }
+  return items;
+}
+
+/**
+ * With failed requests drawn as rows, the row a search's match (its matched words) is folded in: the
+ * index of its first part, which names the row (`failed:<index>`). Null when the turn's first match
+ * of those words, the one the search's snippet shows, is drawn outside every such row.
+ */
+export function foldedRequestsMatch(turn: ConversationTurn, match: string): number | null {
+  const pattern = searchPattern(match);
+  const index = pattern === null ? undefined : matchPart(turn, pattern);
+  const part = index === undefined ? undefined : turn.parts[index];
+  if (turn.role === "user" || part?.kind !== "text" || part.failed !== true) return null;
+  for (const segment of turnSegments(turn.parts)) {
+    if (segment.kind === "work") continue;
+    const row = answerItems(segment.parts, true).find((item) => item.kind === "failed" && item.parts.includes(part));
+    if (row?.kind === "failed") return turn.parts.indexOf(row.parts[0]!);
+  }
+  return null;
+}
+
 /**
  * A work block is open while its turn runs and folded once the turn settles: the answer stays
  * outside the fold, so a finished turn reads as its answer under one "Worked for" row.
@@ -96,6 +133,19 @@ export function workStartsOpen(live: boolean, parts: ConversationPart[]): boolea
   const after = lastAnswer === undefined ? 0 : parts.lastIndexOf(lastAnswer) + 1;
   // everything readable after the last answer part is work: it is inside the fold
   return parts.slice(after).some((part) => part.kind === "text" && part.text.trim().length > 0);
+}
+
+/**
+ * Whether one block of a turn starts open, until the reader opens or closes it. `live` and `waiting`
+ * are the block's own (only the turn's head runs or waits); `last`: no part of the turn comes after
+ * its run. By default that is `workStartsOpen`: the running block open, a settled turn's last block
+ * open for words said after its answer. With Collapse work on (Settings → Chat) every block starts
+ * folded to its head line, the running one included, as the Codex and Claude apps keep one working
+ * line (#2228); the block that waits on the user still opens, since it may hold what they answer.
+ */
+export function workBlockStartsOpen(block: { live: boolean; waiting: boolean; last: boolean }, parts: ConversationPart[], foldWork: boolean): boolean {
+  if (foldWork) return block.waiting;
+  return block.live || (block.last && workStartsOpen(false, parts));
 }
 
 type WorkCategory = "edit" | "read" | "command" | "other";
@@ -162,10 +212,21 @@ export function formatWorkDuration(startTs: string | null, endTs: string | null)
  * `working` before the transcript holds the new user message, so until it does, that finished turn
  * is still the last one and must not be titled as if it were the one running. The turn itself, not
  * its time: a turn may have no `ts`, and the browser's clock and the transcript's need not agree.
+ *
+ * A turn that ended on its final answer is over as well, with no send from here to say so: an agent
+ * at work again is in a turn the transcript does not hold yet (one it began by itself when a
+ * background task ended, or a message from the terminal or another device).
  */
 export function isLiveWorkTurn(turn: ConversationTurn, last: boolean, status?: string, sentOver?: ConversationTurn | null): boolean {
   if (turn === sentOver) return false;
+  if (status === "working" && endedOnAnswer(turn)) return false;
   return last && turn.role === "assistant" && (status === "working" || status === "blocked");
+}
+
+/** The turn's last part is its final answer: the agent ended the turn there. */
+export function endedOnAnswer(turn: ConversationTurn): boolean {
+  const end = turn.parts.at(-1);
+  return end?.kind === "text" && end.phase === "final_answer";
 }
 
 /**

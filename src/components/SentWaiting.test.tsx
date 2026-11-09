@@ -3,8 +3,10 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
 
+import type { Machine } from "../../shared/machines.ts";
+import { paneLifetimes } from "../lib/paneLifetime.ts";
 import { SettingsProvider } from "../lib/settings.ts";
-import { forgetWaitingSends, rememberWaitingSend, WAITING_HINT_MS, waitingKey, type WaitingSend } from "../lib/sentWaiting.ts";
+import { currentWaitingSends, forgetWaitingSends, rememberWaitingSend, settleWaitingSends, WAITING_HINT_MS, waitingBaseline, waitingKey, type WaitingSend } from "../lib/sentWaiting.ts";
 import { SentWaitingList, useWaitingSends } from "./SentWaiting.tsx";
 
 const at = Date.parse("2026-10-29T03:00:00Z");
@@ -19,9 +21,9 @@ function withEnglish<T>(run: () => T): T {
   }
 }
 
-function render(now: number): string {
+function render(now: number, sends: readonly WaitingSend[] = [send]): string {
   setSystemTime(new Date(now));
-  return withEnglish(() => renderToStaticMarkup(createElement(SettingsProvider, { children: createElement(SentWaitingList, { sends: [send] }) })));
+  return withEnglish(() => renderToStaticMarkup(createElement(SettingsProvider, { children: createElement(SentWaitingList, { sends }) })));
 }
 const textWithoutTags = (markup: string): string => markup.replace(/<[^>]*>/gu, "");
 
@@ -40,6 +42,13 @@ describe("SentWaitingList", () => {
     const markup = render(at + WAITING_HINT_MS);
     expect(markup).toContain("chat-sent-late");
     expect(textWithoutTags(markup)).toBe(send.text);
+  });
+
+  test("shows a long message whole, capped at the lines its turn's card shows, so the turn takes its place at its height", () => {
+    const long: WaitingSend = { ...send, id: 2, text: Array.from({ length: 20 }, (_, index) => `Step ${index + 1}: run the flaky test again and keep its log`).join("\n") };
+    const markup = render(at, [long, send]);
+    expect(textWithoutTags(markup)).toBe(long.text + send.text);
+    expect(markup.match(/class="chat-bubble(?: [^"]*)?"/gu)).toEqual(['class="chat-bubble is-capped"', 'class="chat-bubble"']);
   });
 
   test("is no live region of its own: the chat footer's one status region stays the only one", () => {
@@ -115,6 +124,26 @@ describe("mounted", () => {
       expect(shown).toEqual([]);
       act(() => { renderer.update(createElement(Probe, { connected: true })); });
       expect(shown).toEqual([]);
+    } finally { forgetWaitingSends(key); }
+  });
+
+  test("a disconnected sibling pane preserves the baseline so a phone's send does not duplicate its transcript turn", () => {
+    // a PC whose snapshots name their herdr: a reconnect to it is the same herdr
+    paneLifetimes.observe([{ id: "skewed-PC", snapshot: { panes: [], herdr_lifetime: "skewed-herdr" } } as unknown as Machine]);
+    const key = waitingKey("skewed-PC", "baseline-owner");
+    const user = (text: string, ts: number) => ({ role: "user" as const, ts: new Date(ts).toISOString(), parts: [{ kind: "text" as const, text }] });
+    // The phone is two seconds ahead of the PC. Its loaded chat already accounts for that skew.
+    const earlier = user("earlier", at - 10_000);
+    settleWaitingSends(key, [earlier], at, true);
+    function Sibling() {
+      useWaitingSends("skewed-PC", "another-pane", false);
+      return null;
+    }
+    try {
+      mount(createElement(Sibling), false);
+      rememberWaitingSend(key, "follow up while working", at + 2_000, waitingBaseline(key));
+      settleWaitingSends(key, [earlier, user("follow up while working", at + 100)], at + 2_100, true);
+      expect(currentWaitingSends(key)).toEqual([]);
     } finally { forgetWaitingSends(key); }
   });
 });

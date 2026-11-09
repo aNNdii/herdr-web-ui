@@ -1,5 +1,6 @@
 import { afterAll, afterEach, beforeAll, expect, it, jest } from "bun:test";
 import { HerdrSocket } from "./ws.ts";
+import { nativeTransport, setTransport, type WebSocketLike } from "./transport.ts";
 import type { ClientConnectionTrace, PendingMessage } from "../../shared/protocol.ts";
 import { OUTPUT_STALLED_CLOSE_CODE } from "../../shared/terminal-flow.ts";
 
@@ -48,7 +49,7 @@ it("refuses clear-and-send on a legacy bridge without sending payload or Enter",
   socket.open();
   socket.receive(snapshot([]));
   try {
-    expect(await client.submit("w1:p1", "chat message", "chat message", { clearDraft: "named draft" }))
+    expect(await client.submit("w1:p1", "chat message", "chat message", false, "immediate", "named draft"))
       .toMatchObject({ ok: false, code: "unsupported" });
     expect(submissions(socket)).toEqual([]);
   } finally {
@@ -113,8 +114,9 @@ it("sends a chat message and an Insert once the server's features frame came, it
     const sent = socket.nextSubmission();
     const result = client.submit("w1:p1", "chat message", "chat message");
     const frame = await sent;
-    socket.receive({ type: "submit-result", id: frame.id, pane_id: "w1:p1", ok: true });
-    expect(await result).toEqual({ ok: true });
+    // the PC's clock before it typed, for the chat's waiting copy (lib/sentWaiting.ts)
+    socket.receive({ type: "submit-result", id: frame.id, pane_id: "w1:p1", ok: true, sending_at: "2026-11-06T09:00:00.000Z" });
+    expect(await result).toEqual({ ok: true, sendingAt: "2026-11-06T09:00:00.000Z" });
     const insertSent = new Promise<{ id: number }>((resolve) => socket.addEventListener("sent", (candidate) => { if (candidate.type === "insert") resolve(candidate); }));
     const inserted = client.insert("w1:p1", "one line");
     const insert = await insertSent;
@@ -146,7 +148,7 @@ it("control: a held-copy id on a legacy bridge keeps its existing immediate inpu
   socket.open();
   socket.receive(snapshot([]));
   try {
-    expect(await client.submit("w1:p1", "held copy", "held copy", { resendId: "stable-copy-id" })).toEqual({ ok: true, unconfirmed: true });
+    expect(await client.submit("w1:p1", "held copy", "held copy", false, "immediate", undefined, false, "stable-copy-id")).toEqual({ ok: true, unconfirmed: true });
     expect(submissions(socket)).toEqual([{ type: "input", pane_id: "w1:p1", text: "held copy\r" }]);
   } finally { client.close(); }
 });
@@ -159,7 +161,7 @@ it("regression: sends the held-copy id independently of the connection request i
   socket.receive(snapshot(["submit"]));
   try {
     const sent = socket.nextSubmission();
-    const result = client.submit("w1:p1", "held copy", "held copy", { resendId: "stable-copy-id", generation: 3 });
+    const result = client.submit("w1:p1", "held copy", "held copy", false, "immediate", undefined, false, "stable-copy-id", 3);
     const frame = await sent;
     expect(submissions(socket)[0]?.resend_id).toBe("stable-copy-id");
     expect(submissions(socket)[0]?.resend_generation).toBe(3);
@@ -176,7 +178,7 @@ it("refuses a held-copy resend combined with Send anyway without sending a frame
   socket.receive(snapshot(["submit"]));
   try {
     const sent = socket.nextSubmission();
-    const result = client.submit("w1:p1", "held copy", "held copy", { sendAnyway: true, resendId: "combined-copy", generation: 0 });
+    const result = client.submit("w1:p1", "held copy", "held copy", false, "immediate", undefined, true, "combined-copy", 0);
     const answer = await Promise.race([result, sent.then((frame) => {
       socket.receive({ type: "submit-result", id: frame.id, pane_id: "w1:p1", ok: true });
       return result;
@@ -194,7 +196,7 @@ it("delivers partial clear outcomes unchanged and never retries the submission",
   socket.receive(snapshot(["submit"]));
   try {
     const sent = socket.nextSubmission();
-    const result = client.submit("w1:p1", "keep composer text", "keep composer text", { clearDraft: "named draft" });
+    const result = client.submit("w1:p1", "keep composer text", "keep composer text", false, "immediate", "named draft");
     const frame = await sent;
     const fault = { ok: false, code: "submit_partial", message: "partial-outcome-fixture" };
     socket.receive({ type: "submit-result", id: frame.id, pane_id: "w1:p1", ...fault });
@@ -211,7 +213,7 @@ it("waits for the bridge's pending-input capability before sending an explicit n
   const socket = FakeSocket.last;
   socket.open();
   expect(client.canQueueMessages()).toBe(false);
-  const result = client.submit("w1:p1", "next turn", "\x1b[200~next turn\x1b[201~", { delivery: "queue" });
+  const result = client.submit("w1:p1", "next turn", "\x1b[200~next turn\x1b[201~", false, "queue");
   await Promise.resolve();
   expect(submissions(socket)).toEqual([]);
   socket.receive(snapshot(["submit", "pending-input"]));
@@ -232,7 +234,7 @@ it("refuses queued delivery on older bridges without writing its text or a fallb
     socket.open();
     socket.receive(snapshot(features));
     expect(client.canQueueMessages()).toBe(false);
-    expect(await client.submit("w1:p1", "keep this draft", "keep this draft", { delivery: "queue" })).toMatchObject({ ok: false, code: "pending_input_unsupported" });
+    expect(await client.submit("w1:p1", "keep this draft", "keep this draft", false, "queue")).toMatchObject({ ok: false, code: "pending_input_unsupported" });
     expect(submissions(socket)).toEqual([]);
     client.close();
   }
@@ -246,7 +248,7 @@ it("holds a message for Send now on bridges that list pending-hold, and queues i
     socket.open();
     socket.receive(snapshot([...features]));
     expect(client.canHoldMessages()).toBe(delivery === "hold");
-    const result = client.submit("w1:p1", "later", "later", { delivery: "hold" });
+    const result = client.submit("w1:p1", "later", "later", false, "hold");
     for (let turn = 0; turn < 10 && submissions(socket).length === 0; turn++) await Promise.resolve();
     expect(submissions(socket)).toEqual([{ type: "submit", id: 1, pane_id: "w1:p1", text: "later", payload: "later", delivery }]);
     const pending: PendingMessage = { id: "pending-1", request_id: 1, text: "later", state: delivery === "hold" ? "held" : "queued", created_at: "2026-10-06T00:00:00Z" };
@@ -256,12 +258,44 @@ it("holds a message for Send now on bridges that list pending-hold, and queues i
   }
 });
 
+// Alt+Enter's hold is only ever held: a PC that cannot hold one refuses it rather than queuing it to go on its own
+it("refuses a hold-only message on bridges without pending-hold, writing nothing", async () => {
+  for (const features of [["submit", "pending-input"], ["submit"], []]) {
+    const client = new HerdrSocket("ws://test/ws");
+    client.connect();
+    const socket = FakeSocket.last;
+    socket.open();
+    // a hold pressed before the snapshot is decided once it says what the bridge takes
+    const result = client.submit("w1:p1", "keep this draft", "keep this draft", false, "hold", undefined, false, undefined, undefined, false, true);
+    socket.receive(snapshot(features));
+    let settled = false;
+    void result!.then(() => { settled = true; });
+    for (let turn = 0; turn < 10 && !settled && submissions(socket).length === 0; turn++) await Promise.resolve();
+    // checked before the answer is awaited: a hold sent as a queued message would wait for a receipt that never comes
+    expect(submissions(socket)).toEqual([]);
+    expect(await result).toMatchObject({ ok: false, code: "pending_hold_unsupported" });
+    expect(socket.sent.filter((frame) => JSON.stringify(frame).includes("keep this draft"))).toEqual([]);
+    client.close();
+  }
+  const client = new HerdrSocket("ws://test/ws");
+  client.connect();
+  const socket = FakeSocket.last;
+  socket.open();
+  socket.receive(snapshot(["submit", "pending-input", "pending-hold"]));
+  const result = client.submit("w1:p1", "later", "later", false, "hold", undefined, false, undefined, undefined, false, true);
+  for (let turn = 0; turn < 10 && submissions(socket).length === 0; turn++) await Promise.resolve();
+  expect(submissions(socket)).toEqual([{ type: "submit", id: 1, pane_id: "w1:p1", text: "later", payload: "later", delivery: "hold" }]);
+  socket.receive({ type: "submit-result", id: 1, pane_id: "w1:p1", ok: false, code: "agent_not_ready", message: "fixture" });
+  await result;
+  client.close();
+});
+
 it("decides a hold once the snapshot arrives, so a Send before it still holds", async () => {
   const client = new HerdrSocket("ws://test/ws");
   client.connect();
   const socket = FakeSocket.last;
   socket.open();
-  const result = client.submit("w1:p1", "later", "later", { delivery: "hold" });
+  const result = client.submit("w1:p1", "later", "later", false, "hold");
   await Promise.resolve();
   expect(submissions(socket)).toEqual([]);
   socket.receive(snapshot(["submit", "pending-input", "pending-hold"]));
@@ -278,7 +312,7 @@ it("accepts an owner-only pending item as the submit receipt when its separate A
   const socket = FakeSocket.last;
   socket.open();
   socket.receive(snapshot(["submit", "pending-input"]));
-  const result = client.submit("w1:p1", "one accepted message", "one accepted message", { delivery: "queue" });
+  const result = client.submit("w1:p1", "one accepted message", "one accepted message", false, "queue");
   for (let turn = 0; turn < 10 && submissions(socket).length === 0; turn++) await Promise.resolve();
   const pending: PendingMessage = { id: "pending-1", request_id: 1, text: "one accepted message", state: "queued", created_at: "2026-10-06T00:00:00Z" };
   socket.receive({ type: "pending-messages", pane_id: "w1:p1", messages: [pending] });
@@ -294,7 +328,7 @@ it("matches live queue receipts only to queued submits for the same captured pan
   const socket = FakeSocket.last;
   socket.open();
   socket.receive(snapshot(["submit", "pending-input"]));
-  const queued = client.submit("w1:p1", "queued", "queued", { delivery: "queue" });
+  const queued = client.submit("w1:p1", "queued", "queued", false, "queue");
   const immediate = client.submit("w1:p1", "immediate", "immediate");
   const action = client.pendingAction("w1:p1", "pending-other", "steer");
   const settled: string[] = [];
@@ -329,7 +363,7 @@ it("ignores a receipt from an old socket even when its request ID matches a new 
   socket.open();
   socket.receive(snapshot(["submit", "pending-input"]));
   let settled = false;
-  const result = client.submit("w1:p1", "new connection", "new connection", { delivery: "queue" });
+  const result = client.submit("w1:p1", "new connection", "new connection", false, "queue");
   void result?.then(() => { settled = true; });
   for (let turn = 0; turn < 10 && submissions(socket).length === 0; turn++) await Promise.resolve();
   const pending: PendingMessage = { id: "new-pending", request_id: 1, text: "new connection", state: "queued", created_at: "2026-10-06T00:00:00Z" };
@@ -426,7 +460,7 @@ it("settles a pending action whose connection dropped before it was sent as not 
   socket.open();
   // waiting for the snapshot that says the bridge takes pending actions
   const result = client.pendingAction("w1:p1", "pending-1", "steer");
-  const submit = client.submit("w1:p1", "held copy", "held copy", { resendId: "pending-2", generation: 0 });
+  const submit = client.submit("w1:p1", "held copy", "held copy", false, "immediate", undefined, false, "pending-2", 0);
   socket.disconnect();
   expect(await result).toMatchObject({ ok: false, code: "not_transmitted" });
   expect(await submit).toMatchObject({ ok: false, code: "not_transmitted" });
@@ -434,14 +468,14 @@ it("settles a pending action whose connection dropped before it was sent as not 
   client.close();
 });
 
-it("types the terminal's input line as a typed submit, and keeps the older bridge's input fallback compatible", async () => {
+it("keeps existing Enter submits and the older bridge's input fallback compatible", async () => {
   for (const features of [[], ["submit"], ["submit", "pending-input"]]) {
     const client = new HerdrSocket("ws://test/ws");
     client.connect();
     const socket = FakeSocket.last;
     socket.open();
     socket.receive(snapshot(features));
-    const result = client.typeLine("w1:p1", "steer now", "steer now");
+    const result = client.submit("w1:p1", "steer now", "steer now", true);
     for (let turn = 0; turn < 10 && submissions(socket).length === 0; turn++) await Promise.resolve();
     if (features.includes("submit")) {
       expect(submissions(socket)).toEqual([{ type: "submit", id: 1, pane_id: "w1:p1", text: "steer now", payload: "steer now", typed: true }]);
@@ -460,13 +494,13 @@ it("never replays a queued submit after disconnecting, including before its capa
     socket.open();
     client.attach("w1:p1", 80, 24);
     if (known) socket.receive(snapshot(["submit", "pending-input"]));
-    const result = client.submit("w1:p1", "do not replay", "do not replay", { delivery: "queue" });
+    const result = client.submit("w1:p1", "do not replay", "do not replay", false, "queue");
     for (let turn = 0; turn < 10 && known && submissions(socket).length === 0; turn++) await Promise.resolve();
     socket.disconnect();
     // regression #541: before its snapshot no frame left, so it is not sent rather than not confirmed
     expect(await result).toMatchObject({ ok: false, code: known ? "disconnected" : "not_transmitted" });
     expect(client.canQueueMessages()).toBe(false);
-    expect(client.submit("w1:p1", "offline", "offline", { delivery: "queue" })).toBeNull();
+    expect(client.submit("w1:p1", "offline", "offline", false, "queue")).toBeNull();
     client.connect();
     const reconnect = FakeSocket.last;
     reconnect.open();
@@ -483,7 +517,7 @@ it("sends no submit while observing, including a role change while waiting for t
   client.connect();
   const socket = FakeSocket.last;
   socket.open();
-  const pending = client.submit("w1:p1", "not while observing", "not while observing", { delivery: "queue" });
+  const pending = client.submit("w1:p1", "not while observing", "not while observing", false, "queue");
   client.setMode("observe");
   socket.receive(snapshot(["submit", "pending-input"]));
   expect(await pending).toMatchObject({ ok: false, code: "read_only" });
@@ -498,7 +532,7 @@ it("applies a server-forced observe acknowledgement before a pending submit wake
   client.connect();
   const socket = FakeSocket.last;
   socket.open();
-  const pending = client.submit("w1:p1", "keep this draft", "keep this draft", { delivery: "queue" });
+  const pending = client.submit("w1:p1", "keep this draft", "keep this draft", false, "queue");
   socket.receive({ type: "role-ack", mode: "observe" });
   socket.receive(snapshot(["submit", "pending-input"]));
   expect(await pending).toMatchObject({ ok: false, code: "read_only" });
@@ -787,6 +821,136 @@ it("watches a pane it let go of only on a server that can, again after a reconne
   client.close();
 });
 
+/** Answers every ping the client sent and the fake server has not answered yet, as the bridge does in order. */
+const answerPings = (socket: FakeSocket, answered: Set<unknown>) => {
+  for (const frame of socket.sent) if (frame.type === "ping" && !answered.has(frame.id)) {
+    answered.add(frame.id);
+    socket.receive({ type: "pong", id: frame.id });
+  }
+};
+
+const watchClient = (features = ["watch", "ping"]) => {
+  const client = new HerdrSocket("ws://test/ws");
+  const ended: string[] = [];
+  client.on((message) => { if (message.type === "watch-end") ended.push(message.pane_id); });
+  client.connect();
+  const socket = FakeSocket.last;
+  socket.open();
+  socket.receive(snapshot(features));
+  const frames = () => socket.sent.filter((m) => m.type === "watch" || m.type === "unwatch");
+  return { client, ended, socket, frames };
+};
+
+it("keeps a new watch when the unwatched view's end arrives after it, so the next unwatch still goes out", () => {
+  const { client, ended, socket, frames } = watchClient();
+  const answered = new Set<unknown>();
+  client.watch("w1:p1", 100, 30);
+  client.unwatch("w1:p1");
+  client.watch("w1:p1", 100, 30);
+  // the first view's end, sent before the server read the unwatch
+  socket.receive({ type: "watch-end", pane_id: "w1:p1" });
+  expect(ended).toEqual([]);
+  client.unwatch("w1:p1");
+  expect(frames().map((m) => m.type)).toEqual(["watch", "unwatch", "watch", "watch", "unwatch"]);
+  // once the server answered past every superseded view, a view that ends is ended for the page
+  client.watch("w1:p1", 100, 30);
+  answerPings(socket, answered);
+  socket.receive({ type: "watch-end", pane_id: "w1:p1" });
+  expect(ended).toEqual(["w1:p1"]);
+  client.unwatch("w1:p1");
+  expect(frames().at(-1)).toEqual({ type: "watch", pane_id: "w1:p1", cols: 100, rows: 30 });
+  client.close();
+});
+
+it("absorbs the late ends of two superseded views, so the newest unwatch still goes out", () => {
+  const { client, ended, socket, frames } = watchClient();
+  client.watch("w1:p1", 100, 30);
+  client.unwatch("w1:p1");
+  client.watch("w1:p1", 100, 30);
+  client.unwatch("w1:p1");
+  client.watch("w1:p1", 100, 30);
+  // both earlier views ended before the server read their unwatch
+  socket.receive({ type: "watch-end", pane_id: "w1:p1" });
+  socket.receive({ type: "watch-end", pane_id: "w1:p1" });
+  expect(ended).toEqual([]);
+  const sent = frames().length;
+  client.unwatch("w1:p1");
+  expect(frames().slice(sent)).toEqual([{ type: "unwatch", pane_id: "w1:p1" }]);
+  client.close();
+});
+
+it("honours a view's own end after an unwatch once the server has read that unwatch", () => {
+  const { client, ended, socket, frames } = watchClient();
+  const answered = new Set<unknown>();
+  client.watch("w1:p1", 100, 30);
+  client.unwatch("w1:p1");
+  // the pong of a ping sent after the unwatch: the unwatched view can no longer end on a new one
+  answerPings(socket, answered);
+  client.watch("w1:p1", 100, 30);
+  const sent = frames().length;
+  socket.receive({ type: "watch-end", pane_id: "w1:p1" });
+  expect(ended).toEqual(["w1:p1"]);
+  // the view is over: it is not started again, and there is nothing left to unwatch
+  client.unwatch("w1:p1");
+  expect(frames().slice(sent)).toEqual([]);
+  client.close();
+});
+
+it("re-sends a replacement watch the server cannot start at most once, then lets its end reach the page", () => {
+  const { client, ended, socket, frames } = watchClient();
+  client.watch("w1:p1", 100, 30);
+  const start = socket.sent.length;
+  // a resize replaces the running view; the server cannot start the new one, so it ends it at once,
+  // answering each frame in order (its end comes before the pong of the ping sent after the watch)
+  client.watch("w1:p1", 120, 40);
+  for (let i = start; i < socket.sent.length && i < start + 100; i += 1) {
+    const frame = socket.sent[i]!;
+    if (frame.type === "watch") socket.receive({ type: "watch-end", pane_id: "w1:p1" });
+    if (frame.type === "ping") socket.receive({ type: "pong", id: frame.id });
+  }
+  expect(frames().length - 1).toBeLessThanOrEqual(2);
+  expect(ended).toEqual(["w1:p1"]);
+  client.close();
+});
+
+// A bridge without "ping" cannot fence a superseded view's end, so the client tracks none: every end
+// reaches the page and nothing is re-sent or kept, and the page's next watch and unwatch both go out.
+const expectUntrackedEnds = ({ client, ended, socket, frames }: ReturnType<typeof watchClient>, ends: number) => {
+  const sent = frames().length;
+  for (let i = 0; i < ends; i += 1) socket.receive({ type: "watch-end", pane_id: "w1:p1" });
+  expect(ended).toEqual(Array.from({ length: ends }, () => "w1:p1"));
+  expect(frames().slice(sent)).toEqual([]);
+  expect(socket.sent.some((m) => m.type === "ping")).toBe(false);
+  client.watch("w1:p1", 100, 30);
+  client.unwatch("w1:p1");
+  expect(frames().slice(sent)).toEqual([{ type: "watch", pane_id: "w1:p1", cols: 100, rows: 30 }, { type: "unwatch", pane_id: "w1:p1" }]);
+  client.close();
+};
+
+it("tracks no superseded end on a bridge without ping: two late ends after two unwatches each reach the page", () => {
+  const watching = watchClient(["watch"]);
+  watching.client.watch("w1:p1", 100, 30);
+  watching.client.unwatch("w1:p1");
+  watching.client.watch("w1:p1", 100, 30);
+  watching.client.unwatch("w1:p1");
+  watching.client.watch("w1:p1", 100, 30);
+  expectUntrackedEnds(watching, 2);
+});
+
+it("tracks no superseded end on a bridge without ping: a replaced view's late end reaches the page", () => {
+  const replaced = watchClient(["watch"]);
+  replaced.client.watch("w1:p1", 100, 30);
+  replaced.client.watch("w1:p1", 120, 40);
+  expectUntrackedEnds(replaced, 1);
+
+  const both = watchClient(["watch"]);
+  both.client.watch("w1:p1", 100, 30);
+  both.client.unwatch("w1:p1");
+  both.client.watch("w1:p1", 100, 30);
+  both.client.watch("w1:p1", 120, 40);
+  expectUntrackedEnds(both, 2);
+});
+
 it("restores watches and chat interest once per connection: on the features frame, not again on the snapshot", () => {
   const client = new HerdrSocket("ws://test/ws");
   client.trustFeatures(() => true);
@@ -862,6 +1026,42 @@ it("discovers watch support anew before each connection's attach replay", () => 
   } finally { client.close(); }
 });
 
+it("keeps a pane's scrollback in the browser only for a server that says it has none of its own", () => {
+  const client = new HerdrSocket("ws://test/ws");
+  client.trustFeatures(() => true);
+  const seen: boolean[] = [];
+  // a pane hears the features frame after the socket learned them, and sizes its scrollback by it
+  const off = client.on((message) => { if (message.type === "features") seen.push(client.hasTerminalHistory()); });
+  try {
+    client.connect();
+    let socket = FakeSocket.last;
+    socket.open();
+    expect(client.hasTerminalHistory()).toBe(false);
+    socket.receive({ type: "features", features: ["submit", "terminal-history"], connection: "c1" });
+    expect(seen).toEqual([true]);
+    // a reconnect to herdr's own server (its TUI keeps the history) forgets it
+    socket.disconnect();
+    client.connect();
+    socket = FakeSocket.last;
+    socket.open();
+    expect(client.hasTerminalHistory()).toBe(false);
+    socket.receive(snapshot(["watch", "submit"]));
+    expect(client.hasTerminalHistory()).toBe(false);
+  } finally { off(); client.close(); }
+});
+
+// #2664 review: an untrusted features frame lowered the scrollback, and history replayed before the snapshot was cut
+it("keeps a pane's scrollback on from a features frame it does not trust yet", () => {
+  const client = new HerdrSocket("ws://test/ws");
+  client.trustFeatures(() => false);
+  try {
+    client.connect();
+    FakeSocket.last.open();
+    FakeSocket.last.receive({ type: "features", features: ["submit", "terminal-history"], connection: "c1" });
+    expect(client.hasTerminalHistory()).toBe(true);
+  } finally { client.close(); }
+});
+
 it("waits for capabilities when output precedes snapshot, and supports old bridges", () => {
   for (const features of [["input-ready"], []]) {
     const client = new HerdrSocket("ws://test/ws"); client.connect();
@@ -884,8 +1084,8 @@ it("sends an agent-only message over a named terminal draft with both marks", as
   client.connect();
   const socket = FakeSocket.last;
   socket.open();
-  socket.receive(snapshot(["submit", "submit-agent-only"]));
-  const result = client.submit("w1:p1", "> quoted\ncomment", "payload", { agentOnly: true, clearDraft: "named draft" });
+  socket.receive(snapshot(["submit", "agent-only"]));
+  const result = client.submit("w1:p1", "> quoted\ncomment", "payload", false, "immediate", "named draft", false, undefined, undefined, true);
   for (let turn = 0; turn < 10 && submits(socket).length === 0; turn++) await Promise.resolve();
   expect(submits(socket)).toMatchObject([{ type: "submit", pane_id: "w1:p1", agent_only: true, clear_draft: "named draft" }]);
   socket.receive({ type: "submit-result", id: submits(socket)[0]!["id"] as number, pane_id: "w1:p1", ok: false, code: "input_draft", message: "draft", typed: false, draft: "other" });
@@ -901,7 +1101,7 @@ it("sends an agent-only message marked as such, and refuses it, sending nothing,
     const socket = FakeSocket.last;
     socket.open();
     socket.receive(snapshot(features));
-    expect(await client.submit("w1:p1", "> quoted\ncomment", "> quoted\ncomment", { agentOnly: true })).toEqual({ ok: false, code: "agent_only_unsupported", message: expect.any(String), typed: false });
+    expect(await client.submit("w1:p1", "> quoted\ncomment", "> quoted\ncomment", false, "immediate", undefined, false, undefined, undefined, true)).toEqual({ ok: false, code: "agent_only_unsupported", message: expect.any(String), typed: false });
     expect(submits(socket)).toEqual([]);
     client.close();
   }
@@ -909,8 +1109,8 @@ it("sends an agent-only message marked as such, and refuses it, sending nothing,
   client.connect();
   const socket = FakeSocket.last;
   socket.open();
-  socket.receive(snapshot(["submit", "submit-agent-only"]));
-  const result = client.submit("w1:p1", "> quoted\ncomment", "payload", { agentOnly: true });
+  socket.receive(snapshot(["submit", "agent-only"]));
+  const result = client.submit("w1:p1", "> quoted\ncomment", "payload", false, "immediate", undefined, false, undefined, undefined, true);
   for (let turn = 0; turn < 10 && submits(socket).length === 0; turn++) await Promise.resolve();
   expect(submits(socket)).toMatchObject([{ type: "submit", pane_id: "w1:p1", text: "> quoted\ncomment", agent_only: true }]);
   socket.receive({ type: "submit-result", id: submits(socket)[0]!["id"], pane_id: "w1:p1", ok: true });
@@ -924,11 +1124,11 @@ it("passes on the bridge's typed:false, and adds nothing to a refusal that does 
   client.connect();
   const socket = FakeSocket.last;
   socket.open();
-  socket.receive(snapshot(["submit", "pending-input", "submit-agent-only"]));
-  const refused = client.submit("w1:p1", "> quoted", "payload", { agentOnly: true });
+  socket.receive(snapshot(["submit", "pending-input", "agent-only"]));
+  const refused = client.submit("w1:p1", "> quoted", "payload", false, "immediate", undefined, false, undefined, undefined, true);
   for (let turn = 0; turn < 10 && submits(socket).length < 1; turn++) await Promise.resolve();
-  socket.receive({ type: "submit-result", id: submits(socket)[0]!["id"] as number, pane_id: "w1:p1", ok: false, code: "agent_not_found", message: "no agent", typed: false });
-  expect(await refused).toEqual({ ok: false, code: "agent_not_found", message: "no agent", typed: false });
+  socket.receive({ type: "submit-result", id: submits(socket)[0]!["id"] as number, pane_id: "w1:p1", ok: false, code: "agent_not_ready", message: "no agent", typed: false });
+  expect(await refused).toEqual({ ok: false, code: "agent_not_ready", message: "no agent", typed: false });
   const unknown = client.submit("w1:p1", "plain", "plain");
   for (let turn = 0; turn < 10 && submits(socket).length < 2; turn++) await Promise.resolve();
   socket.receive({ type: "submit-result", id: submits(socket)[1]!["id"] as number, pane_id: "w1:p1", ok: false, code: "timeout", message: "herdr timed out" });
@@ -945,16 +1145,16 @@ it("queues an agent-only message for the next turn with both marks, and refuses 
   const old = new HerdrSocket("ws://test/ws");
   old.connect();
   FakeSocket.last.open();
-  FakeSocket.last.receive(snapshot(["submit", "submit-agent-only"]));
-  expect(await old.submit("w1:p1", "> quoted\ncomment", "payload", { delivery: "queue", agentOnly: true })).toMatchObject({ ok: false, code: "pending_input_unsupported", typed: false });
+  FakeSocket.last.receive(snapshot(["submit", "agent-only"]));
+  expect(await old.submit("w1:p1", "> quoted\ncomment", "payload", false, "queue", undefined, false, undefined, undefined, true)).toMatchObject({ ok: false, code: "pending_input_unsupported", typed: false });
   expect(submits(FakeSocket.last)).toEqual([]);
   old.close();
   const client = new HerdrSocket("ws://test/ws");
   client.connect();
   const socket = FakeSocket.last;
   socket.open();
-  socket.receive(snapshot(["submit", "pending-input", "submit-agent-only"]));
-  const result = client.submit("w1:p1", "> quoted\ncomment", "payload", { delivery: "queue", agentOnly: true });
+  socket.receive(snapshot(["submit", "pending-input", "agent-only"]));
+  const result = client.submit("w1:p1", "> quoted\ncomment", "payload", false, "queue", undefined, false, undefined, undefined, true);
   for (let turn = 0; turn < 10 && submits(socket).length === 0; turn++) await Promise.resolve();
   expect(submits(socket)).toMatchObject([{ type: "submit", pane_id: "w1:p1", delivery: "queue", agent_only: true }]);
   const pending: PendingMessage = { id: "pending-1", request_id: submits(socket)[0]!["id"] as number, text: "> quoted\ncomment", state: "queued", created_at: "2026-10-06T00:00:00Z" };
@@ -1370,11 +1570,46 @@ it("drops an open socket that answers no ping, reconnects at once and replays th
   }
 });
 
+it("gives up the reads still in flight when a connection found dead is replaced", async () => {
+  jest.useFakeTimers();
+  const { client, socket } = liveClient(["submit", "ping"]);
+  const original = globalThis.fetch;
+  const signals: AbortSignal[] = [];
+  globalThis.fetch = ((_input: RequestInfo | URL, init?: RequestInit) => {
+    signals.push(init!.signal!);
+    return new Promise<Response>(() => undefined);
+  }) as typeof fetch;
+  try {
+    // a read that went out on the lost network, and one sent while the new connection was on its way
+    void nativeTransport.fetch("/api/pane/conversation?pane_id=w1:p1");
+    client.wake();
+    jest.advanceTimersByTime(6_000);
+    const fresh = FakeSocket.last;
+    expect(fresh).not.toBe(socket);
+    void nativeTransport.fetch("/api/health");
+    expect(signals.map((signal) => signal.aborted)).toEqual([false, false]);
+    fresh.open();
+    expect(signals.map((signal) => signal.aborted)).toEqual([true, true]);
+    // a reconnect after a plain close gives up nothing
+    void nativeTransport.fetch("/api/health");
+    fresh.disconnect();
+    jest.advanceTimersByTime(5_000);
+    FakeSocket.last.open();
+    expect(signals[2]!.aborted).toBe(false);
+  } finally {
+    globalThis.fetch = original;
+    client.close();
+    jest.useRealTimers();
+  }
+});
+
 it("keeps typing out of the socket while a probe waits, and takes it again only when its pong comes back", () => {
   jest.useFakeTimers();
   const { client, socket } = liveClient(["submit", "ping"]);
   try {
     expect(client.sendInput("w1:p1", "a")).toBe(true);
+    // the typing's fence: the pong of a ping sent after it confirms the server read it (#2587)
+    expect(pings(socket)).toEqual([{ type: "ping", id: 1 }]);
     client.wake();
     // refused, so PaneTerminal keeps the keys as a held draft
     expect(client.canInput("w1:p1")).toBe(false);
@@ -1383,13 +1618,14 @@ it("keeps typing out of the socket while a probe waits, and takes it again only 
     expect(submissions(socket)).toEqual([{ type: "input", pane_id: "w1:p1", text: "a" }]);
     // a second wake while one waits sends no second ping
     client.wake();
-    expect(pings(socket)).toHaveLength(1);
-    // a frame the browser had buffered before the sleep, or a pong to no ping in flight, proves nothing
+    expect(pings(socket)).toHaveLength(2);
+    // a frame the browser had buffered before the sleep, or a pong to no ping of the probe, proves nothing
     socket.receive({ type: "pane-status", pane_id: "w1:p1", agent_status: "idle" });
     socket.receive({ type: "pong", id: 99 });
+    socket.receive({ type: "pong", id: 1 });
     expect(client.state).toBe("probing");
     expect(client.canInput("w1:p1")).toBe(false);
-    socket.receive({ type: "pong", id: 1 });
+    socket.receive({ type: "pong", id: 2 });
     expect(client.state).toBe("open");
     expect(client.sendInput("w1:p1", "c")).toBe(true);
     jest.advanceTimersByTime(10_000);
@@ -1398,6 +1634,194 @@ it("keeps typing out of the socket while a probe waits, and takes it again only 
   } finally {
     client.close();
     jest.useRealTimers();
+  }
+});
+
+it("holds typing the socket took when its connection ends before the server confirmed it (#2587)", () => {
+  const { client, socket } = liveClient(["submit", "ping"]);
+  try {
+    expect(client.sendInput("w1:p1", "ec")).toBe(true);
+    expect(client.sendInput("w1:p1", "ho")).toBe(true);
+    // one fence at a time, however fast the typing: "ho" waits for the next
+    expect(pings(socket)).toEqual([{ type: "ping", id: 1 }]);
+    socket.receive({ type: "pong", id: 1 });
+    expect(pings(socket)).toEqual([{ type: "ping", id: 1 }, { type: "ping", id: 2 }]);
+    // typed at a masked prompt: never kept, so never held
+    expect(client.sendInput("w1:p1", "hunter2", false, false, true)).toBe(true);
+    expect(client.sendInput("w1:p1", "\x7f")).toBe(true);
+    expect(client.takeUnconfirmedInput("w1:p1")).toEqual([]);
+    socket.disconnect();
+    expect(client.takeUnconfirmedInput("w1:p1")).toEqual(["ho", "\x7f"]);
+    // given once
+    expect(client.takeUnconfirmedInput("w1:p1")).toEqual([]);
+  } finally {
+    client.close();
+  }
+});
+
+it("holds typing a bridge with input-receipt read but did not confirm typing when its connection ends (#2677)", () => {
+  const { client, socket } = liveClient(["submit", "ping", "input-receipt"]);
+  try {
+    expect(client.sendInput("w1:p1", "ls")).toBe(true);
+    expect(client.sendInput("w1:p1", " -la")).toBe(true);
+    expect(client.sendInput("w1:p1", "x")).toBe(true);
+    expect(client.sendInput("w1:p1", "\x1b[0n", false, true)).toBe(true);
+    expect(submissions(socket)).toEqual([
+      { type: "input", pane_id: "w1:p1", text: "ls", id: 1 },
+      { type: "input", pane_id: "w1:p1", text: " -la", id: 2 },
+      { type: "input", pane_id: "w1:p1", text: "x", id: 3 },
+      { type: "input", pane_id: "w1:p1", text: "\x1b[0n", automatic: true },
+    ]);
+    // receipts need no fence, and a pong proves only that the bridge read the frames
+    expect(pings(socket)).toEqual([]);
+    socket.receive({ type: "pong", id: 1 });
+    socket.receive({ type: "input-result", id: 1, pane_id: "w1:p1", ok: true });
+    // a refusal is told by its error frame, not held
+    socket.receive({ type: "input-result", id: 3, pane_id: "w1:p1", ok: false, code: "input_failed" });
+    // another pane's receipt confirms nothing here
+    socket.receive({ type: "input-result", id: 2, pane_id: "w1:p2", ok: true });
+    socket.disconnect();
+    expect(client.takeUnconfirmedInput("w1:p1")).toEqual([" -la"]);
+  } finally {
+    client.close();
+  }
+});
+
+it("waits for the receipt of typing sent before a bridge with input-receipt said what it takes (#2677)", () => {
+  const client = new HerdrSocket("ws://test/ws");
+  client.trustFeatures(() => false);
+  client.attach("w1:p1", 80, 24);
+  client.connect();
+  const socket = FakeSocket.last;
+  try {
+    socket.open();
+    socket.receive({ type: "features", features: ["input-ready", "ping", "input-receipt"], connection: "c1", herdr_lifetime: "replaced" });
+    socket.receive({ type: "input-ready", pane_id: "w1:p1" });
+    expect(client.sendInput("w1:p1", "echo early")).toBe(true);
+    expect(submissions(socket)).toEqual([{ type: "input", pane_id: "w1:p1", text: "echo early", id: 1 }]);
+    socket.receive(snapshot(["input-ready", "ping", "input-receipt"]));
+    expect(pings(socket)).toEqual([]);
+    socket.receive({ type: "pong", id: 1 });
+    socket.disconnect();
+    expect(client.takeUnconfirmedInput("w1:p1")).toEqual(["echo early"]);
+  } finally {
+    client.close();
+  }
+});
+
+it("keeps typing sent before the bridge said what it takes, and fences it once it says so", () => {
+  const start = () => {
+    const client = new HerdrSocket("ws://test/ws");
+    // a features frame naming another herdr is not trusted: what the bridge takes waits for the snapshot
+    client.trustFeatures(() => false);
+    client.attach("w1:p1", 80, 24);
+    client.connect();
+    const socket = FakeSocket.last;
+    socket.open();
+    socket.receive({ type: "features", features: ["input-ready", "ping"], connection: "c1", herdr_lifetime: "replaced" });
+    socket.receive({ type: "input-ready", pane_id: "w1:p1" });
+    expect(client.sendInput("w1:p1", "echo early")).toBe(true);
+    return { client, socket };
+  };
+  const dropped = start();
+  try {
+    dropped.socket.disconnect();
+    expect(dropped.client.takeUnconfirmedInput("w1:p1")).toEqual(["echo early"]);
+  } finally { dropped.client.close(); }
+  const fenced = start();
+  try {
+    expect(pings(fenced.socket)).toEqual([]);
+    fenced.socket.receive(snapshot(["input-ready", "ping"]));
+    expect(pings(fenced.socket)).toEqual([{ type: "ping", id: 1 }]);
+    fenced.socket.receive({ type: "pong", id: 1 });
+    fenced.socket.disconnect();
+    expect(fenced.client.takeUnconfirmedInput("w1:p1")).toEqual([]);
+  } finally { fenced.client.close(); }
+  // an older bridge answers no ping: its snapshot releases the typing, trusted as before
+  const older = start();
+  try {
+    older.socket.receive(snapshot(["input-ready"]));
+    expect(pings(older.socket)).toEqual([]);
+    older.socket.disconnect();
+    expect(older.client.takeUnconfirmedInput("w1:p1")).toEqual([]);
+  } finally { older.client.close(); }
+});
+
+it("keeps a pane's unconfirmed typing across a second drop until its terminal takes it", () => {
+  const { client, socket } = liveClient(["submit", "ping"]);
+  try {
+    expect(client.sendInput("w1:p1", "echo a")).toBe(true);
+    // no terminal of the pane is mounted to take it: the reconnect drops before one is
+    socket.disconnect();
+    client.wake();
+    const again = FakeSocket.last;
+    expect(again).not.toBe(socket);
+    again.open();
+    again.receive(snapshot(["input-ready", "submit", "ping"]));
+    again.receive({ type: "input-ready", pane_id: "w1:p1" });
+    expect(client.sendInput("w1:p1", " b")).toBe(true);
+    again.disconnect();
+    // older typing stays ahead of newer
+    expect(client.takeUnconfirmedInput("w1:p1")).toEqual(["echo a", " b"]);
+  } finally {
+    client.close();
+  }
+});
+
+it("never offers typing lost on one herdr to a pane of another that reuses its ID", () => {
+  const proven = (socket: FakeSocket, lifetime: string) => socket.receive({ type: "snapshot", snapshot: { workspaces: [], panes: [], agents: [], layouts: [], herdr_lifetime: lifetime }, features: ["input-ready", "ping"] });
+  const lostOn = (lifetime: string) => {
+    const client = new HerdrSocket("ws://test/ws");
+    client.attach("w1:p1", 80, 24);
+    client.connect();
+    const socket = FakeSocket.last;
+    socket.open();
+    proven(socket, lifetime);
+    socket.receive({ type: "input-ready", pane_id: "w1:p1" });
+    expect(client.sendInput("w1:p1", "rm -rf build")).toBe(true);
+    // no terminal of the pane is mounted to take it, and the connection comes back
+    socket.disconnect();
+    client.wake();
+    const again = FakeSocket.last;
+    again.open();
+    // a new connection that has not said which herdr it reads keeps the typing back
+    expect(client.takeUnconfirmedInput("w1:p1")).toEqual([]);
+    return { client, again };
+  };
+  const replaced = lostOn("herdr-a");
+  try {
+    proven(replaced.again, "herdr-b");
+    expect(replaced.client.takeUnconfirmedInput("w1:p1")).toEqual([]);
+  } finally { replaced.client.close(); }
+  const same = lostOn("herdr-a");
+  try {
+    proven(same.again, "herdr-a");
+    expect(same.client.takeUnconfirmedInput("w1:p1")).toEqual(["rm -rf build"]);
+  } finally { same.client.close(); }
+});
+
+it("holds nothing the server confirmed, a probe's pong included, nor anything typed to an older bridge", () => {
+  jest.useFakeTimers();
+  const live = liveClient(["submit", "ping"]);
+  try {
+    expect(live.client.sendInput("w1:p1", "a")).toBe(true);
+    live.client.wake();
+    // the probe's ping went after the typing: its pong confirms it as the fence's would
+    live.socket.receive({ type: "pong", id: 2 });
+    live.socket.disconnect();
+    expect(live.client.takeUnconfirmedInput("w1:p1")).toEqual([]);
+  } finally {
+    live.client.close();
+    jest.useRealTimers();
+  }
+  const older = liveClient(["submit"]);
+  try {
+    expect(older.client.sendInput("w1:p1", "a")).toBe(true);
+    expect(pings(older.socket)).toEqual([]);
+    older.socket.disconnect();
+    expect(older.client.takeUnconfirmedInput("w1:p1")).toEqual([]);
+  } finally {
+    older.client.close();
   }
 });
 
@@ -1458,6 +1882,62 @@ it("settles a submit that waited on a probe as not transmitted when the socket i
     expect(await submit).toMatchObject({ ok: false, code: "not_transmitted" });
     expect(await secret).toMatchObject({ ok: false, code: "disconnected" });
     expect(socket.sent.filter((frame) => ["submit", "secret"].includes(frame.type))).toEqual([]);
+  } finally {
+    client.close();
+    jest.useRealTimers();
+  }
+});
+
+it("probes a socket that has said nothing since a submit left, without waiting for the idle check", async () => {
+  jest.useFakeTimers();
+  const { client, socket } = liveClient(["submit", "ping"]);
+  try {
+    void client.submit("w1:p1", "hello", "hello");
+    await settle();
+    expect(socket.sent.filter((frame) => frame.type === "submit")).toHaveLength(1);
+    jest.advanceTimersByTime(3_000);
+    expect(socket.sent.filter((frame) => frame.type === "ping")).toHaveLength(1);
+  } finally {
+    client.close();
+    jest.useRealTimers();
+  }
+});
+
+it("leaves a silent submit to the page being shown again when it was hidden meanwhile", async () => {
+  jest.useFakeTimers();
+  const listeners = new Map<string, () => void>();
+  const page = { visibilityState: "visible", addEventListener: (type: string, listener: () => void) => { listeners.set(type, listener); }, removeEventListener: () => {} };
+  const globalDocument = globalThis as unknown as { document?: unknown };
+  const previous = globalDocument.document;
+  globalDocument.document = page;
+  const { client, socket } = liveClient(["submit", "ping"]);
+  try {
+    void client.submit("w1:p1", "hello", "hello");
+    await settle();
+    page.visibilityState = "hidden";
+    listeners.get("visibilitychange")!();
+    jest.advanceTimersByTime(3_000);
+    expect(socket.sent.filter((frame) => frame.type === "ping")).toEqual([]);
+    page.visibilityState = "visible";
+    listeners.get("visibilitychange")!();
+    expect(socket.sent.filter((frame) => frame.type === "ping")).toHaveLength(1);
+  } finally {
+    client.close();
+    globalDocument.document = previous;
+    jest.useRealTimers();
+  }
+});
+
+it("does not probe after a submit when the socket has answered meanwhile", async () => {
+  jest.useFakeTimers();
+  const { client, socket } = liveClient(["submit", "ping"]);
+  try {
+    void client.submit("w1:p1", "hello", "hello");
+    await settle();
+    jest.advanceTimersByTime(1_000);
+    socket.receive({ type: "pane-status", pane_id: "w1:p1", agent_status: "working" });
+    jest.advanceTimersByTime(2_000);
+    expect(socket.sent.filter((frame) => frame.type === "ping")).toEqual([]);
   } finally {
     client.close();
     jest.useRealTimers();
@@ -2245,4 +2725,61 @@ it("an observing connection and a liveness probe never carry an insert", async (
     socket.receive({ type: "insert-result", id: sent.id, pane_id: "w1:p1", ok: true });
     expect(await result).toEqual({ ok: true });
   } finally { client.close(); }
+});
+
+// #511: a message for an agent alone goes only to a bridge that refuses it where no agent runs
+it("refuses an agent-only message on a bridge without agent-only, and names it where the bridge has it", async () => {
+  for (const features of [["submit"], ["submit", "agent-only"]]) {
+    const client = new HerdrSocket("ws://test/ws");
+    client.connect();
+    const socket = FakeSocket.last;
+    socket.open();
+    socket.receive(snapshot(features));
+    try {
+      if (!features.includes("agent-only")) {
+        expect(await client.submit("w1:p1", "> q\nc", "> q\rc", false, "immediate", undefined, false, undefined, undefined, true))
+          .toMatchObject({ ok: false, code: "agent_only_unsupported" });
+        expect(submissions(socket)).toEqual([]);
+      } else {
+        const next = socket.nextSubmission();
+        void client.submit("w1:p1", "> q\nc", "> q\rc", false, "immediate", undefined, false, undefined, undefined, true);
+        expect(await next).toMatchObject({ type: "submit", agent_only: true });
+      }
+    } finally {
+      client.close();
+    }
+  }
+});
+
+it("runs on a transport's socket where the page has no global WebSocket", () => {
+  // Given a transport that opens its own socket and no browser WebSocket global
+  setTransport({ ...nativeTransport, kind: "relay", openSocket: (url) => new FakeSocket(url) as unknown as WebSocketLike });
+  globals.WebSocket = undefined;
+  const client = new HerdrSocket("ws://test/ws");
+  try {
+    // When it connects, opens and is woken
+    client.connect();
+    const socket = FakeSocket.last;
+    expect(client.connected).toBe(false);
+    socket.open();
+    client.wake();
+    // Then its ready state is read from the socket, not the missing global
+    expect(client.connected).toBe(true);
+  } finally {
+    client.close();
+    globals.WebSocket = FakeSocket;
+    setTransport(nativeTransport);
+  }
+});
+
+it("forgets machine event capability on disconnect before a replacement subscriber can observe it", () => {
+  const client = new HerdrSocket("ws://test/ws");
+  client.connect(); const socket = FakeSocket.last; socket.open();
+  socket.receive({ type: "features", features: ["machine-events"], connection: "c" });
+  expect(client.machineEventsAvailable).toBe(true);
+  client.setMachineEvents(true);
+  expect(socket.sent.filter((frame) => frame.type === "machine-events")).toEqual([{ type: "machine-events", enabled: true }]);
+  socket.disconnect();
+  expect(client.machineEventsAvailable).toBeNull();
+  client.close();
 });

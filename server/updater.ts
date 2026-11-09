@@ -2,7 +2,7 @@
 import { spawn } from "node:child_process";
 import { closeSync, constants, existsSync, fstatSync, lstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, readSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
-import { CHECKOUT_CHANGED_REASON, noInstalledNotes, noUpdateNotes, unmanagedUpdateStatus, type InstalledNotes, type UpdateCommand, type UpdateNotes, type UpdateStatus } from "../shared/update.ts";
+import { CHECKOUT_CHANGED_REASON, noInstalledNotes, readUpdateChannel, type UpdateChannel, noUpdateNotes, unmanagedUpdateStatus, type InstalledNotes, type UpdateCommand, type UpdateNotes, type UpdateStatus } from "../shared/update.ts";
 import { compareVersions, releaseNotes, releaseSummaries, SUMMARIES_FILE } from "./release-notes.ts";
 import { releaseIn } from "./update-state.ts";
 
@@ -39,6 +39,7 @@ export function readNotesFile(path: string): string {
   } finally { closeSync(fd); }
 }
 const SHA = /^[0-9a-f]{40,64}$/;
+const NOT_MAIN_REASON = "Switch the source checkout to main or next to update.";
 
 /** Shown when the launcher runs from an installed release instead of the checkout it was built from (#1373). */
 export const RELEASE_FOLDER_REASON = "This server runs from an installed update's folder, not from its source checkout. Restart Ovis from its source checkout (the herdr plugin's Stop, then Start, or bun run start there) to update.";
@@ -55,9 +56,49 @@ export function isReleaseFolder(directory: string): boolean {
   return basename(resolved).startsWith("release-") && /^[0-9a-f]{16}$/.test(basename(parent)) && basename(dirname(parent)) === "updates";
 }
 /** A release is a plain `vX.Y.Z` tag: `remote-v*` bundle tags and pre-releases never qualify. */
-// fork: a `next` release is tagged vX.Y.Z-next.N (upstream X.Y.Z plus the open features); git's
-// version sort puts it after vX.Y.Z and before vX.Y.(Z+1)
-const RELEASE_TAG = /^v(\d+)\.(\d+)\.(\d+)(-next\.\d+)?$/;
+// fork: a `next` release is tagged vX.Y.Z-next.N (upstream X.Y.Z plus the open features): it sorts
+// after vX.Y.Z and before vX.Y.(Z+1) (latestTag)
+const RELEASE_TAG = /^v(\d+)\.(\d+)\.(\d+)(?:-next\.(\d+))?$/;
+/**
+ * A beta build CI tagged on green main (.github/workflows/beta.yml): taken only on the beta channel.
+ * Outside `v*`, which the installers, the app setups and the release jobs read as releases.
+ */
+const BETA_TAG = /^beta\/v(\d+)\.(\d+)\.(\d+)-beta\.(\d+)$/;
+/** A tag's version, without the v: `0.4.23` for `v0.4.23`, `0.4.23-beta.7` for `beta/v0.4.23-beta.7`. */
+const tagVersion = (tag: string) => tag.replace(/^(beta\/)?v/, "");
+
+/**
+ * The newest tag the channel takes, by version: `v0.4.23` outranks every `beta/v0.4.23-beta.N`, and
+ * `beta.10` outranks `beta.9`. On `stable` no beta is ever a candidate.
+ */
+export function latestTag(tags: string[], channel: UpdateChannel): string | undefined {
+  let best: { tag: string; key: number[] } | undefined;
+  for (const tag of tags) {
+    const release = RELEASE_TAG.exec(tag);
+    const match = release ?? (channel === "beta" ? BETA_TAG.exec(tag) : null);
+    if (!match) continue;
+    // a release sorts after every beta of its version; fork: and a -next.N after its release, by N
+    const key = [Number(match[1]), Number(match[2]), Number(match[3]), release ? Infinity : Number(match[4]), release ? Number(match[4] ?? 0) : 0];
+    const i = best ? key.findIndex((part, j) => part !== best!.key[j]) : 0;
+    if (!best || (i !== -1 && key[i]! > best.key[i]!)) best = { tag, key };
+  }
+  return best?.tag;
+}
+
+/** The name of the setting file in the app's state dir that opts a PC into the beta channel. */
+export const UPDATE_CHANNEL_FILE = "update-channel";
+
+/**
+ * The channel this PC updates on: `OVIS_UPDATE_CHANNEL` when it names one, else the
+ * `update-channel` file in the app's state dir (`beta`), else `stable`. Read at every check, so
+ * writing the file takes effect without a restart.
+ */
+export function updateChannel(env: Record<string, string | undefined>, appStateDir: string): UpdateChannel {
+  const set = readUpdateChannel(env["OVIS_UPDATE_CHANNEL"]);
+  if (set) return set;
+  try { return readUpdateChannel(readFileSync(join(appStateDir, UPDATE_CHANNEL_FILE), "utf8")) ?? "stable"; }
+  catch { return "stable"; }
+}
 
 function packageVersion(directory: string): string | null {
   try {
@@ -174,6 +215,14 @@ export class Updater {
   /** What the last update brought; set with the release that runs. */
   installed: InstalledNotes = noInstalledNotes();
   private busy = false;
+  /** the install running now, which cancel() stops while it builds */
+  private installing: AbortController | null = null;
+  /** the revision a cancel stopped: the timer's automatic install leaves it until it is asked for again, or a newer one comes */
+  private cancelledRevision: string | null = null;
+  /** a cancel asked for while the run still checked: honoured before anything is built */
+  private cancelPending = false;
+  /** the id the install running now was asked for with, or null (the timer's, or no id given) */
+  private runId: string | null = null;
   private timer?: ReturnType<typeof setInterval>;
   private initialTimer?: ReturnType<typeof setTimeout>;
   private sourceRevision = "";
@@ -193,7 +242,15 @@ export class Updater {
     notice?: string;
     activate: (release: Release, commit: () => void) => Promise<void>;
     publish: (status: UpdateStatus) => void;
-  }) { this.status.auto_update = options.autoUpdate; this.status.error = options.notice ?? null; }
+    /** The channel to update on, asked at every check (updateChannel); `stable` when not given. */
+    channel?: () => UpdateChannel;
+  }) {
+    this.status.auto_update = options.autoUpdate; this.status.error = options.notice ?? null;
+    this.status.install_cancellable = true;
+    this.status.channel = this.channel();
+  }
+
+  private channel(): UpdateChannel { return this.options.channel?.() ?? "stable"; }
 
   /** One git command in the source checkout; a test stands in here for a fetch that fails
    * without git ending it itself (#1252). */
@@ -214,7 +271,11 @@ export class Updater {
       if (!SHA.test(this.sourceRevision)) throw new Error("Invalid source revision");
       this.release = { directory: this.options.root, revision: this.sourceRevision, source_revision: this.sourceRevision };
       const reason = await this.sourceBlock();
-      if (!reason) {
+      // A detached, clean checkout started without herdr's HERDR_PLUGIN_ROOT (a herdr plugin's
+      // checkout started from a shell) may not update, but the release this updater already built
+      // from this same commit still runs: the source_revision check below holds HEAD unmoved.
+      // Local changes or another branch keep the source checkout, as before.
+      if (!reason || (reason === NOT_MAIN_REASON && await this.detachedAndClean())) {
         try {
           const saved = JSON.parse(readFileSync(join(this.options.stateDir, "current.json"), "utf8")) as Release;
           // Only directories created by this updater may be resumed, under this state dir's name for them.
@@ -279,10 +340,22 @@ export class Updater {
     if (isReleaseFolder(this.options.root)) return RELEASE_FOLDER_REASON;
     const branch = await this.git("branch", "--show-current");
     // fork: an install on `next` takes the fork's vX.Y.Z-next.N releases (RELEASE_TAG) as main takes upstream's
-    if (branch !== "main" && branch !== "next" && !(branch === "" && this.options.pluginCheckout)) return "Switch the source checkout to main or next to update.";
+    if (branch !== "main" && branch !== "next" && !(branch === "" && this.options.pluginCheckout)) return NOT_MAIN_REASON;
     if (await this.git("status", "--porcelain", "--untracked-files=all")) return "The source checkout has local changes. Commit or move them before updating.";
     if (await this.git("rev-parse", "HEAD") !== this.sourceRevision) return CHECKOUT_CHANGED_REASON;
     return null;
+  }
+
+  /** Still detached, clean and at the revision read at the start; a failed or timed-out check is
+   * not eligible: the source checkout runs, still managed and blocked. */
+  private async detachedAndClean(): Promise<boolean> {
+    try {
+      return await this.git("branch", "--show-current") === ""
+        && !await this.git("status", "--porcelain", "--untracked-files=all")
+        && await this.git("rev-parse", "HEAD") === this.sourceRevision;
+    } catch {
+      return false;
+    }
   }
 
   start() {
@@ -295,15 +368,21 @@ export class Updater {
   }
 
   private async discover(byUser = false) {
-    this.patch({ phase: "checking", error: this.options.notice ?? null, error_code: null, available: false, blocked_reason: null });
+    const channel = this.channel();
+    // an offer already made stays up while this check runs, and changes only with its answer: the
+    // page polls this status, and an offer withdrawn for the check's length blinks its line (#3325).
+    // An offer made on another channel is not this one's: it goes at once
+    const kept = channel === this.status.channel ? {} : { available: false };
+    this.patch({ phase: "checking", error: this.options.notice ?? null, error_code: null, blocked_reason: null, channel, ...kept });
     const reason = await this.sourceBlock();
-    if (reason) { this.patch({ blocked_reason: reason, checked_at: new Date().toISOString() }); return; }
-    // Only published releases update installs: commits pushed to main without a tag stay put.
-    await this.fetchInto(() => this.git("fetch", "--no-tags", "origin", "+refs/tags/v*:refs/tags/v*"));
-    const tags = (await this.git("for-each-ref", "--sort=-v:refname", "--format=%(refname:short)", "refs/tags/v*"))
-      .split("\n").filter((tag) => RELEASE_TAG.test(tag));
+    if (reason) { this.patch({ blocked_reason: reason, checked_at: new Date().toISOString(), available: false }); return; }
+    // Only published releases update installs: commits pushed to main without a tag stay put. The
+    // beta channel also takes the beta tags CI makes on green main.
+    const betas = channel === "beta" ? ["+refs/tags/beta/*:refs/tags/beta/*"] : [];
+    await this.fetchInto(() => this.git("fetch", "--no-tags", "origin", "+refs/tags/v*:refs/tags/v*", ...betas));
+    const tags = (await this.git("for-each-ref", "--format=%(refname:short)", "refs/tags/v*", "refs/tags/beta/")).split("\n");
     const checked_at = new Date().toISOString();
-    const latest = tags[0];
+    const latest = latestTag(tags, channel);
     if (!latest) {
       this.notes = noUpdateNotes();
       this.patch({ latest_revision: null, latest_version: null, checked_at, blocked_reason: null, available: false });
@@ -323,8 +402,9 @@ export class Updater {
       }
     }
     // the notes of the last check stay readable while this one runs; they change with its answer
-    this.notes = available ? await this.changes(target, latest.slice(1)) : noUpdateNotes();
-    this.patch({ latest_revision: target, latest_version: latest.slice(1), checked_at, blocked_reason: block, available });
+    // a beta is told by the releases up to its base version: its own changes have no section yet
+    this.notes = available ? await this.changes(target, tagVersion(latest).replace(/-beta\.\d+$/, "")) : noUpdateNotes();
+    this.patch({ latest_revision: target, latest_version: tagVersion(latest), checked_at, blocked_reason: block, available });
   }
 
   /**
@@ -392,17 +472,33 @@ export class Updater {
     return run(this.options.root, ["git", "fetch", "--no-tags", "--unshallow", "origin"], this.controller.signal, timeout);
   }
 
+  /**
+   * Stops the install running now, only when `installId` names it (the id its install request carried): true when it did.
+   * Another's install (another device's, or this PC's own Settings') is never stopped. Once it restarts, false.
+   */
+  cancel(installId: string): boolean {
+    if (!this.runId || installId !== this.runId) return false;
+    if (this.installing && this.status.phase === "building") { this.installing.abort(new Error("Update cancelled")); return true; }
+    // asked while it still checks what is on offer: it stops before it builds anything
+    if (this.busy && this.status.phase === "checking") { this.cancelPending = true; return true; }
+    return false;
+  }
+
   /** `byUser`: the request came from the settings' Check or Update (through the supervisor), not
    * from the 5-minute timer; only the timer waits a failed unshallow fetch's backoff out.
    * `expectedRevision`: the release a manual install was offered; the install goes ahead only
    * while the check it starts with still offers exactly that one. */
-  async request(command: UpdateCommand, byUser = false, expectedRevision?: string): Promise<void> {
+  async request(command: UpdateCommand, byUser = false, expectedRevision?: string, installId?: string): Promise<void> {
     if (this.busy || !this.status.managed || this.controller.signal.aborted) return;
     this.busy = true;
+    // the id of the install this run is (its request's): what a cancel must name
+    this.runId = command === "install" ? installId ?? null : null;
     let stage: string | null = null;
     let attempted: string | null = null;
+    let checked = false;
     try {
       await this.discover(byUser);
+      checked = true;
       // a release published since the person said yes is not the one they said yes to: nothing is
       // installed, the new offer stays to be read, and nothing tries again by itself
       // (a blocked checkout says why itself, and installs nothing either)
@@ -413,15 +509,25 @@ export class Updater {
       }
       if ((command === "install" || this.options.autoUpdate) && this.status.available) {
         const revision = this.status.latest_revision!;
+        // a revision cancelled here is installed again only when asked for, never by the timer
+        if (command === "check" && revision === this.cancelledRevision) { this.patch({ phase: "idle", step: null }); return; }
+        if (command === "install") this.cancelledRevision = null;
         if (command === "check" && revision === this.failedRevision) {
           this.patch({ phase: "error", error: "Automatic installation of this revision previously failed. Use Update and restart to retry, or wait for a newer revision." });
           return;
         }
         attempted = revision;
+        if (this.cancelPending) {
+          this.cancelledRevision = revision;
+          this.patch({ phase: "error", step: null, error_code: "update_cancelled", error: "The update was cancelled before it was installed." });
+          return;
+        }
+        this.installing = new AbortController();
+        const signal = AbortSignal.any([this.controller.signal, this.installing.signal]);
         this.patch({ phase: "building", step: "download" });
         stage = mkdtempSync(join(this.options.stateDir, "release-"));
         // Network filesystems and low-memory builds can take minutes even without a network fetch.
-        const run = (args: string[], timeout = 10 * 60_000) => runCommand(stage!, args, this.controller.signal, timeout);
+        const run = (args: string[], timeout = 10 * 60_000) => runCommand(stage!, args, signal, timeout);
         await run(["git", "clone", "--quiet", "--no-checkout", "--no-hardlinks", this.options.root, "."]);
         await run(["git", "fetch", "--quiet", this.options.root, revision]);
         await run(["git", "checkout", "--quiet", "--detach", revision]);
@@ -441,8 +547,14 @@ export class Updater {
           catch (error) { console.error("Rust PTY host install failed; the release uses the Node PTY sidecar", error); }
         }
         const reason = await this.sourceBlock();
-        if (reason) throw new Error(reason);
-        this.controller.signal.throwIfAborted();
+        // the checkout changed while the release built: the offer ends with the block, as a check's would
+        if (reason) {
+          this.patch({ blocked_reason: reason, available: false });
+          throw new Error(reason);
+        }
+        signal.throwIfAborted();
+        // from here it restarts onto the new release: too late to cancel
+        this.installing = null;
         const previous = this.release;
         // what it replaces, on record for the supervisor the release starts: that one was not here for the install
         const next: Release = { directory: stage, revision, source_revision: this.sourceRevision,
@@ -476,15 +588,25 @@ export class Updater {
       }
       this.patch({ phase: "idle", step: null });
     } catch (error) {
+      // cancelled while it built: nothing was installed, its offer stays, and it is no failed release
+      if (this.installing?.signal.aborted && !this.controller.signal.aborted) {
+        this.cancelledRevision = attempted;
+        this.patch({ phase: "error", step: null, error_code: "update_cancelled", error: "The update was cancelled before it was installed." });
+        return;
+      }
       if (attempted && !this.controller.signal.aborted) {
         this.failedRevision = attempted;
         try {
           writeFileSync(join(this.options.stateDir, "failed.json"), JSON.stringify({ revision: attempted }), { mode: 0o600 });
         } catch { /* the in-memory guard still prevents repeated automatic restarts */ }
       }
-      this.patch({ phase: "error", step: null, error: error instanceof Error ? error.message : String(error) });
+      // a check that failed ends the offer it kept while it ran; a failed install keeps it to retry
+      this.patch({ phase: "error", step: null, error: error instanceof Error ? error.message : String(error), ...(checked ? {} : { available: false }) });
     } finally {
       if (stage) rmSync(stage, { recursive: true, force: true });
+      this.installing = null;
+      this.cancelPending = false;
+      this.runId = null;
       this.busy = false;
     }
   }

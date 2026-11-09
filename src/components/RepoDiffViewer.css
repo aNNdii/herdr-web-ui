@@ -5,12 +5,17 @@
 
 /* the rows are a window the user scrolls, so the dialog takes its full height for the scroll root to fill */
 .repo-diff-viewer {
-  width: min(96vw, 1400px);
+  width: min(96vw, var(--dialog-w-xl));
   max-width: 100%;
   min-width: 0;
   height: min(92vh, 100%);
   display: flex;
   flex-direction: column;
+}
+
+.repo-diff-viewer :is(.input, .select, .repo-diff-select-source):focus-visible {
+  outline: var(--ring);
+  outline-offset: var(--ring-offset);
 }
 
 .repo-diff-header {
@@ -44,7 +49,7 @@
   gap: var(--space-2);
   color: var(--text-dim);
   font-family: var(--font-mono);
-  font-size: var(--fs-2xs);
+  font-size: var(--fs-xs);
   white-space: nowrap;
 }
 
@@ -97,7 +102,10 @@
 
 .repo-diff-added { color: var(--syntax-inserted); }
 .repo-diff-deleted { color: var(--syntax-deleted); }
-.repo-diff-binary, .repo-diff-compare { flex: none; }
+.repo-diff-binary, .repo-diff-compare {
+  flex: none;
+  font-family: var(--font-ui);
+}
 
 /* the status and counts come with the patch: their places are kept, so the line does not jump when they land */
 .repo-diff-skeleton-status {
@@ -116,6 +124,7 @@
   gap: var(--space-1);
   cursor: help;
   color: var(--notice);
+  font-family: var(--font-ui);
   font-weight: var(--fw-medium);
 }
 
@@ -294,7 +303,15 @@
   }
   .repo-diff-header .repo-diff-actions {
     grid-area: actions;
+    min-width: 0;
+    max-width: 100%;
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+    scrollbar-width: none;
     justify-content: space-between;
+  }
+  .repo-diff-header .repo-diff-actions::-webkit-scrollbar {
+    display: none;
   }
   /* the row holds the layout switch and four 44px actions only with the switch's words gone from
      view (a screen reader still has them); Split is declined on a phone anyway */
@@ -305,6 +322,20 @@
     overflow: hidden;
     clip: rect(0 0 0 0);
     white-space: nowrap;
+  }
+}
+
+@media (max-width: 380px) {
+  .repo-diff-header {
+    padding-inline: var(--space-1);
+  }
+  .repo-diff-header .repo-diff-actions,
+  .repo-diff-group {
+    gap: 0;
+  }
+  .repo-diff-styles {
+    gap: 0;
+    padding: 0;
   }
 }
 
@@ -326,12 +357,125 @@
   }
 
   .repo-diff-action {
-    width: max(44px, var(--touch-target));
-    height: max(44px, var(--touch-target));
+    width: var(--touch-target);
+    height: var(--touch-target);
   }
 
   /* the find query is a touch target as tall as the buttons beside it */
   .repo-diff-find .input {
-    min-height: max(44px, var(--touch-target));
+    min-height: var(--touch-target);
+  }
+}
+
+/* a note on a line (#1603): the diff body picks a line with the arrow keys, so it shows when it has the focus */
+.repo-diff-body:focus-visible {
+  outline: var(--ring);
+  outline-offset: calc(var(--ring-offset) * -1);
+}
+
+/* the + beside a hovered row's number (the package's gutter slot): a pointer's shortcut to a note.
+   Above the number column (z-index 1 in the package's shadow CSS), as the package's own button is */
+.repo-diff-line-note-plus {
+  position: relative;
+  z-index: 4;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: calc(var(--fs-xs) * var(--lh-code));
+  height: calc(var(--fs-xs) * var(--lh-code));
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: var(--accent);
+  color: var(--bg);
+  cursor: pointer;
+}
+.repo-diff-line-note-plus[aria-disabled="true"] {
+  background: var(--bg-hover);
+  color: var(--text-dim);
+  cursor: not-allowed;
+}
+.repo-diff-line-note-plus svg { width: 80%; height: 80%; }
+
+/* the picked line and Add a note, under the rows */
+.repo-diff-line-bar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-width: 0;
+  padding: var(--space-2) var(--space-3);
+  border-top: var(--hairline) solid var(--border);
+  background: var(--bg-elevated);
+}
+.repo-diff-line-place {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin: 0;
+  color: var(--text-dim);
+  font-size: var(--fs-sm);
+}
+.repo-diff-line-note-open {
+  flex: none;
+  gap: var(--space-1);
+}
+
+/* the small editor: docked along the bottom edge, where a phone's keyboard meets it */
+.repo-diff-line-note-form {
+  flex: none;
+  display: grid;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border-top: var(--hairline) solid var(--border);
+  background: var(--bg-elevated);
+}
+.repo-diff-line-note-place {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin: 0;
+  color: var(--text-dim);
+  font-size: var(--fs-sm);
+}
+.repo-diff-line-note-path {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+}
+.repo-diff-line-note-line {
+  margin: 0;
+  max-height: calc(var(--fs-xs) * var(--lh-code) * 3);
+  overflow: auto;
+  padding: var(--space-1) var(--space-2);
+  border: var(--hairline) solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.repo-diff-line-note-field {
+  min-height: calc(var(--control-h) * 2);
+  resize: vertical;
+  font-size: var(--fs-input);
+}
+.repo-diff-line-note-error {
+  margin: 0;
+  color: var(--syntax-deleted);
+  font-size: var(--fs-sm);
+}
+.repo-diff-line-note-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-2);
+}
+
+/* on a touch screen the line's action and the editor's buttons are full touch targets */
+@media (pointer: coarse) {
+  .repo-diff-line-note-open,
+  .repo-diff-line-note-actions .btn {
+    min-height: var(--touch-target);
   }
 }

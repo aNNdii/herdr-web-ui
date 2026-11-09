@@ -27,7 +27,8 @@ export function useModeHint(): { hint: ModeHint | null; show: (hint: ModeHint) =
     setHint(next);
     timer.current = window.setTimeout(() => setHint(null), HINT_MS);
   }, []);
-  useEffect(() => () => window.clearTimeout(timer.current), []);
+  // only a hint shown has a timer to clear
+  useEffect(() => () => { if (timer.current !== 0) window.clearTimeout(timer.current); }, []);
   return { hint, show };
 }
 

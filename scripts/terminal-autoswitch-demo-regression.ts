@@ -6,6 +6,7 @@ import { chromium, type Page } from "playwright-core";
 import { buildDemoApp } from "./demo-build.ts";
 import { chromePath } from "./chrome-path.ts";
 import { appFaces } from "./app-faces.ts";
+import { shownRows } from "./shown-rows.ts";
 import panes from "../site/demo/fixtures/panes.json";
 
 // Real client and demo transport. Only receipts and demo-turn completion are held, then released
@@ -139,7 +140,7 @@ const typed = async (page: Page) => (await frames(page)).filter((frame) => frame
 const lens = (page: Page) => page.evaluate((pane) => ({
   stored: localStorage.getItem(`ovis:view:${pane}`),
   address: new URL(location.href).searchParams.get("view"),
-  chatPressed: document.querySelector('.view-switch button[title^="Chat transcript"]')?.getAttribute("aria-pressed") ?? null,
+  chatPressed: document.querySelector('.view-switch .is-chat')?.getAttribute("aria-pressed") ?? null,
 }), owner);
 /** the chat's log as it is now, to tell it from a new one after a peek */
 const noteLog = (page: Page) => page.evaluate((pane) => {
@@ -326,7 +327,7 @@ try {
       await page.waitForFunction((reads) => (window as unknown as PeekWindow).promptReads >= reads + 2, reads);
       assert.equal(await peek(page).count(), 1, "a command Claude does not record closing stays until the reader leaves it");
       await capture(page, `${tag}-peek-manual`);
-      await page.getByTitle("Chat transcript (⌘⇧J)", { exact: true }).click();
+      await page.locator(".view-switch").getByRole("button", { name: "Chat", exact: true }).click();
       await expectReturned();
       console.log(`PASS ${tag}: an unrecorded command keeps the peek after Escape; the header's Chat ends it`);
 
@@ -368,7 +369,7 @@ try {
 
       const keepWays: [string, () => Promise<void>][] = [
         ["Keep Terminal", () => hint(page).getByRole("button", { name: "Keep Terminal", exact: true }).click()],
-        ["the header's Terminal", () => page.getByTitle("Live terminal (⌘⇧J)", { exact: true }).click()],
+        ["the header's Terminal", () => page.locator(".view-switch").getByRole("button", { name: "Terminal", exact: true }).click()],
       ];
       for (const [way, keep] of keepWays) {
         await send(page, "/doctor");
@@ -380,7 +381,7 @@ try {
         const kept = await lens(page);
         assert.deepEqual({ stored: kept.stored, address: kept.address }, { stored: "terminal", address: "terminal" }, `${way} saves the terminal lens`);
         if (!touch) await page.waitForFunction(() => document.activeElement?.classList.contains("xterm-helper-textarea") === true);
-        await page.getByTitle("Chat transcript (⌘⇧J)", { exact: true }).click();
+        await page.locator(".view-switch").getByRole("button", { name: "Chat", exact: true }).click();
         await chat(page).locator(".composer").waitFor();
         assert.deepEqual(await lens(page), chatLens);
         await noteLog(page);
@@ -390,11 +391,11 @@ try {
       if (!touch) {
         // a find bar left open under the Terminal lens is not the peek's: it would take the focus,
         // the first Escape (the agent's) and a grid row
-        await page.getByTitle("Live terminal (⌘⇧J)", { exact: true }).click();
+        await page.locator(".view-switch").getByRole("button", { name: "Terminal", exact: true }).click();
         await chat(page).waitFor({ state: "detached" });
         await page.keyboard.press("Control+Shift+F");
         await stack(page).locator(".find-bar input").waitFor();
-        await page.getByTitle("Chat transcript (⌘⇧J)", { exact: true }).click();
+        await page.locator(".view-switch").getByRole("button", { name: "Chat", exact: true }).click();
         await chat(page).locator(".composer").waitFor();
         await noteLog(page);
         // the composer is a dictation target in the chat (the mic shows), and none under a peek
@@ -597,7 +598,7 @@ try {
         await of(pane).peek.waitFor({ state: "detached" });
         await of(pane).chat.locator(".composer").waitFor();
       };
-      const screen = (pane: string, text: string) => of(pane).stack.locator(".xterm-rows", { hasText: text });
+      const screen = (pane: string, text: string) => of(pane).stack.locator(shownRows(), { hasText: text });
 
       // omp's /settings: the panel hides the editor's row, Escape draws it back, and the chat comes back by itself
       await open(panes.omp, "/sett");
@@ -684,7 +685,7 @@ try {
       await screen(owner, "Escape to dismiss").waitFor();
       await hint(page).getByRole("button", { name: "Keep Terminal", exact: true }).click();
       await of(owner).peek.waitFor({ state: "detached" });
-      await page.getByTitle("Chat transcript (⌘⇧J)", { exact: true }).click();
+      await page.locator(".view-switch").getByRole("button", { name: "Chat", exact: true }).click();
       await of(owner).chat.locator(".composer").waitFor();
       const kept = "Is that screen still up?";
       await sendIn(owner, kept);
@@ -707,9 +708,10 @@ try {
     } finally { await context.close(); }
   }
 
-  // The catalog race (#1591). "later": the message box's read of the pane's commands answers and the
-  // terminal's own is still on its way when the receipt lands; the receipt reads the box's answer.
-  // "all": no read has answered when the message leaves, one answers before its receipt (40f64932).
+  // The catalog race (#1591). The chat, its message box and the terminal share one read of the pane's
+  // commands. "later": it answers before the message leaves, any other read would wait; the receipt
+  // reads the shared answer. "all": it has not answered when the message leaves, and answers before its
+  // receipt (40f64932).
   for (const hold of ["later", "all"] as const) {
     const context = await browser.newContext({ viewport: { width: 1280, height: 844 }, locale: "en-US" });
     try {
@@ -726,8 +728,6 @@ try {
       await chat(page).locator(".composer").waitFor();
       await page.waitForFunction(() => (window as unknown as PeekWindow).promptReads > 0);
       type HoldWindow = PeekWindow & { heldCommandReads: unknown[]; commandsParsed: number; releaseReceipt: (() => void) | null };
-      // every component asked for the list; all but the first ("later") or all of them ("all") still wait
-      await page.waitForFunction((count) => (window as unknown as HoldWindow).heldCommandReads.length >= count, hold === "later" ? 1 : 2);
       if (hold === "later") {
         await page.waitForFunction(() => (window as unknown as HoldWindow).commandsParsed === 1);
         // the box has the list: its terminal row is in the menu
@@ -735,6 +735,7 @@ try {
         await page.locator('.menu-item[data-terminal]').first().waitFor();
         await send(page, "/doctor");
       } else {
+        await page.waitForFunction(() => (window as unknown as HoldWindow).heldCommandReads.length === 1);
         await page.evaluate(() => { Object.assign(window, { receiptMode: "hold" }); });
         await send(page, "/doctor");
         await page.waitForFunction(() => (window as unknown as HoldWindow).releaseReceipt !== null);
@@ -746,9 +747,10 @@ try {
       await peek(page).waitFor();
       await hint(page).getByText("/doctor ran", { exact: true }).waitFor();
       await capture(page, `catalog-race-${hold}`);
+      assert.equal(await page.evaluate(() => (window as unknown as { commandReads: number }).commandReads), 1, "the pane's components share one read of its commands");
       await page.evaluate(() => { (window as unknown as { releaseCommandReads: () => void }).releaseCommandReads(); });
       assert.deepEqual(errors, []);
-      console.log(`PASS catalog race (${hold}): a receipt reads the command list another read already has, and opens the peek`);
+      console.log(`PASS catalog race (${hold}): one read of the pane's commands, and its receipt reads that list and opens the peek`);
     } finally { await context.close(); }
   }
 

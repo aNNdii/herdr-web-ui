@@ -173,7 +173,7 @@ function catchUp(path: string, budget: number, environ?: readonly string[] | nul
   remember(indexes, path, index, MAX_SESSIONS);
   if (index.offset >= stat.size) { index.behind = false; return index; }
   const state = index;
-  const read = readLines(path, state.offset, stat.size, budget, (line) => scanLine(state, line), state.skipping);
+  const read = readLines(path, state.offset, stat, budget, (line) => scanLine(state, line), state.skipping);
   state.offset = read.offset;
   state.skipping = read.skipping;
   state.behind = read.more;
@@ -457,7 +457,7 @@ function tally<T>(cache: Map<string, Tally<T>>, file: string, budget: { left: nu
   if (known.offset >= stat.size) { known.behind = false; return known; }
   if (budget.left <= 0) { known.behind = true; return known; }
   const state = known;
-  const read = readLines(file, state.offset, stat.size, Math.min(budget.left, READ_BUDGET), (line) => each(state.facts, line), state.skipping);
+  const read = readLines(file, state.offset, stat, Math.min(budget.left, READ_BUDGET), (line) => each(state.facts, line), state.skipping);
   budget.left -= read.offset - state.offset;
   state.offset = read.offset;
   state.skipping = read.skipping;

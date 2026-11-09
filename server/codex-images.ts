@@ -1,9 +1,9 @@
 import { createHash } from "node:crypto";
-import { constants, createReadStream, lstatSync } from "node:fs";
-import { open } from "node:fs/promises";
+import { closeSync, createReadStream, fstatSync, lstatSync, read, statSync } from "node:fs";
 import { extname, join, resolve } from "node:path";
 import { createInterface } from "node:readline";
 import type { ConversationPart } from "../shared/protocol.ts";
+import { type FileIdentity, openBound, readBound } from "./conversation-shared.ts";
 import { type Held, heldOpenPlatform, openHeldDirectory } from "./held-open.ts";
 
 type ImagePart = Extract<ConversationPart, { kind: "image" }>;
@@ -155,25 +155,38 @@ export function ompBlobAnchor(blobs: string | null): { path: string; identity: s
 
 /**
  * Steps a windowed reader takes: it yields between two windows of a file, where an async reader gives
- * the event loop its turn (finishAsync) and a synchronous one goes straight on (finish).
+ * the event loop its turn (finishAsync) and a synchronous one goes straight on (finish). A reader
+ * with an asynchronous file yields the read it waits for instead (awaited), which only finishAsync runs.
  */
-export type Steps<T> = Generator<void, T, void>;
+export type Steps<T> = Generator<void | Promise<void>, T, void>;
 
 /** Runs a reader's steps straight through. */
 export function finish<T>(steps: Steps<T>): T {
   for (;;) {
     const step = steps.next();
     if (step.done) return step.value;
+    if (step.value !== undefined) throw new Error("synchronous steps cannot wait for an asynchronous read");
   }
 }
 
 /** Runs a reader's steps with the event loop running between them, so a large file never holds the bridge for more than a window's work. */
 export async function finishAsync<T>(steps: Steps<T>): Promise<T> {
+  let failed: { error: unknown } | undefined;
   for (;;) {
-    const step = steps.next();
+    const step = failed === undefined ? steps.next() : steps.throw(failed.error);
+    failed = undefined;
     if (step.done) return step.value;
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    if (step.value === undefined) await new Promise<void>((resolve) => setImmediate(resolve));
+    // a read that fails fails where the steps wait for it, so their own cleanup runs
+    else try { await step.value; } catch (error) { failed = { error }; }
   }
+}
+
+/** The value of `pending`, waited for as a step (finishAsync). */
+export function* awaited<T>(pending: Promise<T>): Steps<T> {
+  let value!: T;
+  yield pending.then((result) => { value = result; });
+  return value;
 }
 
 /** How much of a blob is read at a time, and all a blob not served costs to check. */
@@ -380,22 +393,44 @@ async function imageBytes(value: string, cwd: string): Promise<Buffer | null> {
     const bytes = Buffer.from(inline[2]!, "base64");
     return bytes.length <= MAX_IMAGE_BYTES ? bytes : null;
   }
-  const file = await open(resolve(cwd, value), constants.O_RDONLY | constants.O_NONBLOCK);
+  // the file the path names as its record is found, opened at once and held to it: another put there around
+  // the open (a folder swapped in) is refused, not read (openBound, non-blocking: a FIFO there is not waited on)
+  const target = resolve(cwd, value);
+  const identity = statSync(target, { throwIfNoEntry: false });
+  if (identity === undefined || !identity.isFile()) return null;
+  const fd = readBound([[target, identity]], () => openBound(target));
   try {
-    const stat = await file.stat();
+    const stat = fstatSync(fd);
     if (!stat.isFile() || stat.size > MAX_IMAGE_BYTES) return null;
     const bytes = Buffer.alloc(stat.size);
-    const { bytesRead } = await file.read(bytes, 0, bytes.length, 0);
-    return bytes.subarray(0, bytesRead);
-  } finally { await file.close(); }
+    // read off the event loop, as the open file it is, until whole: a short read is read on, and an end before
+    // the size it had serves nothing rather than a cut picture
+    for (let got = 0; got < bytes.length;) {
+      const more = await new Promise<number>((done, fail) => read(fd, bytes, got, bytes.length - got, got, (error, count) => error ? fail(error) : done(count)));
+      if (more === 0) return null;
+      got += more;
+    }
+    return bytes;
+  } finally { closeSync(fd); }
 }
 
 /** Scan the bound history only, including inherited rollouts but excluding backtracked bytes. */
-export async function codexTranscriptImage(segments: { path: string; end: number }[], ref: string, cwd: string): Promise<{ mediaType: string; bytes: Uint8Array<ArrayBuffer> } | null> {
+export async function codexTranscriptImage(segments: { path: string; end: number; identity?: FileIdentity }[], ref: string, cwd: string): Promise<{ mediaType: string; bytes: Uint8Array<ArrayBuffer> } | null> {
   if (!CODEX_IMAGE_REF.test(ref)) return null;
-  for (const segment of segments) {
+  // each rollout is read as the file it was when its chain was resolved (an earlier one's `identity`), the live
+  // one as its path names it as the lookup begins: an open after an await that finds another file there (a
+  // folder swapped in around it) answers nothing
+  let identities: (FileIdentity | undefined)[];
+  try { identities = segments.map((segment) => segment.identity ?? statSync(segment.path, { throwIfNoEntry: false })); } catch { return null; }
+  for (const [at, segment] of segments.entries()) {
     if (segment.end === 0) continue;
-    const stream = createReadStream(segment.path, { end: segment.end - 1, encoding: "utf8" });
+    const identity = identities[at];
+    if (identity === undefined) return null;
+    let fd: number;
+    try { fd = readBound([[segment.path, identity]], () => openBound(segment.path)); } catch { return null; }
+    let stream: ReturnType<typeof createReadStream>;
+    // the descriptor is the stream's once it is made; until then it is this lookup's to close
+    try { stream = createReadStream(segment.path, { fd, end: segment.end - 1, encoding: "utf8" }); } catch { closeSync(fd); return null; }
     const lines = createInterface({ input: stream, crlfDelay: Infinity });
     try {
       for await (const line of lines) {

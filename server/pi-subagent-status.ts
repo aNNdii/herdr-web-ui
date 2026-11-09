@@ -1,4 +1,4 @@
-import type { HerdrPane, OmoActivity } from "../shared/protocol.ts";
+import type { HerdrPane } from "../shared/protocol.ts";
 import { plain, within } from "./claude-subagents.ts";
 import { piPaneSession } from "./pi.ts";
 import { piSubagentActivity, piSubagentCounts, type PiSession, type PiSubagentActivity } from "./pi-subagents.ts";
@@ -6,21 +6,6 @@ import { processStartedAt } from "./process-start.ts";
 import { piRunsSubagents } from "./skills/pi-agents.ts";
 import { readPiConfig } from "./skills/pi-config.ts";
 import { environValue } from "./skills/walk.ts";
-
-/**
- * The omo-tasks route's list for a pane that runs no OmO: a live Claude session's, else the Pi
- * pane's, else what a Claude session left behind. A pane that left Claude for Pi shows its Pi work;
- * Pi is not asked while Claude runs live.
- */
-export async function subagentList(
-  claude: { live: boolean } | null,
-  pi: () => Promise<PiSubagentActivity | null>,
-  claudeTasks: () => OmoActivity["tasks"],
-): Promise<Pick<OmoActivity, "tasks" | "runs">> {
-  const found = claude?.live ? null : await pi();
-  if (found !== null) return { tasks: found.tasks, runs: found.runs };
-  return { tasks: claude === null ? [] : claudeTasks(), runs: [] };
-}
 
 /**
  * A Pi subagents pane's session as piSubagentPane locates it from piPaneSession's answer

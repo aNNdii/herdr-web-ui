@@ -1481,8 +1481,8 @@ const cases: Record<string, Case> = {
 
   /**
    * Comment mode: remembered across a reload; turned off, it leaves the open field (a field with text typed is saved, an
-   * unchanged one closes), and the cards turn read-only; Settings → Comments → Click a line to comment; Settings → Comments →
-   * Comments off takes the toggle away and disables the File viewer's group, with its note.
+   * unchanged one closes), and the cards turn read-only; Settings → Chat → Click a line to comment; Settings → Chat →
+   * Comments off takes the toggle away and disables the Code view group.
    */
   async "code-mode"(open) {
     const syncPath = realpathSync(join(root, "src", "sync.ts"));
@@ -1557,7 +1557,7 @@ const cases: Record<string, Case> = {
 
     // Settings → Comments → Code view → Click a line to comment
     await page.keyboard.press("ControlOrMeta+Shift+Comma");
-    await openSettingsPage(page, "Comments");
+    await openSettingsPage(page, "Chat");
     const settingsDialog = page.locator(".settings-dialog");
     await settingsDialog.getByRole("switch", { name: "Click a line to comment", exact: true }).click();
     await page.keyboard.press("Escape");
@@ -1627,10 +1627,10 @@ const cases: Record<string, Case> = {
     await long.waitFor({ state: "detached" });
     console.log("PASS code-mode: a line cut off at the load limit takes no comment");
 
-    // Settings → Comments off: no toggle; the Comments page's Code view group disabled
+    // Settings → Comments off: no toggle; the Chat page's Code view group disabled
     viewer = await openSync(page);
     await page.keyboard.press("ControlOrMeta+Shift+Comma");
-    await openSettingsPage(page, "Comments");
+    await openSettingsPage(page, "Chat");
     await settingsDialog.getByRole("switch", { name: "Comments", exact: true }).click();
     const confirm = page.getByRole("alertdialog");
     await confirm.waitFor();
@@ -1645,7 +1645,7 @@ const cases: Record<string, Case> = {
     await settingsDialog.waitFor({ state: "detached" });
     assert.equal(await viewer.locator("button.file-viewer-comments").count(), 0, "no toggle with comments off");
     assert.equal(await viewer.locator(".code-comment-card").count(), 0, "no card");
-    console.log("PASS code-mode: with Settings → Comments off the header has no toggle and the Comments page's Code view group is disabled");
+    console.log("PASS code-mode: with Settings → Comments off the header has no toggle and the Chat page's Code view group is disabled");
     assert.deepEqual(errors, []);
     await close();
   },
@@ -1781,7 +1781,7 @@ const cases: Record<string, Case> = {
       /** Settings → Comments → Code view: the option named `name`. */
       const chooseSetting = async (name: string): Promise<void> => {
         await page.keyboard.press("ControlOrMeta+Shift+Comma");
-        await openSettingsPage(page, "Comments");
+        await openSettingsPage(page, "Chat");
         const dialog = page.locator(".settings-dialog");
         const group = dialog.locator(".settings-section", { has: page.getByRole("heading", { name: "Code view", exact: true }) });
         await group.getByRole("button", { name, exact: true }).tap();
@@ -3045,7 +3045,7 @@ const cases: Record<string, Case> = {
     await page.keyboard.type(" Not kept.");
     await page.keyboard.press("ControlOrMeta+Shift+Comma");
     const settingsDialog = page.locator(".settings-dialog");
-    await openSettingsPage(page, "Comments");
+    await openSettingsPage(page, "Chat");
     const commentsSwitch = settingsDialog.getByRole("switch", { name: "Comments", exact: true });
     await commentsSwitch.click();
     const confirm = page.getByRole("alertdialog");
@@ -3205,7 +3205,7 @@ const cases: Record<string, Case> = {
     // the setting, in Settings → Comments → Selected text
     await page.keyboard.press("ControlOrMeta+Shift+Comma");
     const settingsDialog = page.locator(".settings-dialog");
-    await openSettingsPage(page, "Comments");
+    await openSettingsPage(page, "Chat");
     const row = settingsDialog.getByRole("group", { name: "Comments beside the text", exact: true });
     assert.equal(await row.getByRole("button", { name: "Cards in the margin", exact: true }).getAttribute("aria-pressed"), "true", "cards are the default");
     await row.getByRole("button", { name: "Counts beside the lines", exact: true }).click();
@@ -4041,7 +4041,7 @@ const cases: Record<string, Case> = {
       await page.keyboard.press("ControlOrMeta+Shift+Comma");
       await page.locator(".settings-dialog").waitFor();
       await eventually("Settings to be topmost", async () => (await topmost()) === "settings");
-      await openSettingsPage(page, "Comments");
+      await openSettingsPage(page, "Chat");
       const commentsSwitch = page.locator(".settings-dialog").getByRole("switch", { name: "Comments", exact: true });
       await commentsSwitch.click();
       const confirm = page.getByRole("alertdialog");
@@ -4253,7 +4253,7 @@ const cases: Record<string, Case> = {
     await lineOf(viewer, 40).waitFor();
     await viewer.locator("button.file-viewer-comments").tap();
     await page.keyboard.press("ControlOrMeta+Shift+Comma");
-    await openSettingsPage(page, "Comments");
+    await openSettingsPage(page, "Chat");
     const settingsDialog = page.locator(".settings-dialog");
     await settingsDialog.locator(".settings-section", { has: page.getByRole("heading", { name: "Code view", exact: true }) }).getByRole("button", { name: "Tap", exact: true }).tap();
     for (let i = 0; i < 3 && (await settingsDialog.count()) > 0; i++) {
@@ -4294,7 +4294,7 @@ const cases: Record<string, Case> = {
     await sheet.getByRole("button", { name: "Close", exact: true }).tap();
     await sheet.waitFor({ state: "detached" });
     await page.keyboard.press("ControlOrMeta+Shift+Comma");
-    await openSettingsPage(page, "Comments");
+    await openSettingsPage(page, "Chat");
     await settingsDialog.locator(".settings-section", { has: page.getByRole("heading", { name: "Code view", exact: true }) }).getByRole("button", { name: "Below the line", exact: true }).tap();
     for (let i = 0; i < 3 && (await settingsDialog.count()) > 0; i++) {
       await page.keyboard.press("Escape");

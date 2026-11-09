@@ -1207,7 +1207,7 @@ export function ReviewFile({ owner, paneId, directory, root, path, change, diffM
     body = previewBlocks === "pending" ? <ReviewLoading />
       : previewBlocks === "failed" ? <p className="repo-diff-note" role="alert">{t("This preview can't be shown.")}</p>
       : <div ref={attachPreview} className="review-preview">
-        <div ref={previewText} className={settings.markdownWidth === "readable" ? "review-preview-text review-preview-readable" : "review-preview-text"}><ProgressiveMarkdown className={settings.markdownWidth === "readable" ? "file-viewer-markdown file-viewer-markdown-readable" : "file-viewer-markdown"} blocks={previewBlocks} /></div>
+        <div ref={previewText} className="review-preview-text review-preview-readable"><ProgressiveMarkdown className="file-viewer-markdown file-viewer-markdown-readable" blocks={previewBlocks} /></div>
         <MarkdownCommentLayer ref={previewLayer} source={previewSource} reference={(target) => ({ path: target.label, lines: target.lines })} surface={previewNode} roots={() => previewText.current === null ? [] : [previewText.current]} mode={settings.commentMode} margin={previewMargin} focusFallback={noFocus} />
       </div>;
   } else if (shown.kind === "diff") {

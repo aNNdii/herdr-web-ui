@@ -102,12 +102,18 @@ async function expandCards(scope: Locator): Promise<void> {
   await scope.locator('button.work-block-head[aria-expanded="true"]').waitFor();
   const rows = scope.locator(".work-row-head");
   await rows.first().waitFor();
-  for (let index = 0; index < await rows.count(); index += 1) {
-    const row = rows.nth(index);
-    if (await row.getAttribute("aria-expanded") === "false") await row.click();
+  // a single pass over the rows left the last one folded on a busy run (a click that did not take,
+  // or a row drawn again after its state was read): open whatever is folded until every file shows
+  const files = scope.locator(".chat-tool-file");
+  const folded = scope.locator('.work-row-head[aria-expanded="false"]');
+  const lastFile = files.nth(ORDER.length - 1);
+  for (let pass = 0; !(await lastFile.isVisible()); pass += 1) {
+    assert.ok(pass < 3 * ORDER.length, `every tool row opens: ${JSON.stringify(await rows.evaluateAll((heads) => heads.map((head) => head.getAttribute("aria-expanded"))))}`);
+    // a folded row to open, or the last file: whichever shows first
+    await folded.or(lastFile).first().waitFor();
+    if (await folded.count() > 0) await folded.first().click();
   }
-  await scope.locator(".chat-tool-file").nth(ORDER.length - 1).waitFor();
-  assert.equal(await scope.locator(".chat-tool-file").count(), ORDER.length);
+  assert.equal(await files.count(), ORDER.length);
 }
 
 /** The demo pane shown now (another may stay mounted, hidden, after a switch). */
@@ -246,7 +252,7 @@ createRoot(document.getElementById("root")).render(<SettingsProvider><Fixture />
 }
 
 // the demo's other agents finish turns now and then: their in-app alerts stay off over the cards
-const settingsOf = (theme: string, language: string) => JSON.stringify({ language, theme, alertInApp: false });
+const settingsOf = (theme: string, language: string) => JSON.stringify({ language, theme, alertsOn: false });
 let shots = 0;
 const captures: string[] = [];
 /** Once every running animation has finished: a sheet still sliding in or out is no state. */
@@ -500,6 +506,7 @@ async function mobileChecks(browser: Browser, base: string): Promise<void> {
     for (let index = 1; index < targets.length; index += 1) assert.ok(targets[index - 1]!.bottom <= targets[index]!.top, `two file links share a hit area: ${JSON.stringify(targets.slice(index - 1, index + 1))}`);
     await noPageScroll(page, "390");
     record("relative-tool-target", "at 390 (iphone-14, touch) every file link is at least 44x44 CSS px and no two overlap", { targets: targets.map(({ label, width, height }) => ({ label, width, height })) });
+    await copyChecks(page, pane, "the phone link");
     await viewerLoading(page, pane, "390", null);
     assert.deepEqual(errors, []);
   } finally { await context.close(); }
@@ -598,10 +605,12 @@ async function captureSet(browser: Browser, base: string, bareBase: string, widt
     await page.getByRole("button", { name: "Close file", exact: true }).click();
     await page.getByText("export const viewed = true;").first().waitFor({ state: "detached" });
     await pane.getByRole("button", { name: "app/src/b.ts", exact: true }).click();
-    await page.getByRole("alert").filter({ hasText: "The file could not be opened." }).waitFor();
+    const failure = page.getByRole("alert").filter({ hasText: "The PC could not read the file. Reopen it to try again." });
+    await failure.waitFor();
+    assert.equal(await failure.textContent(), "The PC could not read the file. Reopen it to try again.");
     await shot(page, name("viewer-error"));
     await page.getByRole("button", { name: "Close file", exact: true }).click();
-    await page.getByText("The file could not be opened.").waitFor({ state: "detached" });
+    await failure.waitFor({ state: "detached" });
     // the viewer's loading state, on a file whose content waits for the script
     await viewerLoading(page, pane, name("viewer-loading"), name("viewer-loading"));
     // a pane with no folder known

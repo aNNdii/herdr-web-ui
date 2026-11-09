@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { ProviderUsage, UsageProviderId, UsageReport, UsageWindow } from "../../shared/protocol.ts";
-import { fetchUsage } from "./api.ts";
+import type { ProviderUsage, StatuslineState, UsageCredits, UsageProviderId, UsageReport, UsageWindow } from "../../shared/protocol.ts";
+import { ApiError, fetchStatusline, fetchUsage, setStatusline } from "./api.ts";
 import type { UsageCount, UsageGlance } from "./settings.ts";
-import { t } from "./i18n.ts";
+import { currentLocale, t } from "./i18n.ts";
 import { usePageVisible } from "./visibility.ts";
 
 /** The server asks a provider at most every 5 minutes; a minute here only picks that up sooner. */
@@ -31,9 +31,25 @@ export function providerForAgent(agent: string | null | undefined): UsageProvide
   return (Object.keys(PROVIDER_MARK) as UsageProviderId[]).find((id) => PROVIDER_MARK[id] === agent) ?? null;
 }
 
+/**
+ * The providers a pi-family harness (gjc, omp, omo, pi) names that only a subscription signs in to:
+ * `openai-codex` is ChatGPT's sign-in, `anthropic-subscription` OmO's Claude one (it runs Claude
+ * Code). A plain `anthropic` is recorded the same for a Claude sign-in and an API key, so it, like
+ * any other provider, is no plan.
+ */
+const PLAN_PROVIDER: Readonly<Record<string, UsageProviderId>> = { "anthropic-subscription": "claude", "openai-codex": "codex" };
+
+/**
+ * The plan a pane draws on: its agent's, else the one the provider its conversation runs at
+ * (ConversationMetadata.provider) names. Neither: no plan, rather than one guessed.
+ */
+export function planForPane(agent: string | null | undefined, provider: string | null | undefined): UsageProviderId | null {
+  return providerForAgent(agent) ?? (provider && Object.hasOwn(PLAN_PROVIDER, provider) ? PLAN_PROVIDER[provider]! : null);
+}
+
 /** The first visible account in Settings order supplies the composer's compact reference. */
-export function composerUsage(providers: readonly ProviderUsage[], agent: string | null, order: readonly string[], hidden: readonly string[]): ProviderUsage | undefined {
-  const providerId = providerForAgent(agent);
+export function composerUsage(providers: readonly ProviderUsage[], agent: string | null, order: readonly string[], hidden: readonly string[], provider?: string | null): ProviderUsage | undefined {
+  const providerId = planForPane(agent, provider);
   return orderProviders(providers, order).find((usage) => usage.id === providerId && !hidden.includes(usage.key));
 }
 
@@ -106,6 +122,23 @@ export function formatResetIn(resetsAt: string | null, now: number): string | nu
   return t("{d}d {h}h", { d: Math.floor(hours / 24), h: hours % 24 });
 }
 
+/**
+ * What a credits row says: money in the provider's currency ("€12.19 / €15.39" against a cap,
+ * "€4.00 spent" without one), or Codex's balance in whole credits as Codex's /status rounds it.
+ */
+export function creditsText(credits: UsageCredits): string {
+  const locale = currentLocale();
+  if (credits.kind === "balance") {
+    if (credits.unlimited) return t("Unlimited");
+    return credits.balance === null ? t("Available") : t("{n} credits", { n: new Intl.NumberFormat(locale, { maximumFractionDigits: 0 }).format(credits.balance) });
+  }
+  const money = (amount: number): string => {
+    try { return new Intl.NumberFormat(locale, { style: "currency", currency: credits.currency }).format(amount); } catch { return `${amount} ${credits.currency}`; }
+  };
+  if (credits.limit !== null) return `${credits.used === null ? "—" : money(credits.used)} / ${money(credits.limit)}`;
+  return credits.used === null ? t("Unlimited") : t("{amount} spent", { amount: money(credits.used) });
+}
+
 /** Percent as the meters print it: whole numbers, except the tenth that keeps a sliver above 0 visible. */
 export function formatPercent(value: number): string {
   return value > 0 && value < 1 ? `${value.toFixed(1)}%` : `${Math.round(value)}%`;
@@ -168,4 +201,40 @@ export function useUsage(enabled: boolean) {
 
   const refresh = useCallback(() => { if (enabled) void load(true); }, [enabled, load]);
   return { report, loading, refresh };
+}
+
+const STATUSLINE_CHANGED = "herdr-statusline-changed";
+
+/**
+ * Settings' switch for reading Claude's limits from its status line on the server's PC, and the
+ * usage popover's offer of it: `watch` reads the state (the offer only turns it on). A change asks
+ * every usage view for fresh limits, and every switch for the new state.
+ */
+export function useStatuslineSwitch(watch: boolean) {
+  const [state, setState] = useState<StatuslineState | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    if (!watch) return;
+    let live = true;
+    const read = () => void fetchStatusline().then((next) => { if (live) setState(next); }, () => { /* an older server: no switch */ });
+    read();
+    window.addEventListener(STATUSLINE_CHANGED, read);
+    return () => { live = false; window.removeEventListener(STATUSLINE_CHANGED, read); };
+  }, [watch]);
+  const set = useCallback(async (enabled: boolean) => {
+    setBusy(true);
+    setError(null);
+    try {
+      setState(await setStatusline(enabled));
+    } catch (cause) {
+      // the server's own words (what was refused, and why), without the URL and status in front
+      setError(cause instanceof ApiError ? cause.detail : t("Could not change Claude's status line"));
+    } finally {
+      setBusy(false);
+      window.dispatchEvent(new Event(STATUSLINE_CHANGED));
+      window.dispatchEvent(new Event("herdr-usage-changed"));
+    }
+  }, []);
+  return { state, busy, error, set };
 }

@@ -1,12 +1,17 @@
-import { readFileSync, realpathSync } from "node:fs";
-import { basename, isAbsolute, join, resolve } from "node:path";
+import { lstatSync, readFileSync, realpathSync, type Stats } from "node:fs";
+import { lstat } from "node:fs/promises";
+import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { PI_ASK_BRIDGE_DIRECTORY, type PiAskBridgeState, type PiBridgeCommands } from "../shared/pi-ask-bridge.ts";
+import type { SlashCommand } from "../shared/protocol.ts";
+import { registerCatalogSource } from "./catalog-sources.ts";
 import { agentGet, paneProcessInfo } from "./herdr/client.ts";
 import { runsAgent } from "./gjc-runtime.ts";
 import { processEnviron } from "./omo.ts";
 import { piAgentDir } from "./pi-models.ts";
-import { transcriptInStore as piTranscriptInStore, unwrittenSession } from "./transcript-store.ts";
+import { authorizedTranscript, unwrittenSession } from "./transcript-store.ts";
+import { source as piCatalog } from "./skills/pi.ts";
 import { userHome } from "./user-home.ts";
 export { transcriptInStore as piTranscriptInStore, unwrittenSession } from "./transcript-store.ts";
 
@@ -40,11 +45,13 @@ type PiTranscriptOptions = {
   processes?: readonly PiProcess[];
   environOf?: (pid: number) => readonly string[] | null;
   argvOf?: (pid: number) => readonly string[] | null;
+  /** the pane's foreground once its pi's extension has answered; herdr is asked again by default */
+  processesAfter?: () => Promise<readonly PiProcess[] | null>;
   home?: string;
 };
 
 /** True for Pi's binary/script launch forms and the official npm bundle entry. */
-function isPiProcess(argv: readonly string[]): boolean {
+export function isPiProcess(argv: readonly string[]): boolean {
   return runsAgent(argv, PI_EXECUTABLE)
     || /(^|[\\/])(?:bun|node)(?:\.exe)?$/i.test(argv[0] ?? "") && PI_NPM_ENTRY.test(argv[1] ?? "");
 }
@@ -86,6 +93,119 @@ function piProcessPaths(environ: readonly string[], home: string, cwd: string) {
 }
 
 /**
+ * Only a socket this user owns, in a directory only this user can enter, speaks for a pi: a
+ * PI_CODING_AGENT_DIR another user can write to must not let them show a card, read its answer
+ * or name a session.
+ */
+export function ownSocket(socket: string): boolean {
+  try { return ownedSocket(lstatSync(dirname(socket)), lstatSync(socket)); } catch { return false; }
+}
+
+/** ownSocket off the event loop: a pi profile on a stalled mount must not hold every other request. */
+async function ownSocketAsync(socket: string): Promise<boolean> {
+  try { return ownedSocket(await lstat(dirname(socket)), await lstat(socket)); } catch { return false; }
+}
+
+function ownedSocket(directory: Stats, file: Stats): boolean {
+  const uid = process.getuid?.();
+  return uid !== undefined && directory.isDirectory() && directory.uid === uid && (directory.mode & 0o077) === 0 && file.isSocket() && file.uid === uid;
+}
+
+const STATE_READ_MS = 1_000;
+
+/** What the web UI's pi extension (integrations/pi-ask.ts) says on its socket, or null. */
+export async function bridgeState(socket: string, signal?: AbortSignal): Promise<PiAskBridgeState | null> {
+  try {
+    const timeout = AbortSignal.timeout(STATE_READ_MS);
+    const response = await fetch("http://localhost/v1/state", { unix: socket, signal: signal ? AbortSignal.any([signal, timeout]) : timeout });
+    if (!response.ok) return null;
+    const state = await response.json() as PiAskBridgeState;
+    return typeof state === "object" && state !== null && state.version === 1 && Array.isArray(state.flows) ? state : null;
+  } catch {
+    return null; // no extension listening (a socket a crashed pi left), or too slow: the terminal
+  }
+}
+
+/**
+ * The session file the pane's one pi process names through the web UI's extension, or null: herdr-core
+ * runs no herdr pi integration, so its agent.get names no session (#2935). Only that process's own
+ * socket, in its own agent directory, answering for its pid, counts; the store checks still follow.
+ */
+async function extensionSessionFile(pi: VerifiedPiProcess, environ: readonly string[] | null, home: string): Promise<string | null> {
+  const socket = await extensionSocket(pi, environ, home);
+  if (socket === null) return null;
+  const state = await bridgeState(socket);
+  return state?.pid === pi.pid && typeof state.sessionFile === "string" && state.sessionFile.length > 0 ? state.sessionFile : null;
+}
+
+/** The web UI extension's socket of this pi process, in that process's own agent directory, when it is the user's own. */
+async function extensionSocket(pi: { pid: number; cwd?: string | null }, environ: readonly string[] | null, home: string): Promise<string | null> {
+  if (process.platform === "win32") return null;
+  const agentDir = environ === null ? piAgentDir() : piProcessPaths(environ, home, pi.cwd ?? "").agentDir;
+  if (agentDir === null) return null;
+  const socket = join(agentDir, PI_ASK_BRIDGE_DIRECTORY, `${pi.pid}.sock`);
+  return await ownSocketAsync(socket) ? socket : null;
+}
+
+const COMMANDS_MAX = 1_000;
+const PI_BUILTIN_NAMES: ReadonlySet<string> = new Set(piCatalog.builtins);
+
+/**
+ * The commands pi's extensions and packages registered, which no file scan can know (#1448), as the
+ * pane's one foreground pi lists them through the web UI's extension (`pi.getCommands()`), or null:
+ * no such pi, no extension (or one from before this route), pi could not say, or that pi left the
+ * front while it answered. As pi's own menu does, a command named after a builtin is left out:
+ * typed, pi runs its own.
+ */
+export async function piExtensionCommands(
+  paneId: string,
+  signal?: AbortSignal,
+  options: Omit<PiTranscriptOptions, "agent"> = {},
+): Promise<SlashCommand[] | null> {
+  const info = options.processes === undefined
+    ? await paneProcessInfo(paneId).catch(() => null)
+    : { foreground_processes: [...options.processes] };
+  const argvOf = options.argvOf ?? processArgv;
+  const pisOf = (processes: readonly PiProcess[]) => processes.filter((entry): entry is PiProcess & { pid: number } => {
+    if (typeof entry.pid !== "number") return false;
+    const argv = entry.argv?.length ? entry.argv : argvOf(entry.pid);
+    return !!argv?.length && isPiProcess(argv);
+  });
+  const pis = pisOf(info?.foreground_processes ?? []);
+  if (pis.length !== 1 || signal?.aborted) return null;
+  const pi = pis[0]!;
+  const socket = await extensionSocket(pi, (options.environOf ?? processEnviron)(pi.pid), options.home ?? userHome());
+  if (socket === null) return null;
+  let rows: SlashCommand[];
+  try {
+    const timeout = AbortSignal.timeout(STATE_READ_MS);
+    const response = await fetch("http://localhost/v1/commands", { unix: socket, signal: signal ? AbortSignal.any([signal, timeout]) : timeout });
+    if (!response.ok) return null;
+    const reply = await response.json() as Partial<PiBridgeCommands> | null;
+    if (reply?.version !== 1 || reply.pid !== pi.pid || !Array.isArray(reply.commands)) return null;
+    rows = reply.commands.slice(0, COMMANDS_MAX).flatMap((command): SlashCommand[] => {
+      const name: unknown = command?.name;
+      if (typeof name !== "string" || !/^\S{1,200}$/u.test(name) || PI_BUILTIN_NAMES.has(name)) return [];
+      const source = command.scope === "project" ? "project" : command.origin === "package" ? "plugin" : "user";
+      return [{ name, description: typeof command.description === "string" ? command.description : "", source }];
+    });
+  } catch {
+    return null; // too slow, or not the extension answering
+  }
+  // the answer is that pi's: one that left the front while it was asked, or now shares it with
+  // another pi, no longer speaks for the pane
+  const after = options.processesAfter
+    ? await options.processesAfter()
+    : (await paneProcessInfo(paneId).catch(() => null))?.foreground_processes ?? null;
+  const still = after === null ? [] : pisOf(after);
+  return still.length === 1 && still[0]!.pid === pi.pid ? rows : null;
+}
+
+// the scanned prompt templates and skills stay: this source adds only what the running pi registered
+// pi runs an extension command before it expands a prompt template of the same name
+registerCatalogSource({ agent: "pi", owns: [], shadows: true, rows: (pane, _cwd, signal) => piExtensionCommands(pane.pane_id, signal) });
+
+/**
  * Resolve only stores the pane's Pi process identifies; an unseen CLI override is unsafe. The
  * agent directory comes with it: pi reads its model catalogs from there, not from the bridge's.
  */
@@ -108,7 +228,7 @@ function piSessionDirForProcess(
 /** The pane's one verified pi process: its pid, working directory and environment (null when unreadable). */
 export interface PiPaneProcess { pid: number; cwd: string | null; environ: readonly string[] | null }
 
-type PiTranscript = { path: string; agentDir: string | null } | { unwritten: { id: string; path: string } };
+type PiTranscript = { path: string; agentDir: string | null; identity: string } | { unwritten: { id: string; path: string } };
 
 /**
  * The pane's foreground pids and the agent directories its pi may use, whatever its session: the
@@ -145,7 +265,8 @@ export async function piPaneAgentDirs(
 
 /**
  * pi's transcript for a pane, or the session it has not written yet. The agent report names
- * the active session; Linux process metadata ties a custom store to the Pi process in this pane.
+ * the active session, else (no report at all, as on herdr-core) the pane's one pi process through
+ * the web UI's extension; Linux process metadata ties a custom store to the Pi process in this pane.
  * Where the OS cannot expose that process environment, only the bridge's default store is used.
  *
  * A written session comes with the agent directory of the same process, where pi keeps the
@@ -175,8 +296,10 @@ export async function piPaneSession(
   options: PiTranscriptOptions = {},
 ): Promise<{ transcript: PiTranscript; process: PiPaneProcess | null } | null> {
   const agent = options.agent === undefined ? await agentGet(paneId).catch(() => null) : options.agent;
-  const session = agent?.agent_session;
-  if (agent?.agent !== "pi" || session?.agent !== "pi" || session.source !== "herdr:pi" || session.kind !== "path" || typeof session.value !== "string") return null;
+  if (agent?.agent !== "pi") return null;
+  const session = agent.agent_session;
+  const absent = session === undefined || session === null;
+  if (!absent && (session.agent !== "pi" || session.source !== "herdr:pi" || session.kind !== "path" || typeof session.value !== "string")) return null;
 
   const info = options.processes === undefined
     ? await paneProcessInfo(paneId).catch(() => undefined)
@@ -192,6 +315,19 @@ export async function piPaneSession(
       if (isPiProcess(argv)) piProcesses.push({ ...entry, pid: entry.pid, argv });
     }
   }
+  let reported: string | null = absent ? null : session.value;
+  if (absent && piProcesses.length === 1) {
+    const pi = piProcesses[0]!;
+    reported = await extensionSessionFile(pi, environOf(pi.pid), home);
+    // the answer is that pi's: one that left the front while it was asked is not the pane's any more
+    if (reported !== null) {
+      const after = options.processesAfter
+        ? await options.processesAfter()
+        : (await paneProcessInfo(paneId).catch(() => null))?.foreground_processes ?? null;
+      if (!after?.some((entry) => entry.pid === pi.pid)) reported = null;
+    }
+  }
+  if (reported === null) return null;
 
   const processStores = new Set<string>();
   const environs = new Map<number, readonly string[] | null>();
@@ -223,14 +359,17 @@ export async function piPaneSession(
   }
   // Preserve default-store behavior on platforms where process_info names only the shell or
   // process environments cannot be read. A custom store is never guessed in those cases.
-  const matches = [...canonicalStores].filter((store) => piTranscriptInStore(session.value, store) !== null || unwrittenSession(session.value, store) !== null);
+  // each store's proof is taken once: the file it opened is the one returned, with its exact dev:ino (`identity`)
+  const proofs = new Map([...canonicalStores].map((store) => [store, authorizedTranscript(reported, store)]));
+  const matches = [...canonicalStores].filter((store) => proofs.get(store) !== null || unwrittenSession(reported, store) !== null);
   if (matches.length !== 1) return null;
-  const path = piTranscriptInStore(session.value, matches[0]!);
+  const authorized = proofs.get(matches[0]!) ?? null;
   const named = piProcesses.length === 0 ? UNREAD : agentDirs.size === 1 ? [...agentDirs.values()][0] ?? null : null;
   const agentDir = named === UNREAD ? bridgeAgentDirOwning(matches[0]!) : named;
-  const unwritten = path === null ? unwrittenSession(session.value, matches[0]!) : null;
-  const transcript: PiTranscript | null = path !== null ? { path, agentDir } : unwritten === null ? null : { unwritten };
+  const unwritten = authorized === null ? unwrittenSession(reported, matches[0]!) : null;
+  const transcript: PiTranscript | null = authorized !== null ? { path: authorized.path, agentDir, identity: authorized.identity } : unwritten === null ? null : { unwritten };
   if (transcript === null) return null;
+  // fork: the one pi process the session was verified against (piPaneSession)
   const only = piProcesses.length === 1 ? piProcesses[0]! : null;
   return {
     transcript,
