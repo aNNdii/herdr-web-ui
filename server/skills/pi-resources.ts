@@ -15,6 +15,11 @@ import { description, plainObject, readFrontmatter, readSkillText } from "./walk
 /** A command pi's bundled extension registers, by the `builtin:` path that switches it. */
 export type BundledExtension = "llama" | "mcp";
 const BUNDLED_PATHS: ReadonlyArray<readonly [BundledExtension, string]> = [["llama", "builtin:llama.cpp"], ["mcp", "builtin:mcp"]];
+/**
+ * Every command a bundled extension registers. The scan lists them as pi's built-ins (skills/pi.ts), so the running
+ * pi's list of extension commands (piExtensionCommands in ../pi.ts) leaves them out, as it does pi's own: never twice.
+ */
+export const BUNDLED_EXTENSIONS: readonly BundledExtension[] = BUNDLED_PATHS.map(([name]) => name);
 
 export interface PiCommandFile { readonly name: string; readonly description: string; readonly origin: "user" | "project" | "package"; readonly id?: string }
 export interface PiLoaded {

@@ -12,6 +12,8 @@ import { processEnviron } from "./omo.ts";
 import { piAgentDir } from "./pi-models.ts";
 import { authorizedTranscript, unwrittenSession } from "./transcript-store.ts";
 import { source as piCatalog } from "./skills/pi.ts";
+// fork: the bundled extensions' commands, which the fork's scan lists as pi's built-ins
+import { BUNDLED_EXTENSIONS } from "./skills/pi-resources.ts";
 import { userHome } from "./user-home.ts";
 export { transcriptInStore as piTranscriptInStore, unwrittenSession } from "./transcript-store.ts";
 
@@ -148,7 +150,7 @@ async function extensionSocket(pi: { pid: number; cwd?: string | null }, environ
 }
 
 const COMMANDS_MAX = 1_000;
-const PI_BUILTIN_NAMES: ReadonlySet<string> = new Set(piCatalog.builtins);
+const PI_BUILTIN_NAMES: ReadonlySet<string> = new Set([...piCatalog.builtins, ...BUNDLED_EXTENSIONS]);
 
 /**
  * The commands pi's extensions and packages registered, which no file scan can know (#1448), as the
