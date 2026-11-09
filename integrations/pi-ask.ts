@@ -17,6 +17,8 @@ import {
   type PiBridgeCommand,
   type PiBridgeCommands,
 } from "../shared/pi-ask-bridge.ts";
+import { PI_SUBAGENTS_LIVE_ROUTE, type PiSubagentsLive } from "../shared/pi-subagents-bridge.ts";
+import { createPiSubagentsRoster } from "./pi-subagents-roster.ts";
 
 export interface PiEventBus {
   on(channel: string, handler: (data: unknown) => void): () => void;
@@ -43,6 +45,8 @@ export interface PiAskBridgeOptions {
   submitTimeoutMs?: number;
   /** pi's own command list (`pi.getCommands()`), read at each request: a /reload changes it */
   commands?: () => unknown;
+  /** fork: pi-subagents' live state (integrations/pi-subagents-roster.ts) for GET /v1/subagents; without it the route answers 404 */
+  subagents?: (bridge: { pid: number; sessionFile: string | null }) => PiSubagentsLive;
 }
 
 export interface PiAskBridge {
@@ -189,6 +193,7 @@ export function createPiAskBridge(options: PiAskBridgeOptions): PiAskBridge {
         send(response, 200, { version: PI_ASK_BRIDGE_VERSION, pid, commands: extensionCommands() } satisfies PiBridgeCommands);
         return;
       }
+      if (request.url === PI_SUBAGENTS_LIVE_ROUTE && request.method === "GET" && options.subagents) { send(response, 200, options.subagents({ pid, sessionFile: sessionFile() })); return; }
       if (request.url === "/v1/submit" && request.method === "POST") {
         const text = await readBody(request);
         let body: unknown = null;
@@ -248,11 +253,15 @@ export function createPiAskBridge(options: PiAskBridgeOptions): PiAskBridge {
 }
 
 export default function piAskBridgeExtension(pi: PiExtensionAPI): void {
+  const roster = createPiSubagentsRoster(pi.events); // fork
   const bridge = createPiAskBridge({
+    subagents: roster.snapshot, // fork
     events: pi.events,
     socketPath: join(piAgentDir(), PI_ASK_BRIDGE_DIRECTORY, `${process.pid}.sock`),
     commands: () => pi.getCommands?.(),
   });
   pi.on("session_start", (_event, context) => bridge.start(context));
   pi.on("session_shutdown", () => bridge.stop());
+  pi.on("session_start", () => roster.sessionStarted()); // fork
+  pi.on("session_shutdown", () => roster.sessionEnded()); // fork
 }

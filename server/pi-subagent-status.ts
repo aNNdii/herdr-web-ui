@@ -1,7 +1,9 @@
 import type { HerdrPane } from "../shared/protocol.ts";
+import type { PiSubagentsLive } from "../shared/pi-subagents-bridge.ts";
 import { plain, within } from "./claude-subagents.ts";
 import { piPaneSession } from "./pi.ts";
-import { piSubagentActivity, piSubagentCounts, type PiSession, type PiSubagentActivity } from "./pi-subagents.ts";
+import { piSubagentActivity, piSubagentCounts, piSubagentsMark, type PiSession, type PiSubagentActivity } from "./pi-subagents.ts";
+import { askPiSubagentsLive, nextPiLiveState, piLiveView, type PiLiveState, type PiLiveTarget } from "./pi-subagents-live.ts";
 import { processStartedAt } from "./process-start.ts";
 import { piRunsSubagents } from "./skills/pi-agents.ts";
 import { readPiConfig } from "./skills/pi-config.ts";
@@ -10,9 +12,10 @@ import { environValue } from "./skills/walk.ts";
 /**
  * A Pi subagents pane's session as piSubagentPane locates it from piPaneSession's answer
  * (server/pi.ts): the session file and the pi process that writes it, pid and start null when they
- * cannot be told.
+ * cannot be told. `cwd`, the process's own, places a relative PI_CODING_AGENT_DIR, where its
+ * extension's socket is.
  */
-export interface LocatedPiSession { path: string; pid: number | null; startedAt: number | null; environ: readonly string[] | null }
+export interface LocatedPiSession { path: string; pid: number | null; startedAt: number | null; environ: readonly string[] | null; cwd?: string | null }
 
 export interface PiSubagentDeps {
   /** a pane by id, for a pane no snapshot has shown yet */
@@ -25,6 +28,8 @@ export interface PiSubagentDeps {
   locate?: (pane: HerdrPane) => Promise<LocatedPiSession | null>;
   /** default processStartedAt: tells, without a herdr call, that the tracked pi process is gone or replaced */
   processStart?: (pid: number) => number | null;
+  /** default askPiSubagentsLive: what the pane's pi process says itself through the web UI's pi extension, or null */
+  live?: (target: PiLiveTarget) => Promise<PiSubagentsLive | null>;
   now?: () => number;
   pollMs?: number;
   refreshMs?: number;
@@ -36,7 +41,13 @@ interface Tracked {
   key: string;
   /** null: the pane runs pi, but no pi-subagents session was found for it */
   path: string | null;
-  pid: number | null; startedAt: number | null; environ: readonly string[] | null;
+  pid: number | null; startedAt: number | null; environ: readonly string[] | null; cwd: string | null;
+  /** the pi process's own answers (server/pi-subagents-live.ts); null: the file alone */
+  liveState: PiLiveState | null;
+  /** bumped by every answer but a missing one after none: each one counts the pane again, whatever the file's stat */
+  liveSeq: number;
+  /** an answer (or none) came for this session and process */
+  asked: boolean;
   /** when it was last looked up; -Infinity: due at once */
   at: number;
   live: boolean;
@@ -47,16 +58,23 @@ interface Tracked {
 /**
  * The running agents and workflows of every Pi pane whose pi loads pi-subagents (piSubagentPane), for the
  * pane's count and its list. It knows no pi-subagents format: server/pi-subagents.ts reads the
- * session. A pane is looked up when it is first seen as `pi`, when herdr names another session for
- * it, when its pi process is gone or replaced, or (when that cannot be told, or nothing was found)
- * now and then. A pane that leaves pi keeps the session it had, so that its list can say what was
- * left running there is lost; its count is 0. A poll whose session file stat is as it was reads
- * nothing, and while the budgeted read is behind, the last counts stand.
+ * session, which stays the history and the fallback, and server/pi-subagents-live.ts asks the
+ * pane's pi process what runs now, through the web UI's pi extension. A pane is looked up when it
+ * is first seen as `pi`, when herdr names another session for it, when its pi process is gone or
+ * replaced, or (when that cannot be told, or nothing was found) now and then. A pane that leaves pi
+ * keeps the session it had, so that its list can say what was left running there is lost; its
+ * count is 0. Every poll also asks the pane's pi process (one question out at a time, only with a
+ * known pid), and its answer counts the pane again: what the process says of its agents overrides
+ * the file (PiLiveView), and no answer leaves the file alone, as without the extension. A poll
+ * whose session file stat and answers are as they were reads nothing, and while the budgeted read
+ * is behind, the last counts stand.
  */
 export class PiSubagentStatus {
   private readonly panes = new Map<string, Tracked>();
   /** The latest lookup claim per pane; a newer one cancels an older answer. */
   private readonly lookups = new Map<string, object>();
+  /** The pi process's answer asked for per pane, while it is out. */
+  private readonly asking = new Map<string, Promise<void>>();
   private timer: ReturnType<typeof setInterval> | null = null;
   private refreshing: Promise<void> | null = null;
   private queued: readonly HerdrPane[] | null = null;
@@ -64,12 +82,14 @@ export class PiSubagentStatus {
   private readonly refreshMs: number;
   private readonly locate: (pane: HerdrPane) => Promise<LocatedPiSession | null>;
   private readonly processStart: (pid: number) => number | null;
+  private readonly live: (target: PiLiveTarget) => Promise<PiSubagentsLive | null>;
 
   constructor(private readonly deps: PiSubagentDeps) {
     this.now = deps.now ?? Date.now;
     this.refreshMs = deps.refreshMs ?? 5000;
     this.locate = deps.locate ?? piSubagentPane;
     this.processStart = deps.processStart ?? processStartedAt;
+    this.live = deps.live ?? ((target) => askPiSubagentsLive(target));
   }
 
   start(): void {
@@ -80,6 +100,7 @@ export class PiSubagentStatus {
 
   stop(): void {
     this.lookups.clear();
+    this.asking.clear();
     this.queued = null;
     if (this.timer !== null) clearInterval(this.timer);
     this.timer = null;
@@ -125,37 +146,77 @@ export class PiSubagentStatus {
         if (pane !== null) await this.ensure(pane);
       })());
     }
+    const first = this.panes.get(paneId);
+    // the pi process was not asked yet: its answer is waited for, as briefly as the lookup
+    if (first?.path && !first.asked) await within(1000, this.ask(paneId, first) ?? Promise.resolve());
     const tracked = this.panes.get(paneId);
     if (!tracked?.path) return null;
     return piSubagentActivity(this.session(tracked, tracked.path), this.now());
   }
 
-  /** Reads what the session files gained, of every pane or of one; a pane whose counts changed is told. */
+  /**
+   * Reads what the session files gained, of every pane or of one; a pane whose counts changed is
+   * told. Each pane's pi process is asked for its own answer meanwhile, which counts the pane
+   * again once it is in.
+   */
   poll(only?: string): void {
     for (const [paneId, tracked] of this.panes) {
       if (only !== undefined && paneId !== only) continue;
-      let counts = { running: 0, turnRunning: 0, promptAt: null as number | null };
-      if (tracked.path !== null && tracked.live) {
-        const stat = plain(tracked.path);
-        const sig = stat === null ? null : `${stat.id}:${stat.size}:${stat.mtimeMs}:${tracked.startedAt}`;
-        if (sig !== null && sig === tracked.sig) continue;
-        const read = piSubagentCounts(this.session(tracked, tracked.path));
-        // the budgeted read is behind: what was read so far is not the count yet, so the last counts stand
-        if (!read.current) { tracked.sig = null; continue; }
-        tracked.sig = sig;
-        counts = read;
-      }
-      else tracked.sig = null;
-      if (counts.running === tracked.running && counts.turnRunning === tracked.turnRunning && counts.promptAt === tracked.promptAt) continue;
-      tracked.running = counts.running;
-      tracked.turnRunning = counts.turnRunning;
-      tracked.promptAt = counts.promptAt;
-      this.deps.onChange(paneId, counts.running, counts.turnRunning, counts.promptAt);
+      void this.ask(paneId, tracked);
+      this.count(paneId, tracked);
     }
   }
 
+  private count(paneId: string, tracked: Tracked): void {
+    let counts = { running: 0, turnRunning: 0, promptAt: null as number | null };
+    if (tracked.path !== null && tracked.live) {
+      const stat = plain(tracked.path);
+      const sig = stat === null ? null : `${stat.id}:${stat.size}:${stat.mtimeMs}:${tracked.startedAt}:${tracked.liveSeq}`;
+      if (sig !== null && sig === tracked.sig) return;
+      const read = piSubagentCounts(this.session(tracked, tracked.path));
+      // the budgeted read is behind: what was read so far is not the count yet, so the last counts stand
+      if (!read.current) { tracked.sig = null; return; }
+      tracked.sig = sig;
+      counts = read;
+    }
+    else tracked.sig = null;
+    if (counts.running === tracked.running && counts.turnRunning === tracked.turnRunning && counts.promptAt === tracked.promptAt) return;
+    tracked.running = counts.running;
+    tracked.turnRunning = counts.turnRunning;
+    tracked.promptAt = counts.promptAt;
+    this.deps.onChange(paneId, counts.running, counts.turnRunning, counts.promptAt);
+  }
+
+  /**
+   * Asks the pane's pi process for its own answer, unless one is out already; null when it cannot
+   * be asked (no session, not running pi, or its pid unknown). A read mark is taken first
+   * (server/pi-subagents.ts), and the answer counts only for the same session and process.
+   */
+  private ask(paneId: string, tracked: Tracked): Promise<void> | null {
+    const out = this.asking.get(paneId);
+    if (out) return out;
+    const { path, pid } = tracked;
+    if (path === null || pid === null || !tracked.live) return null;
+    const mark = piSubagentsMark();
+    const request: Promise<void> = this.live({ pid, cwd: tracked.cwd, environ: tracked.environ, path }).catch(() => null).then((answer) => {
+      if (this.asking.get(paneId) !== request) return;
+      this.asking.delete(paneId);
+      const current = this.panes.get(paneId);
+      if (!current || current.path !== path || current.pid !== pid || !current.live) return;
+      const next = nextPiLiveState(current.liveState, answer, mark, this.now());
+      // no answer now, none before: the file alone, as it was
+      current.asked = true;
+      if (next === null && current.liveState === null) return;
+      current.liveState = next;
+      current.liveSeq += 1;
+      this.count(paneId, current);
+    });
+    this.asking.set(paneId, request);
+    return request;
+  }
+
   private session(tracked: Tracked, path: string): PiSession {
-    return { path, environ: tracked.environ, live: tracked.live, startedAt: tracked.startedAt };
+    return { path, environ: tracked.environ, live: tracked.live, startedAt: tracked.startedAt, liveView: tracked.live ? piLiveView(tracked.liveState) : null };
   }
 
   /** The pane does not run pi (any more): what it ran there is lost, and a return to pi is looked up at once. */
@@ -164,6 +225,7 @@ export class PiSubagentStatus {
     const tracked = this.panes.get(paneId);
     if (!tracked) return;
     tracked.live = false;
+    tracked.liveState = null;
     tracked.at = -Infinity;
   }
 
@@ -191,7 +253,7 @@ export class PiSubagentStatus {
       // current session counts, so the old one is dropped, not listed as lost
       if (current?.path) { this.deps.onReset?.(paneId); this.zero(current); current.path = null; current.live = true; }
       if (current) { current.key = key; current.at = this.now(); return; }
-      this.panes.set(paneId, { key, path: null, pid: null, startedAt: null, environ: null, at: this.now(), live: true, running: 0, turnRunning: 0, promptAt: null, sig: null });
+      this.panes.set(paneId, { key, path: null, pid: null, startedAt: null, environ: null, cwd: null, liveState: null, liveSeq: 0, asked: false, at: this.now(), live: true, running: 0, turnRunning: 0, promptAt: null, sig: null });
       return;
     }
     const reset = !!current?.path && (current.path !== found.path
@@ -200,13 +262,18 @@ export class PiSubagentStatus {
     if (reset) this.deps.onReset?.(paneId);
     const counts = current && !reset ? current : null;
     this.panes.set(paneId, {
-      key, path: found.path, pid: found.pid, startedAt: found.startedAt, environ: found.environ, at: this.now(), live: true,
+      key, path: found.path, pid: found.pid, startedAt: found.startedAt, environ: found.environ, cwd: found.cwd ?? null, at: this.now(), live: true,
+      // the same session and process: its answers so far still stand
+      ...(counts?.live && counts.path === found.path && counts.pid === found.pid
+        ? { liveState: counts.liveState, liveSeq: counts.liveSeq, asked: counts.asked }
+        : { liveState: null, liveSeq: (counts?.liveSeq ?? 0) + 1, asked: false }),
       running: counts?.running ?? 0, turnRunning: counts?.turnRunning ?? 0, promptAt: counts?.promptAt ?? null, sig: null,
     });
   }
 
   /** onReset told the pane's counts are 0. */
   private zero(tracked: Tracked): void {
+    tracked.liveState = null;
     tracked.running = 0;
     tracked.turnRunning = 0;
     tracked.promptAt = null;
@@ -228,5 +295,5 @@ export async function piSubagentPane(pane: HerdrPane): Promise<LocatedPiSession 
   const home = environValue(env, "HOME") ?? process.env["HOME"] ?? process.env["USERPROFILE"] ?? "";
   const cwd = pi?.cwd ?? pane.foreground_cwd ?? pane.cwd ?? null;
   if (!piRunsSubagents(readPiConfig({ home, cwd, repoRoot: null, env, roots: {} }))) return null;
-  return { path: found.transcript.path, pid: pi?.pid ?? null, startedAt: pi === null ? null : processStartedAt(pi.pid), environ: env };
+  return { path: found.transcript.path, pid: pi?.pid ?? null, startedAt: pi === null ? null : processStartedAt(pi.pid), environ: env, cwd: pi?.cwd ?? null };
 }

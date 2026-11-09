@@ -10,6 +10,7 @@
  *   GET  /v1/state   -> PiAskBridgeState: the forms pi-ask reports open, and the session file
  *   POST /v1/submit  PiAskSubmitRequest -> PiAskSubmitReply: pi-ask's own submit-result
  *   GET  /v1/commands -> PiBridgeCommands: the commands pi's extensions registered (#1448)
+ *   GET  /v1/subagents -> PiSubagentsLive: fork, pi-subagents' live state (shared/pi-subagents-bridge.ts)
  */
 
 export const PI_ASK_BRIDGE_DIRECTORY = "herdr-web-ui-ask";

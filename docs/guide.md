@@ -260,6 +260,17 @@ pi's own menu does. An extension installed before this, pi without it, two pi pr
 and Windows suggest only the builtins, prompts and skills; typing such a command in full still sends
 it. Run the installer again and restart pi to update an installed extension.
 
+Where pi runs [`@tintinweb/pi-subagents`](https://www.npmjs.com/package/@tintinweb/pi-subagents),
+the same extension also says what it runs now (`GET /v1/subagents` on its socket): the agents its
+events reported since the session started, and whether its manager still runs anything. A Pi
+pane's background list and running count then follow pi, with the session file as their history:
+an agent pi no longer runs stops counting (a `/reload` aborts them all without writing to the
+session), one another extension, the scheduler or an @mention started shows while it runs, and a
+workflow the file still has running ends once pi has run nothing on two polls ten seconds apart.
+The answer counts only from the pane's own pi process, for the session it writes. Without the
+extension, with one installed before this, or on Windows, the session file alone is read, and
+what ran at a `/reload` stays listed as running until pi restarts. Checked with pi-subagents 0.23.1.
+
 Command Code chat needs the session herdr reports for the pane. Command Code sends that report
 and herdr keeps only the sessions of the agents it knows natively, so no released herdr accepts
 it yet: the pane's status, title and model arrive, its conversation does not. Without it the

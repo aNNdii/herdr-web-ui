@@ -49,6 +49,7 @@ function tracker(deps: Partial<PiSubagentDeps> & Pick<PiSubagentDeps, "locate">)
     onChange: (...change) => { changes.push(change); },
     onReset: (paneId) => { resets.push(paneId); },
     processStart: () => null,
+    live: async () => null,
     now: () => NOW,
     ...deps,
   });

@@ -378,3 +378,6 @@ export async function piPaneSession(
     process: only === null ? null : { pid: only.pid, cwd: only.cwd ?? null, environ: environs.get(only.pid) ?? null },
   };
 }
+
+// fork: server/pi-subagents-live.ts asks the same socket for pi-subagents' live state
+export { extensionSocket as piExtensionSocket };
