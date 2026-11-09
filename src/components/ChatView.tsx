@@ -2663,7 +2663,9 @@ export const ChatView = memo(function ChatView({ paneId, presentationKey, finish
   // highlights, the store). In the comment mode (Settings `commentMode`, the toggle at its top right) a mouse's selection in a
   // reply opens the field over it, portalled into the scroller (so growing upward it is never cut by a row); each reply's
   // cards or counts are its own row's (`ReplyMargin`, through the layer's `MarginRowsContext`), so a row that scrolled
-  // out of the list's window shows none until it is back, and the composer's walk opens its comments in a dialog meanwhile
+  // out of the list's window shows none until it is back, and the composer's walk opens its comments in a dialog meanwhile.
+  // While the mode is on it alone answers a selection: upstream's Quote/Comment pill (ReplyCommentAction) is not mounted
+  // then, and its chip in the composer still lists the comments saved with it before
   const owner = paneStorageId(machineId, paneId);
   const stored = useBlockComments(owner);
   // every comment of the pane, its files' too: all of them go with the next message from here
@@ -3004,7 +3006,7 @@ export const ChatView = memo(function ChatView({ paneId, presentationKey, finish
     {/* the mode's hint, at the top of the chat (CommentModeHint.css `.code-comment-status`) */}
     {toggleShown && <CommentModeHint surface={frameBody} hint={hint} />}
     {/* only a pane this device may send to takes quotes and comments: they go with its next message */}
-    {state.source === "conversation" && interactive && !ended && <ReplyCommentAction scroller={scroller} storageKey={replyCommentsKey(paneStorageId(machineId, paneId))} paneKey={quotable ? paneStorageId(machineId, paneId) : null} />}
+    {state.source === "conversation" && interactive && !ended && !(settings.comments && settings.commentMode) && <ReplyCommentAction scroller={scroller} storageKey={replyCommentsKey(paneStorageId(machineId, paneId))} paneKey={quotable ? paneStorageId(machineId, paneId) : null} />}
     </div>
     </div>
   {/* The prompt card is not part of the transcript: it is drawn on the composer's column, over the
