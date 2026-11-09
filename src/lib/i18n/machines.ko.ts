@@ -115,7 +115,6 @@ export const MACHINES_KO: Record<string, string> = {
   "No workspaces or agents match": "일치하는 워크스페이스나 에이전트가 없습니다",
   "No workspaces or agents match on the PCs that answered": "응답한 PC에는 일치하는 워크스페이스나 에이전트가 없습니다",
   "Try other words, or clear the filter.": "다른 단어로 찾거나 필터를 지우세요.",
-  "Hide Install app": "'앱 설치' 숨기기",
   "Updating this PC's Ovis": "이 PC의 Ovis 업데이트 중",
   "This PC's Ovis is older than this app": "이 PC의 Ovis가 이 앱보다 오래됐습니다",
   "Updating this PC's Ovis failed": "이 PC의 Ovis 업데이트에 실패했습니다",

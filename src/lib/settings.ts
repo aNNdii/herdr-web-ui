@@ -237,8 +237,6 @@ export interface Settings {
   foldWork: boolean;
   /** request a screen wake lock while a pane is open in this visible tab */
   keepScreenOn: boolean;
-  /** the sidebar footer offers Install app while the app runs in a browser tab; off hides it there, and Settings → Phone & devices turns it back on */
-  showInstallApp: boolean;
   /** UI language; `system` follows the browser (src/lib/i18n.ts) */
   language: LanguageSetting;
   /** alerts on this device at all: the bell turns them off (push subscription dropped) and on */
@@ -338,9 +336,7 @@ type TelemetrySourceSettings = Omit<Settings,
   // not collected: the composer's suggestion menus have no field in the report's schema
   | "suggestAgents" | "suggestSkills" | "suggestBuiltins"
   // not collected: the fork's comment settings have no field in the report's schema
-  | "comments" | "commentMode" | "commentLayout" | "commentOnSelect" | "codeCommentLineClick" | "mobileCommentGesture" | "mobileCommentInput"
-  // not collected: the fork's sidebar Install app switch has no field in the report's schema
-  | "showInstallApp">;
+  | "comments" | "commentMode" | "commentLayout" | "commentOnSelect" | "codeCommentLineClick" | "mobileCommentGesture" | "mobileCommentInput">;
 
 /** Compare structured custom settings by content against this app's built-in defaults. */
 function differsFromDefault(value: unknown, defaultValue: unknown): boolean {
@@ -461,7 +457,6 @@ export const SETTING_SCOPE = {
   // a phone may group its agents by state while a desk keeps herdr's order, as with the filter
   agentGroups: "device", agentGroupSort: "device",
   keepScreenOn: "device", alertsOn: "device", alertInput: "device", alertDone: "device", alertSound: "device",
-  showInstallApp: "device",
   paletteLight: "device", paletteDark: "device", statusIndicators: "device",
   voiceInput: "device", voiceLanguage: "device", voiceEngine: "device", voicePolishChat: "device", voicePolishTerminal: "device",
   // Viewer layout follows this screen, as chatWidth does.
@@ -555,7 +550,6 @@ export const DEFAULT_SETTINGS: Settings = {
   expandThinking: false,
   foldWork: false,
   keepScreenOn: false,
-  showInstallApp: true,
   language: "system",
   alertsOn: true,
   alertInput: true,
@@ -799,7 +793,6 @@ export function sanitizeSettings(raw: unknown): Settings {
     expandThinking: typeof record["expandThinking"] === "boolean" ? record["expandThinking"] : DEFAULT_SETTINGS.expandThinking,
     foldWork: typeof record["foldWork"] === "boolean" ? record["foldWork"] : DEFAULT_SETTINGS.foldWork,
     keepScreenOn: typeof record["keepScreenOn"] === "boolean" ? record["keepScreenOn"] : DEFAULT_SETTINGS.keepScreenOn,
-    showInstallApp: typeof record["showInstallApp"] === "boolean" ? record["showInstallApp"] : DEFAULT_SETTINGS.showInstallApp,
     language: LANGUAGE_SETTINGS.includes(record["language"] as LanguageSetting) ? record["language"] as LanguageSetting : DEFAULT_SETTINGS.language,
     alertsOn: typeof record["alertsOn"] === "boolean" ? record["alertsOn"] : DEFAULT_SETTINGS.alertsOn,
     alertInput: typeof record["alertInput"] === "boolean" ? record["alertInput"] : DEFAULT_SETTINGS.alertInput,

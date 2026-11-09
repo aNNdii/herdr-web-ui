@@ -12,10 +12,9 @@ import { openSettingsPage } from "./settings-page.ts";
 // are this app, installed with the browser's own PWA domain (CDP). The browser runs on a profile,
 // HOME and XDG data dir of its own, so the install's OS integration (desktop entries, icons) lands
 // in this run's directory and never in the user's; no herdr session is opened.
-// Settings → Devices and PCs → More settings → Install offers it: the button while the browser holds
-// a prompt, the steps while it holds none, Installed once it is. This fork still keeps the sidebar's
-// Install app (with its × and Settings' "Install app in the sidebar") until a later commit; it is gone
-// wherever the app is installed.
+// The sidebar offers no Install app at any point: it kept showing in every tab of a browser that had
+// the app installed and in browsers that never prompt. Settings → Devices and PCs → More settings → Install offers it:
+// the button while the browser holds a prompt, the steps while it holds none, Installed once it is.
 // HEADED=1 (under xvfb-run where there is no display) runs the same steps in a window.
 const root = mkdtempSync(join(tmpdir(), "herdr-install-state-demo-"));
 const app = join(root, "app");
@@ -32,9 +31,8 @@ const newRealDesktopEntries = (): string[] => existsSync(realApplications)
 const ready = async (page: Page): Promise<void> => {
   await page.locator(".conn-live").waitFor({ state: "attached" });
   await page.locator(".sidebar-footer").waitFor();
+  await assertNoSidebarInstall(page);
 };
-// this fork's sidebar Install app (MachineSidebar.tsx), shown until the app is installed or its × hides it
-const sidebarInstall = (page: Page): Locator => page.locator(".sidebar-footer-action").filter({ hasText: "Install app" });
 // by its words or by a name alone (an icon-only button labelled Install app counts too)
 const assertNoSidebarInstall = async (page: Page): Promise<void> => {
   const sidebar = page.locator(".sidebar-shell");
@@ -114,7 +112,7 @@ try {
       await send(cdp, "PWA.uninstall", { manifestId });
       console.log(`PASS spike: PWA.install and PWA.uninstall accepted in ${headless ? "headless" : "headed"} Chromium ${browser.version()}`);
 
-      // (a) before the install, with no prompt held: Settings says how to install
+      // (a) before the install, with no prompt held: no sidebar Install app; Settings says how to install
       const tab = watch(context.pages()[0] ?? await context.newPage());
       await tab.goto(manifestId);
       await ready(tab);
@@ -123,37 +121,7 @@ try {
       assert.equal((await tabRow.locator(".settings-description").textContent())?.trim(), CHROMIUM_HELP, "Settings > Install says how to install");
       assert.equal(await installButton(tabRow).count(), 0, "no Install app button without a prompt");
       await shot(tab, "settings-help");
-      console.log("PASS (a) before install, without a prompt: Settings > Install shows the steps");
-
-      // (a1) this fork keeps the sidebar's Install app, with its ×, until a later commit (docs/fork.md):
-      // without a prompt its click shows the help instead
-      await tab.keyboard.press("Escape");
-      await tab.locator(".settings-dialog").waitFor({ state: "detached" });
-      await sidebarInstall(tab).click();
-      const help = tab.locator(".sidebar-install-help");
-      await help.waitFor();
-      assert.equal(await help.getAttribute("role"), "status");
-      assert.notEqual((await help.textContent())?.trim() ?? "", "", "the help says how to install");
-      assert.equal(await sidebarInstall(tab).getAttribute("aria-expanded"), "true");
-      assert.equal(await tab.evaluate(() => (window as unknown as { __prompts?: number }).__prompts), undefined, "no prompt was attempted");
-      console.log("PASS (a1) without a prompt, the sidebar's Install app shows the help text");
-
-      // (a3) its × hides Install app and its help in this browser; Settings → Devices and PCs turns it back on
-      await tab.getByRole("button", { name: "Hide Install app", exact: true }).click();
-      await sidebarInstall(tab).waitFor({ state: "detached" });
-      assert.equal(await tab.locator(".sidebar-install-help").count(), 0, "the help goes with it");
-      await tab.reload();
-      await ready(tab);
-      assert.equal(await sidebarInstall(tab).count(), 0, "hidden after a reload too");
-      await installRow(tab);
-      const sidebarSwitch = tab.locator(".settings-dialog").getByRole("switch", { name: "Install app in the sidebar", exact: true });
-      assert.equal(await sidebarSwitch.getAttribute("aria-checked"), "false");
-      await sidebarSwitch.click();
-      assert.equal(await sidebarSwitch.getAttribute("aria-checked"), "true");
-      await tab.keyboard.press("Escape");
-      await tab.locator(".settings-dialog").waitFor({ state: "detached" });
-      await sidebarInstall(tab).waitFor();
-      console.log("PASS (a3) the × hides Install app across a reload, and Settings > Devices and PCs shows it again");
+      console.log("PASS (a) before install, without a prompt: no sidebar Install app, Settings > Install shows the steps");
 
       // (a2) a prompt: Settings' Install app shows it, once, and no help
       const prompted = watch(await context.newPage());
@@ -166,11 +134,12 @@ try {
         });
         window.dispatchEvent(event);
       });
+      await assertNoSidebarInstall(prompted);
       const promptedRow = await installRow(prompted);
       assert.equal(await promptedRow.locator(".settings-description").count(), 0, "a prompt shows no help text");
       await installButton(promptedRow).click();
       await prompted.waitForFunction(() => (window as unknown as { __prompts?: number }).__prompts === 1);
-      console.log("PASS (a2) with a prompt: Settings' Install app calls prompt() exactly once and shows no help");
+      console.log("PASS (a2) with a prompt: no sidebar Install app, Settings' Install app calls prompt() exactly once and shows no help");
       await prompted.close();
 
       // (b) installed and launched in its own window: no Install app, Settings says Installed.
@@ -181,7 +150,6 @@ try {
       assert.equal(new URL(appWindow.url()).origin, origin);
       await ready(appWindow);
       assert.equal(await appWindow.evaluate(() => matchMedia("(display-mode: standalone)").matches), true, "the app runs in a standalone window");
-      await assertNoSidebarInstall(appWindow);
       const appRow = await installRow(appWindow);
       assert.equal(await appRow.locator(".settings-description").textContent(), "Installed");
       assert.equal(await installButton(appRow).count(), 0, "the app window offers no Install app");
@@ -198,7 +166,6 @@ try {
       try { await relatedRow.locator(".settings-description", { hasText: /^Installed$/ }).waitFor({ timeout: 10_000 }); }
       catch (error) { throw new Error("(c) Settings in the tab of the installed app does not say Installed", { cause: error }); }
       assert.equal(await installButton(relatedRow).count(), 0, "the tab of the installed app offers no Install app");
-      await assertNoSidebarInstall(related);
       await shot(related, "tab");
       console.log("PASS (c) a tab of the installed origin: getInstalledRelatedApps() has 1 entry, no sidebar Install app, Settings > Install says Installed");
 
@@ -211,7 +178,7 @@ try {
       const afterRow = await installRow(after);
       assert.equal((await afterRow.locator(".settings-description").textContent())?.trim(), CHROMIUM_HELP, "Settings > Install shows the steps again");
       assert.equal(await installButton(afterRow).count(), 0, "no Install app button without a prompt after the uninstall");
-      console.log("PASS (d) after uninstall, a new tab: Settings > Install shows the steps, getInstalledRelatedApps() is empty");
+      console.log("PASS (d) after uninstall, a new tab: no sidebar Install app, Settings > Install shows the steps, getInstalledRelatedApps() is empty");
       assert.deepEqual(errors, [], "no page error");
     } finally {
       await context.close();

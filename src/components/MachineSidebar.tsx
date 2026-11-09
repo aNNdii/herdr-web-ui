@@ -7,8 +7,6 @@ import { answerMachineSetup, machineRequest } from "../lib/api.ts";
 import { describeProgress } from "../lib/bridgeProgress.ts";
 import { keepDismissed, noticeKey, readDismissed, waitingMachines, writeDismissed } from "../lib/machineNotice.ts";
 import type { AppActions } from "../lib/actions.ts";
-import { useInstallPrompt } from "../lib/install.ts";
-import { useSettings } from "../lib/settings.ts";
 import { Sidebar } from "./Sidebar.tsx";
 import { AgentSidebar } from "./AgentSidebar.tsx";
 import { SidebarSplit } from "./SidebarSplit.tsx";
@@ -25,6 +23,7 @@ import "./Machines.css";
 import "./SidebarSections.css";
 import { useT } from "../lib/i18n.ts";
 import { FoundHerdrChoices } from "./FoundHerdrChoices.tsx";
+import { useSettings } from "../lib/settings.ts";
 import { useAnnouncedText } from "../lib/useAnnouncedText.ts";
 import { machineErrorText, saysHerdrAway, sshFailure } from "../lib/userError.ts";
 import { useMediaQuery } from "../lib/useMediaQuery.ts";
@@ -62,11 +61,6 @@ export const STATE_WORD: Readonly<Record<MachineState, string>> = {
 interface Props { machines: Machine[]; /** every PC of the roster, the hidden ones too: Manage PC's Hide on this device keeps those hidden (lib/hiddenMachines.ts) */ allMachines?: Machine[]; selectedMachineId: string; selectedPaneId: string | null; activity: SidebarActivity; actions: AppActions; watching?: boolean; /** whether the Herdr app's window owns a PC's workspaces (lib/machineContext.tsx AppLayoutContext); none without it */ appLayout?: (machineId: string) => LayoutOffer; /** a phone's drawer is out: closing it clears the filter */ drawerOpen?: boolean; /** counts the command palette's Filter workspaces and agents: each new count shows the field and focuses it */ filterRequest?: number; onSelect(machineId: string, paneId: string | null): void; onNew(machineId: string): void; onSetup(machine: Machine, update?: boolean): void; /** a sign-in tab the usage popover opened */ onUsageLogin(paneId: string): void }
 export function MachineSidebar(props: Props) {
   const t = useT();
-  const { canInstall, installed, install, help } = useInstallPrompt();
-  const [installHelpOpen, setInstallHelpOpen] = useState(false);
-  const { settings, update } = useSettings();
-  // hidden with its × or in Settings → Phone & devices, which turns it back on
-  const offerInstall = !installed && settings.showInstallApp;
   const activity = props.activity;
   // the filter's query lives here and nowhere else: not in storage, not in the address, not past this
   // mount (lib/sidebarFilter.ts). The branch each roster row says comes up from the rosters, which read it.
@@ -97,6 +91,7 @@ export function MachineSidebar(props: Props) {
   // Settings → Appearance → Sidebar filter off leaves the field out until the palette's Filter workspaces and
   // agents asks for it (`filterRequest`); it stays while it holds words, and goes on its close, Escape in it
   // empty, the focus leaving the sidebar while it is empty, or the phone's drawer closing
+  const { settings } = useSettings();
   const shell = useRef<HTMLDivElement>(null);
   const [filterAsked, setFilterAsked] = useState(false);
   const closable = !settings.sidebarFilter && filterAsked;
@@ -292,12 +287,8 @@ export function MachineSidebar(props: Props) {
           <ArrowLeftRight aria-hidden="true" />
         </button>
       )}
-      {/* browsers without an install prompt (iOS, plain HTTP) get the steps instead */}
-      {offerInstall && <div className="sidebar-footer-row">
-        <button className="btn btn-ghost sidebar-footer-action" aria-expanded={canInstall ? undefined : installHelpOpen} onClick={() => { if (canInstall) void install(); else setInstallHelpOpen(!installHelpOpen); }}><Download aria-hidden="true" />{t("Install app")}</button>
-        <button className="btn btn-ghost sidebar-footer-action sidebar-footer-dismiss" aria-label={t("Hide Install app")} title={t("Hide Install app")} onClick={() => { setInstallHelpOpen(false); update({ showInstallApp: false }); }}><X aria-hidden="true" /></button>
-      </div>}
-      {offerInstall && !canInstall && installHelpOpen && <p className="sidebar-install-help" role="status">{help}</p>}
+      {/* no Install app here: a page knows it is installed only in the app's own window, so a row kept
+          showing in every tab. Settings → Phone & devices → Install offers it (SettingsDialog). */}
       <div className="sidebar-footer-row">
         <button className="btn btn-ghost sidebar-footer-action sidebar-footer-settings" aria-label={t("Settings")} title={t("Settings (⌘⇧,)")} onClick={props.actions.openSettings}><Settings aria-hidden="true" /></button>
         <UsageMeters watching={props.watching} onLocalLogin={props.watching ? undefined : props.onUsageLogin} />

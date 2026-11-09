@@ -10,9 +10,9 @@ import { CHAT_WIDTHS, DICTATION_LANGUAGES, DIFF_STYLES, VOICE_BUTTONS,
   TERMINAL_WHEEL_SPEED_MIN, TERMINAL_WHEEL_SPEED_MAX, CHAT_FONT_MIN, CHAT_FONT_MAX,
   type Settings as CurrentSettings, type ChatWidth, type DictationLanguage, type VoiceButton } from "./settings.ts";
 type Settings = Omit<CurrentSettings, "opencodeParentEnds" | "ompHeldFiles" | "restoreReplacedServer" | "keyBarExpanded" | "herdrPrefixKeys" | "darkTheme" | "lightTheme" | "fileOpen" | "filesPanel" | "filesDocuments" | "webLinks" | "reuseExternalLinkTab" | "claudeLaunchMode" | "codexLaunchMode" | "claudeLaunchModel" | "claudeLaunchEffort" | "codexLaunchModel" | "codexLaunchEffort" | "followHerdrFocus" | "sidebarPeek" | "sidebarBackgroundWorkspaces" | "codexDrag" | "composerNewTabButton" | "composerArtifacts" | "composerPasteSend" | "composerBtw" | "uiFontFamily" | "terminalMirrorWrap" | "sidebarFilter" | "sidebarContext" | "sidebarAgentTree" | "foldHelpers" | "pcLoad" | "historyPrompts" | "expandThinking" | "foldWork" | "chatRequestDetails" | "autoTabNames" | "voiceEngine" | "agentGroups" | "agentGroupSort" | "terminalImages" | "terminalAttachButton" | "agentLocks" | "lockedAgents" | "terminalKeyboardOnRequest" | "terminalFoldKeyBar" | "markdownOutline" | "fileFontSize" | "fileFontBase" | "agentNamedGroups" | "agentGroupNames" | "agentGroupOf" | "editTextFiles" | "reopenFileOnReturn"
-  // this fork's comment, suggestion-menu and sidebar Install app settings came after the pinned version, so its tabs never stored them
+  // this fork's comment and suggestion-menu settings came after the pinned version, so its tabs never stored them
   | "comments" | "commentMode" | "commentLayout" | "commentOnSelect"
-  | "codeCommentLineClick" | "mobileCommentGesture" | "mobileCommentInput" | "suggestAgents" | "suggestSkills" | "suggestBuiltins" | "showInstallApp"> & {
+  | "codeCommentLineClick" | "mobileCommentGesture" | "mobileCommentInput" | "suggestAgents" | "suggestSkills" | "suggestBuiltins"> & {
   /** Settings → Chat → Markdown width, which this pinned version still kept (removed from Settings since) */
   markdownWidth: "readable" | "full";
   /** Settings → Alerts → In the app, which this pinned version still kept (removed from Settings since) */

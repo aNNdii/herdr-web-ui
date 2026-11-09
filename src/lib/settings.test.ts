@@ -441,14 +441,6 @@ it("keeps a tab's pane while out of use until this device turns the pause on", (
   expect(sanitizeSettings({ releasePaneAway: "true" }).releasePaneAway).toBe(false);
 });
 
-it("offers Install app in the sidebar until this device hides it", () => {
-  expect(DEFAULT_SETTINGS.showInstallApp).toBe(true);
-  expect(SETTING_SCOPE.showInstallApp).toBe("device");
-  expect(sanitizeSettings({}).showInstallApp).toBe(true);
-  expect(sanitizeSettings({ showInstallApp: false }).showInstallApp).toBe(false);
-  expect(sanitizeSettings({ showInstallApp: "false" }).showInstallApp).toBe(true);
-});
-
 it("leaves herdr's focus alone until this device asks to follow it, and keeps that choice its own", () => {
   expect(DEFAULT_SETTINGS.followHerdrFocus).toBe(false);
   expect(sanitizeSettings({}).followHerdrFocus).toBe(false);

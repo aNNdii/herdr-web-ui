@@ -407,8 +407,6 @@ const BASE: Record<string, string> = {
   "There is no pane on that side.": "その方向にペインはありません。",
   "Split pane right": "ペインを右に分割",
   "Split pane down": "ペインを下に分割",
-  // the sidebar's Install app, which this fork keeps (MachineSidebar.tsx), and Settings' Install row
-  "Install app": "アプリをインストール",
   // ---- file viewer and comments (fork) ----
   "Comment": "コメント",
   "Write a comment…": "コメントを書く…",

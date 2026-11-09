@@ -409,8 +409,6 @@ const BASE: Record<string, string> = {
   "There is no pane on that side.": "该方向没有窗格。",
   "Split pane right": "向右拆分窗格",
   "Split pane down": "向下拆分窗格",
-  // the sidebar's Install app, which this fork keeps (MachineSidebar.tsx), and Settings' Install row
-  "Install app": "安装应用",
   // ---- file viewer and comments (fork) ----
   "Comment": "评论",
   "Write a comment…": "写评论…",

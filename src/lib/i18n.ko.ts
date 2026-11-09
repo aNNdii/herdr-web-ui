@@ -405,8 +405,6 @@ const BASE: Record<string, string> = {
   "There is no pane on that side.": "해당 방향에 패널이 없습니다.",
   "Split pane right": "패널을 오른쪽으로 분할",
   "Split pane down": "패널을 아래로 분할",
-  // the sidebar's Install app, which this fork keeps (MachineSidebar.tsx), and Settings' Install row
-  "Install app": "앱 설치",
   // ---- file viewer and comments (fork) ----
   "Comment": "댓글",
   "Write a comment…": "댓글 쓰기…",

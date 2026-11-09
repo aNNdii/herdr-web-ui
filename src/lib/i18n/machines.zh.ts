@@ -115,7 +115,6 @@ export const MACHINES_ZH: Record<string, string> = {
   "No workspaces or agents match": "没有匹配的工作区或代理",
   "No workspaces or agents match on the PCs that answered": "已响应的 PC 上没有匹配的工作区或代理",
   "Try other words, or clear the filter.": "换个词试试，或清除筛选。",
-  "Hide Install app": "隐藏“安装应用”",
   "Updating this PC's Ovis": "正在更新此 PC 的 Ovis",
   "This PC's Ovis is older than this app": "此 PC 的 Ovis 比本应用旧",
   "Updating this PC's Ovis failed": "更新此 PC 的 Ovis 失败",

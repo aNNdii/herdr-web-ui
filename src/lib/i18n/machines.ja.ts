@@ -115,7 +115,6 @@ export const MACHINES_JA: Record<string, string> = {
   "No workspaces or agents match": "一致するワークスペースやエージェントはありません",
   "No workspaces or agents match on the PCs that answered": "応答した PC には一致するワークスペースやエージェントはありません",
   "Try other words, or clear the filter.": "別の言葉で探すか、絞り込みを消去してください。",
-  "Hide Install app": "「アプリをインストール」を隠す",
   "Updating this PC's Ovis": "この PC の Ovis を更新しています",
   "This PC's Ovis is older than this app": "この PC の Ovis はこのアプリより古いバージョンです",
   "Updating this PC's Ovis failed": "この PC の Ovis を更新できませんでした",

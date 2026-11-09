@@ -1033,23 +1033,7 @@ button.sidebar-section-label:focus-visible { outline-offset: calc(var(--ring-off
   padding: 0;
 }
 
-/* Install app's ×: a square the gear's size after it, Install app taking the rest of the row */
-.sidebar-footer-row > .sidebar-footer-dismiss {
-  flex: 0 0 auto;
-  width: var(--side-box);
-  padding: 0;
-}
-
-.sidebar-footer-settings svg,
-.sidebar-footer-dismiss svg { margin-inline: auto; }
-
-/* fork: the help under the sidebar's Install app row (MachineSidebar.tsx, showInstallApp) */
-.sidebar-install-help {
-  margin: 0;
-  padding: 0 var(--space-2) var(--space-1) var(--side-box);
-  color: var(--text-dim);
-  font-size: var(--fs-xs);
-}
+.sidebar-footer-settings svg { margin-inline: auto; }
 
 @media (pointer: coarse) {
   .sidebar-shell {
