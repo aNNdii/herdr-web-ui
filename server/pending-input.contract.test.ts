@@ -1317,7 +1317,7 @@ describe("connection-owned pending input", () => {
     const f = await setup("no-agent", "plain");
     expect((await sessionSnapshot()).panes.find((pane) => pane.pane_id === f.pane)?.agent ?? null).toBeNull();
     f.socket.send({ type: "submit", id: 1, pane_id: f.pane, text: "for the agent", payload: "unused", delivery: "queue" });
-    expect(await f.socket.result(1)).toMatchObject({ ok: false, code: "agent_not_found", typed: false });
+    expect(await f.socket.result(1)).toMatchObject({ ok: false, code: "agent_not_ready", typed: false });
     expect(f.bytes()).toBe("");
     expect(f.socket.seen.some((frame) => frame.type === "pending-messages")).toBe(false);
   }, 30_000);

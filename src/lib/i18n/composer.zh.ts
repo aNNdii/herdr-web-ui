@@ -182,8 +182,6 @@ export const COMPOSER_ZH: Record<string, string> = {
   "Enter": "Enter",
   "Not inserted: this PC has not said yet what it supports. Insert it again.": "未插入：这台电脑尚未告知它支持的功能。请重新插入。",
   "Not inserted: the line holds a control character. Remove it, then insert again.": "未插入：输入框中有控制字符。删除后请重新插入。",
-  "Not sent: comments go to an agent only, and none runs in this pane now.": "未发送：评论只发送给代理，而此窗格中现在没有运行的代理。",
-  "Not sent: the agent is busy with questions it queued. Nothing was typed. Send it again when it is ready.": "未发送：代理正忙于它排队的问题。未输入任何内容。待其就绪后请再次发送。",
   "Not sent: the agent is not ready for a message yet. Nothing was typed. Send it again when it is ready.": "未发送：代理尚未准备好接收消息。未输入任何内容。待其就绪后请再次发送。",
   "Comments to send: {count}": "待发送的评论：{count}",
   "{count} comment on the reply": "对回复的评论 {count} 条",

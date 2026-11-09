@@ -173,8 +173,9 @@ export function openCodeRefusalNote(code: string, message: string, tt: (text: st
 /**
  * Why a composer message did not go (SubmitResult's code): the composer keeps the text and says this.
  * `agent`: the pane's agent, which names the input an input_draft refusal is about (Claude Code's when unknown).
- * `agentOnly`: the message was sent to an agent only (it carries comments), so a missing or not-ready
- * agent is why it did not go; without it, those codes read as the bridge's own message.
+ * `agentOnly`: the message was sent to an agent only (it carries comments), so an agent not ready yet
+ * is why it did not go; without it, that code reads as the bridge's own message. No agent at all is
+ * upstream's no-agent refusal (`agent_not_ready` with NO_AGENT_MESSAGE) either way.
  */
 export function submitNote(code: string, message: string, agent?: string | null, agentOnly = false): string {
   const opencode = openCodeRefusalNote(code, message);
@@ -185,10 +186,8 @@ export function submitNote(code: string, message: string, agent?: string | null,
   if (code === "agent_blocked") return t("Not sent: the agent is waiting for an answer in the terminal. Answer it first.");
   if (code === "read_only") return t("Not sent: this view only watches the pane.");
   if (code === "held_input") return t("Not sent: send or discard the held input first.");
-  if (agentOnly && code === "agent_not_found") return t("Not sent: comments go to an agent only, and none runs in this pane now.");
   // upstream's no-agent refusal (below) keeps its own words
   if (agentOnly && code === "agent_not_ready" && message !== NO_AGENT_MESSAGE) return t("Not sent: the agent is not ready for a message yet. Nothing was typed. Send it again when it is ready.");
-  if (code === "agent_queue_busy") return t("Not sent: the agent is busy with questions it queued. Nothing was typed. Send it again when it is ready.");
   if (code === "input_draft" && agent === "hermes") return t("Not sent: Hermes' input in the terminal is not empty. Send or clear it there, then send this message.");
   if (code === "input_draft") return t("Not sent: Claude Code's input box in the terminal is not empty. Send or clear it there, then send this message.");
   if (code === "rewind_dialog_open") return t("Not sent: Claude Code's rewind dialog is open in the terminal. Finish or close it there (Esc), then send this message.");

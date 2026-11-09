@@ -190,15 +190,11 @@ describe("composerMessage and submitNote", () => {
   });
 
   it("names an agent-only message's refusal by the pane's condition, and a plain one's by the bridge's message", () => {
-    const none = "Not sent: comments go to an agent only, and none runs in this pane now.";
     const notReady = "Not sent: the agent is not ready for a message yet. Nothing was typed. Send it again when it is ready.";
-    const busy = "Not sent: the agent is busy with questions it queued. Nothing was typed. Send it again when it is ready.";
-    expect(submitNote("agent_not_found", "x", undefined, true)).toBe(none);
     expect(submitNote("agent_not_ready", "x", undefined, true)).toBe(notReady);
-    expect(submitNote("agent_queue_busy", "x", undefined, true)).toBe(busy);
-    expect(submitNote("agent_queue_busy", "x")).toBe(busy);
-    // a plain queued message whose agent left, or whose input state is not known
-    expect(submitNote("agent_not_found", "No agent is in front of this pane now; nothing was typed")).toBe("Not sent: No agent is in front of this pane now; nothing was typed");
+    // no agent at all: upstream's no-agent refusal, the same words with comments or without
+    expect(submitNote("agent_not_ready", NO_AGENT_MESSAGE, undefined, true)).toBe(submitNote("agent_not_ready", NO_AGENT_MESSAGE));
+    // a plain message whose agent's input state is not known
     expect(submitNote("agent_not_ready", "The agent's current input state is not known")).toBe("Not sent: The agent's current input state is not known");
   });
 
@@ -213,8 +209,7 @@ describe("composerMessage and submitNote", () => {
     const legacy = (code: string) => submitNotTyped({ code });
     expect(["submit_timeout", "agent_blocked", "read_only"].map(legacy)).toEqual([true, true, true]);
     expect(legacy("agent_not_ready")).toBe(true);
-    // this bridge's own refusals always say typed:false, so they are not on the list; upstream's socket refusal is
-    expect(["agent_not_found", "agent_queue_busy"].map(legacy)).toEqual([false, false]);
+    // upstream's socket refusal of a message for an agent alone
     expect(legacy("agent_only_unsupported")).toBe(true);
     expect(["disconnected", "timeout", "submit_failed"].map(legacy)).toEqual([false, false, false]);
     expect(["pending_input_unsupported", "invalid_delivery", "invalid_submit_text", "pending_limit"].map(legacy)).toEqual([true, true, true, true]);
@@ -266,7 +261,7 @@ describe("composerMessage and submitNote", () => {
     expect(submitRefusal("input_draft", "x")).toBe(submitNote("input_draft", "x"));
     expect(submitRefusal("agent_blocked", "x", "ㅔ")).toBe(submitNote("agent_blocked", "x"));
     // a message with comments keeps its agent-only notes
-    expect(submitRefusal("agent_not_found", "x", undefined, undefined, undefined, true)).toBe(submitNote("agent_not_found", "x", undefined, true));
+    expect(submitRefusal("agent_not_ready", "x", undefined, undefined, undefined, true)).toBe(submitNote("agent_not_ready", "x", undefined, true));
   });
 
   it("names the draft after a Send it that did not go, and offers another draft's buttons", () => {

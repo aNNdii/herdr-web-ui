@@ -182,8 +182,6 @@ export const COMPOSER_JA: Record<string, string> = {
   "Enter": "Enter",
   "Not inserted: this PC has not said yet what it supports. Insert it again.": "未挿入: この PC が対応する機能をまだ知らせていません。もう一度挿入してください。",
   "Not inserted: the line holds a control character. Remove it, then insert again.": "未挿入: 入力欄に制御文字があります。削除してからもう一度挿入してください。",
-  "Not sent: comments go to an agent only, and none runs in this pane now.": "未送信: コメントはエージェントにのみ送信されますが、このペインでは今エージェントが動いていません。",
-  "Not sent: the agent is busy with questions it queued. Nothing was typed. Send it again when it is ready.": "未送信: エージェントはキューに入れた質問の対応中です。何も入力されていません。準備ができたらもう一度送信してください。",
   "Not sent: the agent is not ready for a message yet. Nothing was typed. Send it again when it is ready.": "未送信: エージェントはまだメッセージを受け取る準備ができていません。何も入力されていません。準備ができたらもう一度送信してください。",
   "Comments to send: {count}": "送信するコメント: {count}",
   "{count} comment on the reply": "応答へのコメント {count} 件",

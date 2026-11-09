@@ -182,8 +182,6 @@ export const COMPOSER_KO: Record<string, string> = {
   "Enter": "Enter",
   "Not inserted: this PC has not said yet what it supports. Insert it again.": "넣지\u00a0못했습니다: 이\u00a0PC가\u00a0아직\u00a0지원하는\u00a0기능을\u00a0알려\u00a0주지\u00a0않았습니다. 다시\u00a0넣으세요.",
   "Not inserted: the line holds a control character. Remove it, then insert again.": "넣지\u00a0못했습니다: 입력창에\u00a0제어\u00a0문자가\u00a0있습니다. 지운\u00a0뒤\u00a0다시\u00a0넣으세요.",
-  "Not sent: comments go to an agent only, and none runs in this pane now.": "보내지 않음: 댓글은 에이전트에게만 보내지는데, 지금 이 패널에서 실행 중인 에이전트가 없습니다.",
-  "Not sent: the agent is busy with questions it queued. Nothing was typed. Send it again when it is ready.": "보내지 않음: 에이전트가 대기열에 넣어 둔 질문 때문에 바쁩니다. 아무것도 입력되지 않았습니다. 준비되면 다시 보내세요.",
   "Not sent: the agent is not ready for a message yet. Nothing was typed. Send it again when it is ready.": "보내지 않음: 에이전트가 아직 메시지를 받을 준비가 되지 않았습니다. 아무것도 입력되지 않았습니다. 준비되면 다시 보내세요.",
   "Comments to send: {count}": "보낼 댓글: {count}",
   "{count} comment on the reply": "답변에 댓글 {count}개",

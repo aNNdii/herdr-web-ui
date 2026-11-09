@@ -2851,7 +2851,7 @@ class DemoSocket extends EventTarget {
     if (!this.attached.has(paneId)) return "not_attached";
     const pane = paneOf(paneId);
     if (!pane) return "pane_not_found";
-    if (!(pane.agent ?? pane.agent_session?.agent)) return "agent_not_found";
+    if (!(pane.agent ?? pane.agent_session?.agent)) return "agent_not_ready";
     if (keyOfPane.get(paneId) === "web" && promptOpen) return "agent_blocked";
     if (pane.agent_status === "blocked") return "agent_blocked";
     if (!["working", "idle", "done"].includes(pane.agent_status)) return "agent_not_ready";
