@@ -73,6 +73,9 @@ const tagVersion = (tag: string) => tag.replace(/^(beta\/)?v/, "");
  */
 export function latestTag(tags: string[], channel: UpdateChannel): string | undefined {
   let best: { tag: string; key: number[] } | undefined;
+  // fork: where the fork's vX.Y.Z-next.N releases are, they are the beta channel's pre-releases: a
+  // beta/* tag (upstream's beta.yml run on the fork's plain-upstream main) never outranks them
+  if (tags.some((tag) => RELEASE_TAG.exec(tag)?.[4])) tags = tags.filter((tag) => !tag.startsWith("beta/"));
   for (const tag of tags) {
     const release = RELEASE_TAG.exec(tag);
     const match = release ?? (channel === "beta" ? BETA_TAG.exec(tag) : null);

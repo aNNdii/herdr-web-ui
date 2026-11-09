@@ -25,8 +25,8 @@ from 1 ([`scripts/fork/next-release.ts`](../scripts/fork/next-release.ts) picks 
 the notes). git's version sort puts `v0.4.11-next.2` after upstream's `v0.4.11` and before `v0.4.12`,
 which is the order the fork's installs follow (`RELEASE_TAG` in `server/updater.ts`).
 
-- Never push a `v*` or `remote-v*` tag to the fork by hand: installs update from tags alone. That
-  includes upstream's own `vX.Y.Z` tags, which `git fetch upstream` brings in and `git push --tags`
+- Never push a `v*`, `remote-v*` or `beta/*` tag to the fork by hand: installs update from tags
+  alone. That includes upstream's own `vX.Y.Z` (and `beta/vX.Y.Z-beta.N`) tags, which `git fetch upstream` brings in and `git push --tags`
   would carry over, moving every install onto plain upstream. The
   [`pre-push`](../scripts/fork/pre-push) hook refuses such a push.
 - The repository variable `NEXT_AUTO_RELEASE=false` leaves pushes unreleased; **Actions → Fork next
@@ -118,7 +118,10 @@ On GitHub (Settings of the fork):
 - **Actions:** keep **CI** and the two fork workflows; disable upstream's **Website** (deploys
   upstream's site after CI on `main`), **Release** (tags plain `vX.Y.Z` versions, which would move
   every fork install onto plain upstream), **Remote PC bundles** (builds and publishes upstream's
-  `remote-v*` bundles) and **Windows install** (installs upstream's latest release every week):
+  `remote-v*` bundles), **Windows install** (installs upstream's latest release every week),
+  **Beta** (`beta.yml`: tags `beta/vX.Y.Z-beta.N` on `main`, which here is plain upstream, for the
+  beta update channel, where the fork's `-next.N` releases are the pre-releases) and **CLA**
+  (`cla.yml`: asks every pull request's author to sign upstream's CLA):
   `gh workflow disable <file> -R aNNdii/herdr-web-ui`, `gh workflow enable` to undo.
 
 Locally, once per clone:

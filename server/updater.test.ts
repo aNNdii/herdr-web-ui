@@ -1539,6 +1539,13 @@ describe("update channels", () => {
     expect(latestTag(["beta/v0.4.23-beta.2"], "stable")).toBeUndefined();
   });
 
+  it("fork: on the beta channel, never takes an upstream beta/* tag over the fork's -next releases", () => {
+    const tags = ["v0.5.1", "v0.5.1-next.3", "beta/v0.5.2-beta.1"];
+    expect(latestTag(tags, "beta")).toBe("v0.5.1-next.3");
+    expect(latestTag(tags, "stable")).toBe("v0.5.1-next.3");
+    expect(latestTag([...tags, "v0.5.2"], "beta")).toBe("v0.5.2");
+  });
+
   it("reads the channel from OVIS_UPDATE_CHANNEL first, then the state dir's file, else stable", () => {
     const appState = mkdtempSync(join(tmpdir(), "ovis-channel-"));
     try {
