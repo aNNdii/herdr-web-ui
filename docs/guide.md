@@ -266,7 +266,8 @@ events reported since the session started, and whether its manager still runs an
 pane's background list and running count then follow pi, with the session file as their history:
 an agent pi no longer runs stops counting (a `/reload` aborts them all without writing to the
 session), one another extension, the scheduler or an @mention started shows while it runs, and a
-workflow the file still has running ends once pi has run nothing on two polls ten seconds apart.
+workflow the file still has running ends once pi has run nothing on two polls a minute apart (a
+workflow's `gate` or a pause that leaves pi idle for longer ends it, too).
 The answer counts only from the pane's own pi process, for the session it writes. Without the
 extension, with one installed before this, or on Windows, the session file alone is read, and
 what ran at a `/reload` stays listed as running until pi restarts. Checked with pi-subagents 0.23.1.

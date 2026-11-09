@@ -25,12 +25,20 @@ import { userHome } from "./user-home.ts";
  * idle (`running: false`) on two polls at least IDLE_CONFIRM_MS apart, with every answer between
  * them idle and nothing started, ended or spent in between. That closes a `/reload` (which aborts
  * every workflow and writes nothing) without a stage's gap ending a workflow that goes on.
+ *
+ * The window is a minute, not seconds: `hasRunning()` counts running and queued agents, a workflow's
+ * included, and a script has no filesystem or network of its own, so between two `agent()` calls
+ * it only computes. But an agent's `gate` (a shell command, often a test suite, up to ten minutes)
+ * runs after a non-isolated child completed, and a paused run starts nothing once its agents
+ * finished: the manager is idle meanwhile. A minute covers most gates; a longer gate or pause still
+ * ends the workflow as lost. A false end is the worse error (it ends a background wait and fires a
+ * done alert early), a late one only keeps a `/reload`'s aborted workflow counted for that minute.
  */
 
 /** how long an answer may take: the extension answers from memory */
 export const LIVE_READ_MS = 800;
 /** how long the manager must stay idle before what the file alone still runs counts as ended */
-export const IDLE_CONFIRM_MS = 10_000;
+export const IDLE_CONFIRM_MS = 60_000;
 const MAX_AGENTS = 1000;
 const MAX_WORKFLOWS = 200;
 

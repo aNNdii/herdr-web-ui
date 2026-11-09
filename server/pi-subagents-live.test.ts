@@ -285,7 +285,7 @@ describe("PiSubagentStatus with the pi process's answers", () => {
     return { status, changes, tick: (ms: number) => { time += ms; } };
   }
 
-  it("ends what a /reload aborted: agents at once, a workflow after two idle polls ten seconds apart", async () => {
+  it("ends what a /reload aborted: agents at once, a workflow after two idle polls a minute apart", async () => {
     const pi = piSession();
     pi.prompt(1);
     pi.background(2, "a1");
@@ -326,6 +326,22 @@ describe("PiSubagentStatus with the pi process's answers", () => {
       await settle();
       expect(status.countOf("p1")).toBe(1);
     }
+  });
+
+  it("keeps a workflow through a gate of half a minute, while pi runs nothing", async () => {
+    const pi = piSession();
+    pi.workflow(3, "wf_1");
+    // a non-isolated agent completed, and its gate (a test suite) runs: the manager is idle
+    const { status, tick } = tracker(pi.path, () => answer({ running: false, workflows: [{ id: "wf_1", lastUsageAt: 1, agents: 1 }] }));
+    await status.refresh([pane("p1")]);
+    await settle();
+    for (let poll = 0; poll < 6; poll++) {
+      tick(5_000);
+      status.poll();
+      await settle();
+      expect(status.countOf("p1")).toBe(1);
+    }
+    expect(IDLE_CONFIRM_MS).toBeGreaterThanOrEqual(30_000);
   });
 
   it("counts from the file alone without an answer, as before", async () => {

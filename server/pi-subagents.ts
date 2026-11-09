@@ -51,8 +51,8 @@ import { plain, READ_BUDGET, readLines, RECENT_LIMIT, RECENT_MS, remember, START
  * - an agent running in the process that no row shows yet (an RPC, scheduler or @mention spawn, a
  *   result pi has not written) is added, with the process's start, tool uses and tokens.
  * - workflows stay the file's: no event tells a workflow's end. Once the process confirmed its
- *   manager idle (`running: false` on two polls at least ten seconds apart, nothing happening in
- *   between), what the file still has running is lost; that, too, ends a running foreground call.
+ *   manager idle (`running: false` on two polls at least a minute apart, nothing happening in
+ *   between; a `gate` or a pause can leave it idle for a while), what the file still has running is lost; that, too, ends a running foreground call.
  * Without a view (no extension, one from before its route, Windows, pi-subagents not loaded) the
  * file alone speaks, as before.
  *
