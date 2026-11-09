@@ -47,7 +47,8 @@ import { plain, READ_BUDGET, readLines, RECENT_LIMIT, RECENT_MS, remember, START
  *   started the roster empty). An agent the file has ended that the process ran again since (an
  *   @mention or RPC resume) runs from that start.
  * - a foreground `Agent` call, keyed by its call id, is the process's running agent of its
- *   description (and type). Without one it runs as the file says, until the idle rule ends it.
+ *   description (and type); a call without a description, the one free agent of its type where
+ *   exactly one fits. Without one it runs as the file says, until the idle rule ends it.
  * - an agent running in the process that no row shows yet (an RPC, scheduler or @mention spawn, a
  *   result pi has not written) is added, with the process's start, tool uses and tokens.
  * - workflows stay the file's: no event tells a workflow's end. Once the process confirmed its
@@ -815,12 +816,17 @@ function view(index: SessionIndex, session: PiSession): { tasks: Item<OmoTask, T
     return task(facts, null, true);
   });
   const free = (): PiSubagentsLiveAgent[] => [...live?.agents.values() ?? []].filter((agent) => agent.status === "running" && !shown.has(agent.id));
-  for (const call of index.last?.open ?? []) {
-    // keyed by its call: the running agent of its description (and type) is this call's, not a row of its own
-    const agent = free().find((candidate) => candidate.description === (call.title ?? undefined) && (call.type === null || candidate.type === call.type));
-    if (agent) shown.add(agent.id);
-    tasks.push(task(call, null, !agent && idleLost(call.seen)));
+  const open = index.last?.open ?? [];
+  // keyed by its call: the running agent of its description (and type) is this call's, not a row of its own. A call
+  // without a description, matched after those with one, takes the free running agent of its type where exactly one fits
+  const matched = new Set<ForegroundCall>();
+  for (const described of [true, false]) for (const call of open) {
+    if ((call.title !== null) !== described) continue;
+    const fits = free().filter((candidate) => (call.type === null || candidate.type === call.type) && (!described || candidate.description === call.title));
+    const agent = described || fits.length === 1 ? fits[0] : undefined;
+    if (agent) { shown.add(agent.id); matched.add(call); }
   }
+  for (const call of open) tasks.push(task(call, null, !matched.has(call) && idleLost(call.seen)));
   // running in pi, not in the file yet: an RPC, scheduler or @mention spawn, or a result pi has not written
   for (const agent of free()) {
     const item = task({ id: agent.id, seen: 0, title: agent.description ?? null, type: agent.type ?? null, model: agent.model ?? null, start: { at: agent.startedAt, seq: Number.MAX_SAFE_INTEGER } }, null);

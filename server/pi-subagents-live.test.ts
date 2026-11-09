@@ -55,7 +55,9 @@ function piSession() {
       result(minute, `call_${agentId}`, "Agent", { description: `task ${agentId}`, subagentType: "Explore", status: "background", agentId });
     },
     /** a foreground Agent call still waiting for its result */
-    foreground: (minute: number, call: string, description: string) => assistant(minute, [{ id: call, name: "Agent", args: { description, subagent_type: "Explore", prompt: "look" } }]),
+    foreground: (minute: number, call: string, description: string | null) => assistant(minute, [{ id: call, name: "Agent", args: { ...(description === null ? {} : { description }), subagent_type: "Explore", prompt: "look" } }]),
+    /** foreground Agent calls of one message, still waiting for their results */
+    foregrounds: (minute: number, calls: [string, string | null][]) => assistant(minute, calls.map(([id, description]) => ({ id, name: "Agent", args: { ...(description === null ? {} : { description }), subagent_type: "Explore", prompt: "look" } }))),
     record: (minute: number, id: string, status: string) => entry(minute, { type: "custom", customType: "subagents:record", data: { id, type: "Explore", description: `task ${id}`, status, result: "done", startedAt: ms(minute) - 60_000, completedAt: ms(minute) } }),
     workflow(minute: number, runId: string) {
       assistant(minute, [{ id: `call_${runId}`, name: "SubagentWorkflow", args: { name: "review" } }]);
@@ -214,6 +216,31 @@ describe("the live view over the session file", () => {
     const live = view([agent("f1", "running", 2, { description: "check the tests" })]);
     expect(piSubagentCounts(pi.session(live)).running).toBe(1);
     expect(statuses(pi.session(live)).tasks).toEqual([["call_f1", "running"]]);
+  });
+
+  it("takes a foreground call without a description for pi's one running agent of its type, and leaves an ambiguous one", () => {
+    const pi = piSession();
+    pi.prompt(1);
+    pi.foreground(2, "call_f1", null);
+    piSubagentCounts(pi.session());
+    const one = view([agent("f1", "running", 2, { type: "Explore", description: "look around" })]);
+    expect(statuses(pi.session(one)).tasks).toEqual([["call_f1", "running"]]);
+    expect(piSubagentCounts(pi.session(one)).running).toBe(1);
+    // two that fit: which is the call's is not told, so none is taken
+    const two = view([agent("f1", "running", 2, { type: "Explore" }), agent("f2", "running", 2, { type: "Explore" })]);
+    expect(statuses(pi.session(two)).tasks.map(([id]) => id).sort()).toEqual(["call_f1", "f1", "f2"]);
+    // another type is not its agent
+    expect(statuses(pi.session(view([agent("p1", "running", 2, { type: "Plan" })]))).tasks.map(([id]) => id).sort()).toEqual(["call_f1", "p1"]);
+  });
+
+  it("matches a call with a description first, then one without to the agent left", () => {
+    const pi = piSession();
+    pi.prompt(1);
+    pi.foregrounds(2, [["call_bare", null], ["call_named", "check the tests"]]);
+    piSubagentCounts(pi.session());
+    const live = view([agent("n1", "running", 3, { type: "Explore", description: "check the tests" }), agent("b1", "running", 2, { type: "Explore", description: "general" })]);
+    expect(statuses(pi.session(live)).tasks.map(([id]) => id).sort()).toEqual(["call_bare", "call_named"]);
+    expect(piSubagentCounts(pi.session(live)).running).toBe(2);
   });
 
   it("loses the workflows and calls the file still runs once pi confirmed idle since before they were read", () => {
