@@ -135,7 +135,7 @@ import { useAddressBar } from "./lib/useAddressBar.ts";
 import { catchTypeAhead } from "./lib/typeAhead.ts";
 import { goalStatusWord, sessionMenuLines, sizeWords, useSessionStats, workedWords } from "./lib/sessionStats.ts";
 import { CommentsPanel } from "./components/CommentsPanel.tsx";
-import { useCommentsPanel } from "./lib/commentsPanel.ts";
+import { useCommentsPanelDock } from "./lib/commentsPanelDock.ts";
 
 // the review and its diff and tree libraries are their own chunk, loaded when it first opens
 const ReviewDialog = lazy(() => import("./components/ReviewDialog.tsx").then((module) => ({ default: module.ReviewDialog })));
@@ -247,8 +247,6 @@ export function App() {
   const { drawerOpen, setDrawerOpen, drawerOpenRef, wideScreen, sidebarCollapsed, setSidebarCollapsed, sidebarWidth, setSidebarWidth, filePanelAvailable, filePanelWidth, setFilePanelWidth, sidebarFilterRequest, openSidebarFilter } = useSidebarLayout({ initialLink });
   // Settings → Show the sidebar on hover: the collapsed sidebar over the pane for a moment (lib/sidebarPeek.ts)
   const { peeking: sidebarPeeking, sidebarRef: peekSidebarRef, toggleRef: peekToggleRef, toggleHandlers: peekToggleHandlers, sidebarHandlers: peekSidebarHandlers } = useSidebarPeek(settings.sidebarPeek && wideScreen && sidebarCollapsed);
-  // the comments panel (CommentsPanel.tsx): docked, it stands in the file panel's place
-  const commentsPanelState = useCommentsPanel();
   const { selectionRef, movingPanes } = useSelectionMark({ selectedMachineId, selectedPaneId });
   const { lens, setLens, viewPicks, setViewPicks } = usePaneLensState();
   const { split, setSplit, soloSlot, endSplit, splitRef, splitShownRef, lastKeyAtRef, paneDragging, setPaneDragging, gridDrop, gridDropRef, showGridDrop, hideDropTarget, clearDropPreview, paneAreaRef, tabDrag, draggedPaneRef, markSwap, markMove } = useSplitState();
@@ -267,9 +265,12 @@ export function App() {
   const closeMore = useCallback(() => setMore(null), []);
   // the pane canvas's actions, for the phone's tab menu (TabStrip)
   const paneActionsRef = useRef<((target: HerdrPane) => RowMenuItem[]) | null>(null);
-  const { filesOpen, setFilesOpen, filesDocked, filesCovered, revealFiles, viewing, openFile, closeFile, leaveFile, restoreFile, fileFromPop, forgetLeftFiles, diffViewing, openDiff, closeDiff, releaseDiff, presentation, fileDocked, webPage, closeWebPage, openWebPage, openDiffFile, reportFileKind, toggleFilePresentation } = useFilePanels({ settings, filePanelAvailable, selectedPaneId, selectedMachineId });
+  const { filesOpen, setFilesOpen, filesDocked, filesCovered: filesCoveredByPanels, revealFiles: revealFilesPanel, viewing, openFile, closeFile, leaveFile, restoreFile, fileFromPop, forgetLeftFiles, diffViewing, openDiff, closeDiff, releaseDiff, presentation, fileDocked, webPage, closeWebPage, openWebPage, openDiffFile, reportFileKind, toggleFilePresentation } = useFilePanels({ settings, filePanelAvailable, selectedPaneId, selectedMachineId });
   // the review (ReviewDialog.tsx): opened from the Files dialog, or with a file a chat names (`path`); upstream's viewFile goes unused
   const { review, setReview, reviewFile, viewFileComment } = useReviewDialog(openFile);
+  // the comments panel (CommentsPanel.tsx): docked, it covers the docked file, Files or web page there, and one of them
+  // opened after it closes it (lib/commentsPanelDock.ts)
+  const { docked: commentsDocked, filesCovered, revealFiles } = useCommentsPanelDock({ available: filePanelAvailable, file: viewing !== null && fileDocked ? fileViewerKey(viewing) : null, webPage, filesOpen, filesDocked, filesCovered: filesCoveredByPanels, revealFiles: revealFilesPanel });
   // a diff's line notes go to its own pane: none while this window only watches that pane
   const diffPaneObserving = usePaneObserving(diffViewing?.paneId ? paneStorageId(diffViewing.machineId, diffViewing.paneId) : null);
   const { settingsOpen, setSettingsOpen, settingsLinkPage, setSettingsLinkPage, settingsLinkSection, setSettingsLinkSection, settingsPage, settingsSection, setSettingsSection, closeSettings, onSettingsPage } = useSettingsDialog(initialLink);
@@ -1275,13 +1276,13 @@ export function App() {
         </FileCommentNavContext.Provider>
         </OpenFileContext.Provider>
         {/* last in the row: the file beside the pane (from 980px), the pane column shrinks and its terminal refits */}
-        {/* the comments panel takes the docked file's place while it is open; the file is back once it closes */}
+        {/* the comments panel takes the place of a docked file, Files or web page while it is open; each is back once it closes */}
         {filePanelAvailable && <CommentsPanel docked panelStart={<FilePanelResizer width={filePanelWidth} onResize={setFilePanelWidth} />} />}
-        {viewing !== null && fileDocked && commentsPanelState === null && <MachineContext.Provider value={viewing.machineId}>
+        {viewing !== null && fileDocked && !commentsDocked && <MachineContext.Provider value={viewing.machineId}>
           <FileViewer key={fileViewerKey(viewing)} docked panelStart={<FilePanelResizer width={filePanelWidth} onResize={setFilePanelWidth} />} {...fileViewerProps!} />
         </MachineContext.Provider>}
         {filesOpen && filesDocked && filesDialog(true)}
-        {webPage !== null && !(viewing !== null && fileDocked) &&
+        {webPage !== null && !(viewing !== null && fileDocked) && !commentsDocked &&
           <WebPanel key={webPage} url={webPage} docked={filePanelAvailable} covered={webDialogCover} onClose={closeWebPage} panelStart={filePanelAvailable ? <FilePanelResizer width={filePanelWidth} onResize={setFilePanelWidth} /> : undefined} />}
       </div>
       </PanePressContext.Provider>
